@@ -1,0 +1,1133 @@
+import * as THREE from 'three';
+import { onLangChange, tr, num } from '../i18n';
+import { Rng, clamp, randomSeed } from '../util';
+import { massOf, solidsOf, toWorld, habZone, type Body, type GameState, type Settings, type World } from './state';
+import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
+import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
+import { SystemSim, COST, type Fx } from '../sim/system';
+import { isGiantStuff, makeWorlds, worldStats, colonizable, type WorldStats } from '../sim/worlds';
+import { Stage } from '../render/Stage';
+import { Star } from '../render/Star';
+import { Guides } from '../render/Guides';
+import { Effects } from '../render/Effects';
+import { DiskView } from '../render/DiskView';
+import { BodiesView } from '../render/BodiesView';
+import { SystemView } from '../render/SystemView';
+import { lookOfWorld } from '../render/Planet';
+import { worldRadius, worldXZ } from '../render/layout';
+import { Hud, type Action } from '../ui/Hud';
+import { Inspector, Ledger, kindDot } from '../ui/Panels';
+import { Labels } from '../ui/Labels';
+import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
+import { modal, closeTopModal, anyModal, confirmBox, closeAllModals } from '../ui/Modal';
+import { h } from '../ui/dom';
+import { fmtAge, kindName } from '../ui/text';
+import { capName } from '../content/names';
+import { playComets } from '../minigames/Comets';
+import { playMigration } from '../minigames/Migration';
+import { sound } from '../audio';
+
+type Sel = number | 'star' | null;
+
+interface Ptr {
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+  button: number;
+  type: string;
+}
+
+/** Orchestrates everything: phases, input, rendering, interface and saving. */
+export class Game {
+  stage: Stage;
+  star = new Star();
+  guides = new Guides();
+  fx: Effects;
+  disk: DiskView | null = null;
+  bodiesView: BodiesView;
+  systemView: SystemView;
+  labels: Labels;
+  hud: Hud;
+  inspector: Inspector;
+  ledger: Ledger;
+  title: TitleScreen | null = null;
+  settings: Settings;
+  s: GameState | null = null;
+  formation: Formation | null = null;
+  sim: SystemSim | null = null;
+  mode: 'title' | 'play' = 'title';
+  private demo: Formation | null = null;
+  private ui: HTMLElement;
+  private selected: Sel = null;
+  private follow: Sel = null;
+  private targeting: Action | null = null;
+  private hold = 0;
+  private time = 0;
+  private saveT = 10;
+  private panelT = 0;
+  private lastSpeed = 1;
+  private pointers = new Map<number, Ptr>();
+  private toolActive = false;
+  private rotating = false;
+  private dragged = false;
+  private pinch: { d: number; a: number } | null = null;
+  private hoverBody: Body | null = null;
+  private settling = false;
+  private stats = new Map<number, WorldStats>();
+  private last = performance.now();
+  private quality: 'low' | 'high';
+
+  constructor(root: HTMLElement) {
+    this.settings = loadSettings();
+    this.quality = this.settings.quality;
+    const sceneEl = root.querySelector('#scene') as HTMLElement;
+    this.ui = root.querySelector('#ui') as HTMLElement;
+    this.stage = new Stage(sceneEl, this.quality);
+    this.fx = new Effects(this.stage.camera);
+    this.bodiesView = new BodiesView(this.quality === 'high');
+    this.systemView = new SystemView(this.quality === 'high');
+    this.stage.scene.add(this.star.group, this.guides.group, this.bodiesView.group, this.systemView.group, this.fx.group);
+    this.labels = new Labels(root.querySelector('#labels') as HTMLElement, this.stage);
+    this.hud = new Hud(this.ui, {
+      tool: (t) => this.setTool(t),
+      action: (a) => this.startAction(a),
+      star: () => this.select('star'),
+      speed: (v) => this.setSpeed(v),
+      menu: () => this.pauseMenu(),
+      settle: () => this.confirmSettle(),
+      chronicle: () => this.s && chronicle(this.ui, this.s, this.hud),
+      cancelTarget: () => this.setTargeting(null),
+    });
+    this.inspector = new Inspector(this.ui, {
+      close: () => this.select(null),
+      focus: (id) => this.focus(id),
+      dial: (v) => {
+        if (this.s) this.s.dial = v;
+      },
+    });
+    this.ledger = new Ledger(this.ui, { select: (id) => (this.select(id), this.focus(id)) });
+    this.hud.setVisible(false);
+    this.ledger.el.style.display = 'none';
+    sound.setVolumes(this.settings.music, this.settings.sfx);
+    onLangChange(() => this.refreshLanguage());
+    this.bindInput();
+    this.startTitle();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.save();
+    });
+    window.addEventListener('pagehide', () => this.save());
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  private get particles() {
+    return this.quality === 'high' ? 7000 : 4200;
+  }
+
+  // ------------------------------------------------------------------ title
+  private startTitle() {
+    this.mode = 'title';
+    this.hud.setVisible(false);
+    this.inspector.hide();
+    this.ledger.el.style.display = 'none';
+    this.clearWorld();
+    const rng = new Rng(randomSeed());
+    const ids = { n: 1 };
+    this.demo = Formation.create(Math.round(this.particles * 0.7), rng, () => ids.n++);
+    for (let i = 0; i < 40; i++) this.demo.update(0.25);
+    this.attachDisk(this.demo);
+    this.stage.goal.dist = 150;
+    this.stage.goal.pitch = 0.62;
+    this.stage.drift = 0.03;
+    this.stage.goal.target.set(0, 0, 0);
+    const from = new URLSearchParams(location.search).get('from') === 'uib';
+    this.title = new TitleScreen(this.ui, {
+      hasSave: hasSave(),
+      fromUib: from,
+      legacy: null,
+      onContinue: () => this.continueGame(),
+      onNew: () => {
+        sound.start();
+        if (hasSave())
+          confirmBox(this.ui, tr('Nuevo sistema', 'New system'), tr('Empezar de nuevo reemplazará el sistema guardado.', 'Starting over will replace your saved system.'), tr('Empezar', 'Begin'), () => this.newGame({ from: from ? 'uib' : null }));
+        else this.newGame({ from: from ? 'uib' : null });
+      },
+      onHowTo: () => howToPlay(this.ui),
+      onOptions: () => this.options(),
+      onLang: () => this.refreshLanguage(),
+    });
+  }
+
+  private attachDisk(f: Formation) {
+    if (this.disk) {
+      this.stage.scene.remove(this.disk.group);
+      this.disk.dispose();
+    }
+    this.disk = new DiskView(f.n);
+    this.stage.scene.add(this.disk.group);
+  }
+
+  private clearWorld() {
+    if (this.disk) {
+      this.stage.scene.remove(this.disk.group);
+      this.disk.dispose();
+      this.disk = null;
+    }
+    this.bodiesView.clear();
+    this.systemView.clear();
+    this.fx.clear();
+    this.labels.clear();
+    this.demo = null;
+    this.formation = null;
+    this.sim = null;
+  }
+
+  // ------------------------------------------------------------------ start / load
+  newGame(o: { legacy?: number; legacySpecies?: GameState['legacySpecies']; from?: 'uib' | null }) {
+    sound.start();
+    this.title?.destroy();
+    this.title = null;
+    this.clearWorld();
+    const s = newState(o);
+    this.s = s;
+    const f = Formation.create(this.particles, new Rng(s.seed), () => s.nextId++);
+    s.bodies = f.bodies;
+    this.formation = f;
+    this.attachDisk(f);
+    this.enterPlay();
+    this.sim = null;
+    const intro = o.legacySpecies
+      ? {
+          es: `El arca de los ${o.legacySpecies.name} busca hogar cerca de una estrella recién nacida: ${s.name}. Primero, hay que darle mundos.`,
+          en: `The ark of the ${capName(o.legacySpecies.name)} seeks a home near a newborn star: ${s.name}. First, it needs worlds.`,
+        }
+      : {
+          es: `Del polvo que tu nebulosa devolvió al espacio nace ${s.name}, una estrella joven envuelta en gas, polvo y hielo.`,
+          en: `From the dust your nebula returned to space, ${s.name} is born: a young star wrapped in gas, dust and ice.`,
+        };
+    this.news('✦', intro.es, intro.en, 'good');
+    this.hint('f.start', '✋', () =>
+      tr(
+        'Mantén pulsado sobre el disco para <b>reunir</b> polvo en una piedra. Suéltala y crecerá sola, barriendo su órbita.',
+        'Hold on the disk to <b>gather</b> dust into a pebble. Let go and it will grow on its own, sweeping its orbit.',
+      ),
+    );
+    this.save();
+  }
+
+  continueGame() {
+    const s = loadState();
+    if (!s) return this.newGame({});
+    sound.start();
+    this.title?.destroy();
+    this.title = null;
+    this.clearWorld();
+    this.s = s;
+    if (s.phase === 'formation' && s.disk) {
+      const f = Formation.load(s.disk, new Rng(s.seed ^ Math.floor(s.time)), s.bodies, () => s.nextId++);
+      this.formation = f;
+      this.attachDisk(f);
+    } else {
+      s.phase = 'system';
+      this.startSystem();
+    }
+    this.enterPlay();
+    for (const n of s.news.slice(-3)) this.hud.pushNews(n, fmtAge(n.age));
+  }
+
+  private enterPlay() {
+    if (!this.settling) {
+      closeAllModals();
+      this.hold = 0;
+    }
+    this.mode = 'play';
+    this.stage.drift = 0;
+    this.stage.goal.dist = 132;
+    this.stage.goal.pitch = 0.98;
+    this.stage.goal.target.set(0, 0, 0);
+    this.hud.setVisible(true);
+    this.hud.clearNews();
+    this.hud.clearHints();
+    this.selected = null;
+    this.follow = null;
+    this.targeting = null;
+    this.inspector.hide();
+    this.hud.setMode(this.s!.phase);
+    if (this.s!.phase === 'formation') this.setTool('gather');
+    this.ledger.el.style.display = this.s!.phase === 'system' ? '' : 'none';
+    this.setSpeed(this.settings.speed || 1);
+    this.ui.querySelector<HTMLElement>('.energy')!.style.display = this.s!.phase === 'system' ? '' : 'none';
+  }
+
+  private startSystem() {
+    const s = this.s!;
+    const sim = new SystemSim(s);
+    sim.onNews = (n) => this.onNews(n);
+    sim.onFx = (f) => this.onFx(f);
+    this.sim = sim;
+    this.systemView.setBelts(s.belts);
+  }
+
+  // ------------------------------------------------------------------ formation → system
+  private confirmSettle() {
+    if (!this.formation || this.settling) return;
+    confirmBox(
+      this.ui,
+      tr('Asentar el sistema', 'Settle the system'),
+      tr('Los cuerpos que has formado se convertirán en planetas y lunas. El polvo suelto quedará como cinturones de asteroides.', 'The bodies you have formed will become planets and moons. Loose dust will remain as asteroid belts.'),
+      tr('Asentar', 'Settle'),
+      () => this.finishFormation(),
+    );
+  }
+
+  private finishFormation() {
+    const s = this.s;
+    const f = this.formation;
+    if (!s || !f || this.settling) return;
+    this.settling = true;
+    f.pointerUp();
+    const rng = new Rng(s.seed ^ 0xa11ce);
+    const bodies = [...f.bodies].sort((a, b) => a.r - b.r);
+    // Last collisions: bodies sharing an orbit end up merging.
+    for (let i = 0; i < bodies.length - 1; ) {
+      const a = bodies[i];
+      const b = bodies[i + 1];
+      const gap = toWorld(b.r) - toWorld(a.r);
+      if (gap < 1.4 + 0.6 * (bodyRadius(a) + bodyRadius(b))) {
+        const big = massOf(a) >= massOf(b) ? a : b;
+        const small = big === a ? b : a;
+        big.metal += small.metal;
+        big.rock += small.rock;
+        big.water += small.water;
+        big.org += small.org;
+        big.gas += small.gas * (solidsOf(big) > 6 ? 1 : 0.1);
+        for (const m of small.moons) if (big.moons.length < 6) big.moons.push(m);
+        bodies.splice(bodies.indexOf(small), 1);
+      } else i++;
+    }
+    const belts: GameState['belts'] = [];
+    const keep: Body[] = [];
+    for (const b of bodies) {
+      if (massOf(b) < 0.004) for (let k = 0; k < 8; k++) belts.push({ r: b.r * (1 + rng.gauss(0, 0.03)), th: b.th + rng.gauss(0, 0.3), s: massOf(b) / 8 });
+      else keep.push(b);
+    }
+    const alive: number[] = [];
+    for (let i = 0; i < f.n; i++) if (f.alive[i] && f.metal[i] + f.rock[i] + f.water[i] + f.org[i] > 0) alive.push(i);
+    const stride = Math.max(1, Math.ceil(alive.length / 1600));
+    for (let j = 0; j < alive.length; j += stride) {
+      const i = alive[j];
+      belts.push({ r: f.r[i], th: f.th[i], s: f.metal[i] + f.rock[i] + f.water[i] + f.org[i] });
+    }
+    if (!keep.length) {
+      // Nothing gathered at all: the star still keeps a lonely rock.
+      keep.push({ id: s.nextId++, r: 1.2, th: 0, target: null, moons: [], seed: 7, born: 0, metal: 0.1, rock: 0.25, water: 0.02, gas: 0, org: 0.01 });
+    }
+    s.worlds = makeWorlds(keep, rng, () => s.nextId++);
+    s.belts = belts;
+    s.bodies = [];
+    s.disk = null;
+    s.phase = 'system';
+    s.age = Math.max(s.age, 100);
+    s.energy = 70;
+    s.nextEvent = s.time + 140;
+    const flash = () => {
+      for (const b of keep) {
+        const w = toWorld(b.r);
+        this.fx.flash(Math.cos(b.th) * w, 0, Math.sin(b.th) * w, 0xffc070, 8 + bodyRadius(b) * 3, 1.6);
+      }
+    };
+    flash();
+    sound.whoosh();
+    if (this.disk) {
+      this.stage.scene.remove(this.disk.group);
+      this.disk.dispose();
+      this.disk = null;
+    }
+    this.bodiesView.clear();
+    this.formation = null;
+    this.startSystem();
+    this.enterPlay();
+    const planets = s.worlds.filter((w) => w.parent === null);
+    const moons = s.worlds.length - planets.length;
+    this.news(
+      '⊛',
+      `Los mundos se asientan: ${planets.length} ${planets.length === 1 ? 'planeta' : 'planetas'} y ${moons} ${moons === 1 ? 'luna' : 'lunas'} orbitan a ${s.name}.`,
+      `The worlds settle: ${planets.length} ${planets.length === 1 ? 'planet' : 'planets'} and ${moons} ${moons === 1 ? 'moon' : 'moons'} now orbit ${s.name}.`,
+      'good',
+    );
+    if (s.legacySpecies) this.sim!.arriveLegacy();
+    this.settling = false;
+    this.save();
+    this.showSummary();
+  }
+
+  private showSummary() {
+    const s = this.s!;
+    const list = h('div', { class: 'summary' });
+    const L = s.L * s.dial;
+    for (const w of s.worlds.filter((x) => x.parent === null).sort((a, b) => a.a - b.a)) {
+      const st = worldStats(w, s.worlds, L);
+      const moons = s.worlds.filter((x) => x.parent === w.id).length;
+      const m = massOf(w);
+      list.append(
+        h(
+          'div',
+          { class: 'w' },
+          h('span', { class: 'dot', style: `width:12px;height:12px;border-radius:50%;background:${kindDot(st.kind)}` }),
+          h('div', null, h('b', { class: 'gold', style: 'font-family:var(--title);letter-spacing:.08em' }, w.name), ' ', h('span', { class: 'muted' }, `· ${kindName(st.kind)}${moons ? ` · ${moons} ${tr(moons === 1 ? 'luna' : 'lunas', moons === 1 ? 'moon' : 'moons')}` : ''}`)),
+          h('span', { class: 'muted small' }, `${num(m, m < 0.1 ? 3 : m < 10 ? 2 : 0)} M⊕ · ${num(w.a, 2)} ${tr('UA', 'AU')}`),
+        ),
+      );
+    }
+    this.hold++;
+    modal(this.ui, {
+      title: tr('Los mundos se asientan', 'The worlds settle'),
+      lore: tr(
+        `Han pasado cien millones de años. El gas se ha ido, el polvo se ha vuelto piedra, y ${s.name} tiene por fin su familia de mundos.`,
+        `A hundred million years have passed. The gas is gone, the dust has turned to stone, and ${s.name} finally has its family of worlds.`,
+      ),
+      body: [list, h('p', { class: 'small muted', style: 'text-align:center' }, tr('Ahora, a ver si alguno puede albergar vida.', 'Now, let’s see whether any of them can harbour life.'))],
+      buttons: [{ label: tr('Contemplar el sistema', 'Behold the system'), primary: true }],
+      onClose: () => {
+        this.hold = Math.max(0, this.hold - 1);
+        this.hint('s.start', '◉', () =>
+          tr(
+            'Toca un mundo para ver qué necesita para albergar vida. Tus acciones gastan <b>luz estelar</b>, que se recarga sola.',
+            'Tap a world to see what it needs to harbour life. Your actions spend <b>starlight</b>, which refills on its own.',
+          ),
+        );
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------ news & hints
+  private news(icon: string, es: string, en: string, kind: GameState['news'][number]['kind'] = 'info') {
+    const s = this.s;
+    if (!s) return;
+    const item = { age: s.age, icon, es, en, kind };
+    s.news.push(item);
+    if (s.news.length > 80) s.news.shift();
+    this.onNews(item);
+  }
+
+  private onNews(n: GameState['news'][number]) {
+    this.hud.pushNews(n, fmtAge(n.age));
+    sound.chime(n.kind);
+    if (n.kind === 'alien')
+      this.hint('s.alien', '⚠', () => tr('Llegan visitantes de otra estrella. Pulsa <b>Llamarada</b> y elige sus naves o los mundos que ocupan.', 'Visitors from another star are arriving. Press <b>Flare</b> and pick their ships or the worlds they occupy.'));
+  }
+
+  private hint(id: string, glyph: string, html: () => string) {
+    const s = this.s;
+    if (!s || s.tutorials[id]) return;
+    s.tutorials[id] = true;
+    this.hud.hint(id, glyph, html);
+  }
+
+  private onFx(f: Fx) {
+    const s = this.s!;
+    if (f.kind === 'flareShip') return;
+    const w = s.worlds.find((x) => x.id === f.world);
+    const p = w ? this.systemView.pos(w) : new THREE.Vector3();
+    const r = w ? worldRadius(w) : 1;
+    if (f.kind === 'flare') {
+      this.star.flash();
+      sound.flare();
+      this.fx.beam(new THREE.Vector3(0, 0, 0), () => (w ? this.systemView.pos(w) : p), 0xffa040, 3.2 + r, 1.3);
+      setTimeout(() => this.fx.flash(p.x, 0, p.z, 0xffc070, r * 6 + 4, 1), 450);
+    } else if (f.kind === 'impact') {
+      this.fx.flash(p.x, 0, p.z, 0xff8040, r * 7 + 3, 1.2);
+      this.fx.ring(p.x, p.z, 0xff7a35, r * 4 + 3);
+      sound.thud(1);
+    } else if (f.kind === 'volcano') {
+      this.fx.flash(p.x, 0, p.z, 0xff5a1c, r * 4 + 2, 1.6);
+      this.fx.ring(p.x, p.z, 0xff6a2a, r * 3 + 2, 1.8);
+      sound.thud(0.6);
+    } else if (f.kind === 'life') {
+      this.fx.ring(p.x, p.z, 0x98c770, r * 5 + 4, 2.4);
+      this.fx.flash(p.x, 0, p.z, 0xa8e080, r * 5 + 3, 2);
+      this.hint('s.life', '❦', () => tr('¡Vida! Mantén estable su mundo: eras glaciales, calentamientos y asteroides pondrán a prueba su salud.', 'Life! Keep its world steady: ice ages, warming and asteroids will test its health.'));
+    } else if (f.kind === 'colony') {
+      this.fx.ring(p.x, p.z, 0xdcbb7a, r * 4 + 3, 2);
+      this.hint('s.colony', '⌂', () => tr('Tu especie ya viaja entre mundos. Cuando los habite todos, partirá hacia otras estrellas.', 'Your species now travels between worlds. Once it lives on all of them, it will set out for other stars.'));
+    } else if (f.kind === 'arkLaunch') {
+      this.fx.flash(p.x, 0, p.z, 0xfff0c0, 24, 2.5);
+      this.fx.ring(p.x, p.z, 0xfff0c0, 30, 3);
+      sound.whoosh();
+    }
+  }
+
+  private onFormationEvent(e: FormationEvent) {
+    const s = this.s;
+    if (e.kind === 'seed' || e.kind === 'clump') {
+      this.fx.flash(e.x, 0, e.z, 0xffd28a, 4, 0.8);
+      sound.sizzle();
+      if (s && s.bodies.length >= 1)
+        this.hint('f.body', '◌', () =>
+          tr(
+            'Cada cuerpo barre el polvo de su órbita. Reúne más material cerca, o usa <b>Empujar</b> para juntar dos cuerpos y que choquen.',
+            'Each body sweeps the dust along its orbit. Gather more material nearby, or use <b>Nudge</b> to bring two bodies together so they collide.',
+          ),
+        );
+    } else if (e.kind === 'merge') {
+      const big = (e.mass ?? 0.1) > 0.3;
+      this.fx.flash(e.x, 0, e.z, 0xff9a4a, big ? 14 : 7, 1.1);
+      if (big) this.fx.ring(e.x, e.z, 0xff7a35, 9, 1.4);
+      if (e.body) this.bodiesView.heat(e.body.id, big ? 1 : 0.5);
+      sound.thud(big ? 1 : 0.5);
+    } else if (e.kind === 'moon') {
+      this.fx.flash(e.x, 0, e.z, 0xffd0a0, 14, 1.4);
+      this.fx.ring(e.x, e.z, 0xe8d2a0, 10, 1.8);
+      if (e.body) this.bodiesView.heat(e.body.id, 1);
+      sound.thud(1.2);
+      this.news('☾', 'Un choque gigante lanza escombros al espacio… y de ellos nace una luna.', 'A giant impact flings debris into space… and from it a moon is born.', 'good');
+    } else if (e.kind === 'capture') {
+      this.fx.ring(e.x, e.z, 0xe8d2a0, 7, 1.4);
+      this.news('☾', 'Un gigante atrapa con su gravedad a un cuerpo pequeño: ahora es su luna.', 'A giant catches a small body with its gravity: it is now its moon.', 'info');
+    } else if (e.kind === 'giant') {
+      this.fx.ring(e.x, e.z, 0xe6b98a, 16, 2.4);
+      this.fx.flash(e.x, 0, e.z, 0xffe0b0, 16, 2);
+      sound.chime('good');
+      this.news('◍', 'Un núcleo helado empieza a tragarse el gas del disco: está naciendo un gigante.', 'An icy core starts swallowing the disk’s gas: a giant is being born.', 'good');
+    }
+  }
+
+  // ------------------------------------------------------------------ tools & actions
+  setTool(t: Tool) {
+    if (!this.formation) return;
+    this.formation.pointerUp();
+    this.formation.tool = t;
+    this.hud.setActiveTool(t);
+  }
+
+  private setSpeed(v: number) {
+    if (v > 0) this.lastSpeed = v;
+    this.settings.speed = v;
+    saveSettings(this.settings);
+    this.hud.setSpeed(v);
+  }
+
+  private setTargeting(a: Action | null) {
+    this.targeting = a;
+    this.hud.setActiveTool(a);
+    if (!a) return this.hud.showBanner(null);
+    const name = { flare: tr('la llamarada', 'the flare'), volcano: tr('despertar volcanes', 'waking volcanoes'), comets: tr('la lluvia de cometas', 'the comet shower'), migrate: tr('la migración', 'the migration') }[a];
+    const extra = a === 'flare' ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)') : '';
+    this.hud.showBanner(tr(`Elige un objetivo para ${name}${extra}.`, `Choose a target for ${name}${extra}.`));
+  }
+
+  private startAction(a: Action) {
+    const sim = this.sim;
+    if (!sim) return;
+    sound.click();
+    if (!sim.canAfford(COST[a])) {
+      this.hud.showTip(tr(`Necesitas <b>${COST[a]}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${COST[a]}</b> starlight. It refills on its own over time.`), 3.5);
+      return;
+    }
+    if (typeof this.selected === 'number') {
+      const w = sim.world(this.selected);
+      if (w) return void this.doAction(a, w);
+    }
+    this.setTargeting(this.targeting === a ? null : a);
+  }
+
+  private doAction(a: Action, w: World) {
+    const sim = this.sim!;
+    const s = this.s!;
+    this.setTargeting(null);
+    const st = sim.stats(w);
+    const say = (es: string, en: string) => this.hud.showTip(tr(es, en), 3.8);
+    if (!sim.canAfford(COST[a])) return say(`Necesitas <b>${COST[a]}</b> de luz estelar.`, `You need <b>${COST[a]}</b> starlight.`);
+    if (a === 'flare') {
+      sim.flare(w);
+      return;
+    }
+    if (a === 'volcano') {
+      if (st.giant) return say('Un gigante gaseoso no tiene volcanes: no tiene suelo.', 'A gas giant has no volcanoes: it has no ground.');
+      if (massOf(w) < 0.03) return say(`${w.name} es tan pequeño que su interior ya se enfrió.`, `${w.name} is so small its interior has already cooled.`);
+      if (w.volcanoCd > 0) return say(`Los volcanes de ${w.name} descansan. Vuelve en ${Math.ceil(w.volcanoCd)} s.`, `The volcanoes of ${w.name} are resting. Try again in ${Math.ceil(w.volcanoCd)} s.`);
+      sim.volcano(w);
+      sim.news('⛰', `Despiertan los volcanes de ${w.name}: su aire se vuelve más denso.`, `The volcanoes of ${w.name} awaken: its air grows thicker.`, 'info');
+      return;
+    }
+    if (a === 'comets') {
+      if (st.giant) return say('Los cometas se pierden en las nubes de un gigante. Elige un mundo rocoso o una luna.', 'Comets vanish into a giant’s clouds. Choose a rocky world or a moon.');
+      s.energy -= COST.comets;
+      this.hold++;
+      playComets(this.ui, w.name, lookOfWorld(w, st), (gain) => {
+        this.hold = Math.max(0, this.hold - 1);
+        if (gain) {
+          sim.applyComets(w, gain, false);
+          const p = this.systemView.pos(w);
+          this.fx.ring(p.x, p.z, 0x9fd4e6, worldRadius(w) * 4 + 3, 1.6);
+        }
+        this.save();
+      });
+      return;
+    }
+    if (a === 'migrate') {
+      if (w.parent !== null) return say('Las lunas siguen a su planeta: migra el planeta entero.', 'Moons follow their planet: migrate the whole planet.');
+      s.energy -= COST.migrate;
+      this.hold++;
+      const L = s.L * s.dial;
+      playMigration(
+        this.ui,
+        {
+          name: w.name,
+          a: w.a,
+          hz: habZone(L),
+          preview: (a2) => worldStats({ ...w, a: a2 }, s.worlds, L).T,
+        },
+        (factor) => {
+          this.hold = Math.max(0, this.hold - 1);
+          if (factor && Math.abs(factor - 1) > 1e-3) sim.migrate(w, factor, false);
+          else if (factor === null) s.energy += COST.migrate;
+          this.save();
+        },
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------ selection
+  select(sel: Sel) {
+    this.selected = sel;
+    this.systemView.selected = typeof sel === 'number' ? sel : null;
+    if (sel === null) {
+      this.inspector.hide();
+      this.follow = null;
+      this.stage.goal.target.set(0, 0, 0);
+    }
+    this.panelT = 0;
+  }
+
+  focus(id: Sel) {
+    this.follow = id;
+    if (id === 'star' || id === null) {
+      this.stage.goal.target.set(0, 0, 0);
+      return;
+    }
+    const w = this.s?.worlds.find((x) => x.id === id);
+    if (!w) return;
+    this.stage.goal.dist = clamp(worldRadius(w) * 11 + 9, 12, 70);
+  }
+
+  // ------------------------------------------------------------------ input
+  private bindInput() {
+    const c = this.stage.canvas;
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.stage.zoom(Math.exp(e.deltaY * 0.0012));
+    }, { passive: false });
+    c.addEventListener('pointerdown', (e) => this.onDown(e));
+    c.addEventListener('pointermove', (e) => this.onMove(e));
+    c.addEventListener('pointerup', (e) => this.onUp(e));
+    c.addEventListener('pointercancel', (e) => this.onUp(e));
+    c.addEventListener('pointerleave', (e) => {
+      if (e.pointerType === 'mouse' && this.formation && !this.toolActive) this.formation.pointer.valid = false;
+      this.hud.tagEl.style.display = 'none';
+    });
+    c.addEventListener('dblclick', (e) => {
+      if (!this.sim) return;
+      const hit = this.pickWorld(e.clientX, e.clientY);
+      if (hit !== null) {
+        this.select(hit);
+        this.focus(hit);
+      }
+    });
+    window.addEventListener('keydown', (e) => this.onKey(e));
+  }
+
+  private onKey(e: KeyboardEvent) {
+    if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+    if (e.key === 'Escape') {
+      if (closeTopModal()) return;
+      if (this.mode !== 'play') return;
+      if (this.targeting) return this.setTargeting(null);
+      if (this.selected !== null) return this.select(null);
+      return this.pauseMenu();
+    }
+    if (this.mode !== 'play' || anyModal() || this.hold) return;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this.setSpeed(this.settings.speed === 0 ? this.lastSpeed : 0);
+      return;
+    }
+    const n = Number(e.key);
+    if (n >= 1 && n <= 4) {
+      if (this.formation) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
+      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate'] as Action[])[n - 1]);
+    }
+    if (e.key === '+' || e.key === '=') this.stage.zoom(0.85);
+    if (e.key === '-') this.stage.zoom(1.18);
+  }
+
+  private onDown(e: PointerEvent) {
+    sound.start();
+    const c = this.stage.canvas;
+    try {
+      c.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, type: e.pointerType });
+    this.dragged = false;
+    if (this.pointers.size === 2) {
+      if (this.toolActive) this.formation?.pointerUp();
+      this.toolActive = false;
+      this.rotating = false;
+      const [a, b] = [...this.pointers.values()];
+      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
+      return;
+    }
+    if (this.mode !== 'play' || this.hold) {
+      this.rotating = true;
+      return;
+    }
+    if (e.button === 2 || e.button === 1) {
+      this.rotating = true;
+      return;
+    }
+    if (this.formation) {
+      const g = this.stage.groundPoint(e.clientX, e.clientY);
+      if (g && Math.hypot(g.x, g.z) < 78) {
+        this.formation.pointerDown(g.x, g.z);
+        this.toolActive = true;
+        if (this.formation.tool === 'heat' || this.formation.tool === 'cool') sound.whoosh();
+      } else this.rotating = true;
+    }
+  }
+
+  private onMove(e: PointerEvent) {
+    const p = this.pointers.get(e.pointerId);
+    if (p) {
+      const dx = e.clientX - p.x;
+      const dy = e.clientY - p.y;
+      p.x = e.clientX;
+      p.y = e.clientY;
+      if (Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 6) this.dragged = true;
+      if (this.pointers.size === 2 && this.pinch) {
+        const [a, b] = [...this.pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        this.stage.zoom(this.pinch.d / Math.max(10, d));
+        this.stage.goal.yaw += ang - this.pinch.a;
+        this.pinch = { d, a: ang };
+        return;
+      }
+      if (this.rotating || (this.sim && this.dragged && !this.toolActive)) {
+        this.stage.rotate(dx, dy);
+        return;
+      }
+    }
+    if (this.mode !== 'play') return;
+    if (this.formation) {
+      const g = this.stage.groundPoint(e.clientX, e.clientY);
+      const valid = !!g && Math.hypot(g.x, g.z) < 78;
+      if (g) this.formation.pointerMove(g.x, g.z, valid && (e.pointerType === 'mouse' || this.toolActive));
+      this.hoverBody = !this.toolActive && g ? this.bodyAt(g.x, g.z) : null;
+      this.showBodyTag(e.clientX, e.clientY);
+    } else if (this.sim && e.pointerType === 'mouse') {
+      const hit = this.targeting === 'flare' ? this.pickWorld(e.clientX, e.clientY) ?? (this.pickShip(e.clientX, e.clientY) ? -1 : null) : this.pickWorld(e.clientX, e.clientY);
+      this.systemView.hovered = hit !== null && hit >= 0 ? hit : null;
+      this.stage.canvas.style.cursor = hit !== null || this.pickStar(e.clientX, e.clientY) ? 'pointer' : this.targeting ? 'crosshair' : 'grab';
+    }
+  }
+
+  private onUp(e: PointerEvent) {
+    const p = this.pointers.get(e.pointerId);
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    if (this.toolActive) {
+      this.formation?.pointerUp();
+      this.toolActive = false;
+      if (e.pointerType !== 'mouse' && this.formation) this.formation.pointer.valid = false;
+    }
+    if (this.rotating && this.pointers.size === 0) this.rotating = false;
+    if (!p || this.dragged || this.mode !== 'play' || this.hold) return;
+    if (this.sim && p.button === 0) this.click(e.clientX, e.clientY);
+    else if (this.formation && p.button === 0 && this.pickStar(e.clientX, e.clientY) && this.formation.tool === 'nudge') this.select('star');
+  }
+
+  private click(x: number, y: number) {
+    const sim = this.sim!;
+    if (this.targeting === 'flare') {
+      const ship = this.pickShip(x, y);
+      if (ship) {
+        if (sim.flareShip(ship)) {
+          const v = this.systemView.shipXYZ.get(ship.id) ?? new THREE.Vector3();
+          this.star.flash();
+          sound.flare();
+          this.fx.beam(new THREE.Vector3(), () => v, 0xffa040, 2.5, 1.1);
+          setTimeout(() => this.fx.flash(v.x, v.y, v.z, 0xd0a0ff, 6, 0.8), 400);
+          this.setTargeting(null);
+        }
+        return;
+      }
+      const threat = this.pickThreat(x, y);
+      if (threat !== null) {
+        const w = sim.world(threat);
+        if (w) this.doAction('flare', w);
+        return;
+      }
+    }
+    const hit = this.pickWorld(x, y);
+    if (hit !== null) {
+      const w = sim.world(hit)!;
+      if (this.targeting) return this.doAction(this.targeting, w);
+      sound.click();
+      this.select(hit);
+      return;
+    }
+    if (this.pickStar(x, y)) {
+      this.select('star');
+      return;
+    }
+    if (!this.targeting) this.select(null);
+  }
+
+  private bodyAt(x: number, z: number) {
+    let best: Body | null = null;
+    let bd = Infinity;
+    for (const b of this.formation?.bodies ?? []) {
+      const w = toWorld(b.r);
+      const d = Math.hypot(Math.cos(b.th) * w - x, Math.sin(b.th) * w - z);
+      if (d < bodyRadius(b) + 2.2 && d < bd) {
+        bd = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  private showBodyTag(cx: number, cy: number) {
+    const b = this.hoverBody;
+    const tag = this.hud.tagEl;
+    this.bodiesView.hovered = b?.id ?? null;
+    if (!b) {
+      tag.style.display = 'none';
+      return;
+    }
+    const m = massOf(b);
+    const kind = isGiantStuff(b) ? tr('Gigante en formación', 'Forming giant') : m > 0.05 ? tr('Protoplaneta', 'Protoplanet') : tr('Planetesimal', 'Planetesimal');
+    const pct = (v: number) => Math.round((v / m) * 100);
+    tag.innerHTML = `<b>${kind}</b> · ${num(m, m < 0.01 ? 4 : m < 1 ? 3 : 1)} M⊕${b.moons.length ? ` · ${b.moons.length} ☾` : ''}<br><span class="muted">${tr('roca', 'rock')} ${pct(b.rock + b.metal)}% · ${tr('hielo', 'ice')} ${pct(b.water)}% · gas ${pct(b.gas)}%</span>`;
+    tag.style.display = '';
+    tag.style.left = `${cx}px`;
+    tag.style.top = `${cy}px`;
+  }
+
+  private screen = { x: 0, y: 0, vis: false };
+  private pickWorld(x: number, y: number): number | null {
+    const s = this.s;
+    if (!s) return null;
+    let best: number | null = null;
+    let bd = Infinity;
+    for (const w of s.worlds) {
+      const p = this.systemView.pos(w);
+      const sp = this.stage.project(p.x, 0, p.z, this.screen);
+      if (!sp.vis) continue;
+      const rpx = worldRadius(w) / this.stage.pixelScale(p.x, 0, p.z);
+      const d = Math.hypot(sp.x - x, sp.y - y);
+      const lim = Math.max(w.parent === null ? 18 : 12, rpx + 8);
+      if (d < lim && d / lim < bd) {
+        bd = d / lim;
+        best = w.id;
+      }
+    }
+    return best;
+  }
+
+  private pickStar(x: number, y: number) {
+    const sp = this.stage.project(0, 0, 0, this.screen);
+    const rpx = this.star.radius / this.stage.pixelScale(0, 0, 0);
+    return sp.vis && Math.hypot(sp.x - x, sp.y - y) < Math.max(24, rpx + 8);
+  }
+
+  private pickShip(x: number, y: number) {
+    const s = this.s;
+    if (!s) return null;
+    for (const sh of s.ships) {
+      if (!sh.alien) continue;
+      const v = this.systemView.shipXYZ.get(sh.id);
+      if (!v) continue;
+      const sp = this.stage.project(v.x, v.y, v.z, this.screen);
+      if (sp.vis && Math.hypot(sp.x - x, sp.y - y) < 22) return sh;
+    }
+    return null;
+  }
+
+  private pickThreat(x: number, y: number) {
+    const s = this.s;
+    if (!s) return null;
+    for (const t of s.threats) {
+      const v = this.systemView.threatPos3(t.id);
+      if (!v) continue;
+      const sp = this.stage.project(v.x, v.y, v.z, this.screen);
+      if (sp.vis && Math.hypot(sp.x - x, sp.y - y) < 24) return t.target;
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------------------ menus
+  private pauseMenu() {
+    if (this.mode !== 'play') return;
+    this.hold++;
+    modal(this.ui, {
+      title: tr('Pausa', 'Paused'),
+      lore: this.s ? this.s.name : undefined,
+      body: [
+        h(
+          'div',
+          { class: 'menu', style: 'margin:0 auto' },
+          h('button', { class: 'btn', onclick: () => (closeTopModal(), this.s && chronicle(this.ui, this.s, this.hud)) }, tr('Crónica del sistema', 'System chronicle')),
+          h('button', { class: 'btn', onclick: () => (closeTopModal(), howToPlay(this.ui)) }, tr('Cómo se juega', 'How to play')),
+          h('button', { class: 'btn', onclick: () => (closeTopModal(), this.options()) }, tr('Opciones', 'Options')),
+          h('button', { class: 'btn', onclick: () => (closeTopModal(), this.toTitle()) }, tr('Guardar y salir', 'Save and quit')),
+        ),
+      ],
+      buttons: [{ label: tr('Seguir', 'Resume'), primary: true }],
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
+  }
+
+  private options() {
+    optionsDialog(this.ui, { ...this.settings }, {
+      apply: (st) => {
+        this.settings = st;
+        saveSettings(st);
+        sound.setVolumes(st.music, st.sfx);
+        this.stage.setQuality(st.quality);
+      },
+      erase: () => {
+        clearSave();
+        this.s = null;
+        this.toTitle(false);
+      },
+      lang: () => this.refreshLanguage(),
+    });
+  }
+
+  private toTitle(save = true) {
+    if (save) this.save();
+    closeAllModals();
+    this.hold = 0;
+    this.s = null;
+    this.hud.clearHints();
+    this.hud.showBanner(null);
+    this.title?.destroy();
+    this.startTitle();
+  }
+
+  private victory() {
+    const s = this.s!;
+    const sp = s.species ?? s.legacySpecies;
+    if (!sp) return;
+    s.tutorials.victory = true;
+    this.hold++;
+    const reached = s.worlds.filter((w) => w.colony >= 1 || w.life?.origin).length;
+    modal(this.ui, {
+      title: tr('Hacia otras estrellas', 'To other stars'),
+      cls: 'victory',
+      body: [
+        h('div', { class: 'big-glyph' }, '✧'),
+        h(
+          'p',
+          { class: 'lore' },
+          tr(
+            `Los ${sp.name} habitan cada rincón de ${s.name}. Su arca ya surca la oscuridad entre las estrellas, llevando consigo un poco del polvo del que todos estamos hechos.`,
+            `The ${capName(sp.name)} live in every corner of ${s.name}. Their ark is already crossing the dark between the stars, carrying a little of the dust we are all made of.`,
+          ),
+        ),
+        h(
+          'div',
+          { class: 'summary' },
+          h('div', { class: 'w' }, h('span', null, '⌂'), h('span', null, tr('Mundos habitados', 'Worlds settled')), h('b', null, String(reached))),
+          h('div', { class: 'w' }, h('span', null, '⧗'), h('span', null, tr('Edad del sistema', 'System age')), h('b', null, fmtAge(s.age))),
+          h('div', { class: 'w' }, h('span', null, '✦'), h('span', null, tr('Sistemas alcanzados', 'Systems reached')), h('b', null, String(s.legacy + 1))),
+        ),
+      ],
+      buttons: [
+        { label: tr('Seguir contemplando', 'Keep watching') },
+        {
+          label: tr('Sembrar un nuevo sistema', 'Seed a new system'),
+          primary: true,
+          onClick: () => {
+            const legacy = s.legacy + 1;
+            setTimeout(() => this.newGame({ legacy, legacySpecies: sp, from: s.from }), 350);
+          },
+        },
+      ],
+      dismissable: false,
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
+  }
+
+  private refreshLanguage() {
+    this.hud.refreshLanguage();
+    if (this.mode === 'title') this.title?.refresh(hasSave());
+    this.panelT = 0;
+    if (this.targeting) this.setTargeting(this.targeting);
+    document.title = 'Dust We Are';
+  }
+
+  save() {
+    const s = this.s;
+    if (!s || this.mode !== 'play') return;
+    if (this.formation) {
+      s.disk = this.formation.save();
+      s.bodies = this.formation.bodies;
+    }
+    saveState(s);
+  }
+
+  // ------------------------------------------------------------------ frame
+  private frame(now: number) {
+    const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.last = now;
+    this.time += dt;
+    try {
+      this.update(dt);
+    } catch (err) {
+      console.error(err);
+    }
+    this.stage.render();
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  private update(dt: number) {
+    const s = this.s;
+    const speed = this.mode === 'play' && !this.hold && !anyModal() ? this.settings.speed : this.mode === 'title' ? 1 : 0;
+    const L = s ? s.L * s.dial : 1;
+    // Simulation.
+    if (this.mode === 'title' && this.demo) {
+      this.demo.update(Math.min(dt, 1 / 30));
+    } else if (s && this.formation) {
+      let left = dt * speed;
+      while (left > 1e-4) {
+        const step = Math.min(left, 1 / 30);
+        this.formation.update(step);
+        left -= step;
+      }
+      s.time += dt * speed;
+      s.age += dt * speed * 0.02;
+      this.formation.onEvent = (e) => this.onFormationEvent(e);
+      const f = this.formation;
+      if (f.progress >= 0.97 && !this.settling) this.finishFormation();
+      if (s.time > 22) this.hint('f.snow', '❄', () => tr('El anillo punteado es la <b>línea de nieve</b>: más allá, el hielo se suma a la roca y los cuerpos crecen deprisa. Allí nacen los gigantes.', 'The dotted ring is the <b>snow line</b>: beyond it, ice joins the rock and bodies grow fast. That is where giants are born.'));
+      if (s.time > 45) this.hint('f.tools', '♨', () => tr('Prueba <b>Calentar</b> para empujar el gas y el polvo ligero hacia afuera, y <b>Enfriar</b> para que el polvo se condense en piedras nuevas.', 'Try <b>Heat</b> to push gas and light dust outwards, and <b>Cool</b> to make dust condense into new pebbles.'));
+      if (s.time > 70) this.hint('f.hz', '❀', () => tr('La franja verde es la <b>zona habitable</b>: ahí un mundo rocoso podría tener mares de agua líquida.', 'The green band is the <b>habitable zone</b>: there a rocky world could have seas of liquid water.'));
+      if (f.gasLeft < 0.45) this.hint('f.gas', '☁', () => tr('La luz de tu estrella está dispersando el gas. Los gigantes deben atraparlo antes de que se acabe.', 'Your star’s light is blowing the gas away. Giants must catch it before it runs out.'));
+    } else if (s && this.sim) {
+      let left = dt * speed;
+      while (left > 1e-4) {
+        const step = Math.min(left, 0.25);
+        this.sim.update(step);
+        left -= step;
+      }
+      if (s.threats.length) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
+      if (s.time > 200) this.hint('s.star', '☀', () => tr('Toca la <b>estrella</b> para ajustar su brillo: más luz calienta tus mundos y recarga antes tu luz estelar.', 'Tap the <b>star</b> to adjust its brightness: more light warms your worlds and refills your starlight faster.'));
+      if (s.won && !s.tutorials.victory && !this.hold) this.victory();
+    }
+
+    // Camera.
+    if (this.follow !== null && this.follow !== 'star' && s) {
+      const w = s.worlds.find((x) => x.id === this.follow);
+      if (w) {
+        const p = this.systemView.pos(w);
+        this.stage.goal.target.set(p.x, 0, p.z);
+      }
+    }
+    this.stage.update(dt);
+
+    // Rendering.
+    const young = !this.sim;
+    this.star.update(dt, this.time, s ? s.dial * (0.9 + 0.1 * s.L) : 1, young);
+    this.guides.opacity = this.mode === 'title' ? 0.35 : 1;
+    this.guides.update(L, this.time, true);
+    this.fx.update(dt);
+    const activeF = this.formation ?? (this.mode === 'title' ? this.demo : null);
+    if (activeF && this.disk) {
+      activeF.L = L;
+      this.disk.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov);
+      const nudging = activeF.nudging;
+      this.disk.update(activeF, dt, this.time, this.mode === 'play', nudging ? nudging.target ?? nudging.r : null);
+      this.bodiesView.update(activeF.bodies, L, dt, this.time);
+    }
+    if (s && this.sim) this.systemView.update(s, dt, this.time);
+
+    // Interface.
+    this.labels.begin();
+    if (this.mode === 'play' && s) {
+      this.drawLabels(s, L);
+      this.panelT -= dt;
+      const rate = 0.85 * s.dial;
+      if (this.formation) {
+        const f = this.formation;
+        const canSettle = f.progress >= 0.5 && f.bodies.some((b) => massOf(b) > 0.05);
+        if (canSettle) this.hint('f.settle', '⊛', () => tr('Cuando quieras, pulsa <b>Asentar el sistema</b>. Lo que siga suelto formará cinturones de asteroides.', 'Whenever you like, press <b>Settle the system</b>. Whatever is still loose will become asteroid belts.'));
+        this.hud.update(s, { progress: f.progress, gas: f.gasLeft, canSettle, energyRate: rate }, dt);
+        if (this.panelT <= 0 && this.selected === 'star') {
+          this.panelT = 0.5;
+          this.inspector.showStar(s, rate);
+        }
+      } else if (this.sim) {
+        const sim = this.sim;
+        const all = s.worlds.filter(colonizable);
+        const reached = all.filter((w) => w.colony >= 1 || (w.life?.origin && w.life.stage >= 2)).length;
+        this.hud.update(s, { energyRate: rate, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached, total: all.length }, dt);
+        const afford: Record<string, { ok: boolean; afford: boolean }> = {};
+        for (const a of ['flare', 'volcano', 'comets', 'migrate'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
+        this.hud.setActionState(afford);
+        if (this.panelT <= 0) {
+          this.panelT = 0.3;
+          this.stats.clear();
+          for (const w of s.worlds) this.stats.set(w.id, sim.stats(w));
+          this.ledger.update(s, this.stats, typeof this.selected === 'number' ? this.selected : null);
+          this.ledger.el.classList.toggle('behind', this.selected !== null);
+          if (this.selected === 'star') this.inspector.showStar(s, rate);
+          else if (typeof this.selected === 'number') {
+            const w = sim.world(this.selected);
+            if (w) this.inspector.showWorld(w, this.stats.get(w.id)!, s, w.parent !== null ? sim.world(w.parent) ?? null : null);
+            else this.select(null);
+          }
+          sound.mood(clamp((sim.topStage + 1) / 6));
+        }
+      }
+      this.saveT -= dt;
+      if (this.saveT <= 0) {
+        this.saveT = 10;
+        this.save();
+      }
+    }
+    this.labels.end();
+  }
+
+  private drawLabels(s: GameState, L: number) {
+    // Guides: names written on the rings, on the side facing the camera.
+    const yaw = this.stage.yaw;
+    const [a, b] = this.guides.hzRadii(L);
+    const hr = (a + b) / 2;
+    this.labels.put('g.hz', 'guide-label', tr('zona habitable', 'habitable zone'), Math.sin(yaw) * hr, 0, Math.cos(yaw) * hr);
+    const sr = this.guides.snowRadius(L);
+    this.labels.put('g.snow', 'guide-label snow', tr('línea de nieve', 'snow line'), Math.sin(yaw + 0.25) * sr, 0, Math.cos(yaw + 0.25) * sr);
+    if (!this.sim) return;
+    const near = this.stage.dist < 75;
+    const byId = new Map(s.worlds.map((w) => [w.id, w]));
+    const tmp = { x: 0, z: 0 };
+    for (const w of s.worlds) {
+      const moon = w.parent !== null;
+      const sel = this.selected === w.id || this.systemView.hovered === w.id;
+      if (moon && !near && !sel && this.selected !== w.parent) continue;
+      worldXZ(w, byId, tmp);
+      let f = '';
+      if (w.life) f += '<span class="l">❦</span>';
+      if (w.colony >= 1) f += '<span class="c">⌂</span>';
+      if (w.invaded > 0.3) f += '<span class="a">⚠</span>';
+      const r = worldRadius(w);
+      const px = r / this.stage.pixelScale(tmp.x, 0, tmp.z);
+      this.labels.put(`w${w.id}`, `wlabel ${moon ? 'moon' : ''} ${sel ? 'sel' : ''}`, `${w.name}${f ? `<span class="f">${f}</span>` : ''}`, tmp.x, 0, tmp.z, px + 6);
+    }
+  }
+}
+
