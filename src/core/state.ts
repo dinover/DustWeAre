@@ -79,17 +79,87 @@ export interface World extends Stuff {
   sats: number;
   ring: boolean;
   volcanoCd: number;
+  /** Refugees from another star who were given this world. */
+  guest?: string;
 }
+
+export type ShipKind = 'colony' | 'freight' | 'tanker' | 'miner' | 'trader' | 'refugee' | 'expedition' | 'armada' | 'alien' | 'mother' | 'ark';
 
 export interface Ship {
   id: number;
+  /** World id, or a negative number for deep space. */
   from: number;
+  /** World id, or -1 when the ship flies to a fixed point (tx, tz). */
   to: number;
   t: number;
   dur: number;
   alien: boolean;
   /** Interstellar ark leaving the system. */
   ark?: boolean;
+  kind?: ShipKind;
+  /** Fixed start / end points on the disk plane (world units). */
+  sx?: number;
+  sz?: number;
+  tx?: number;
+  tz?: number;
+  /** Asteroid-belt sample a mining ship flies to. */
+  belt?: number;
+  /** Return leg of a round trip. */
+  back?: boolean;
+  /** Seconds left before a defending fleet destroys it. */
+  doom?: number;
+  /** Hits a mothership can still take. */
+  hp?: number;
+  /** Refugee species on board. */
+  species?: string;
+}
+
+export interface Resources {
+  metal: number;
+  fuel: number;
+  water: number;
+  science: number;
+}
+
+export interface Decision {
+  id: number;
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue';
+  /** Seconds left before it expires. */
+  left: number;
+  dur: number;
+  world?: number;
+  give?: Partial<Resources>;
+  get?: Partial<Resources>;
+  species?: string;
+}
+
+export interface Mission {
+  id: number;
+  kind: 'expedition' | 'signal' | 'artifact';
+  t: number;
+  dur: number;
+  x: number;
+  z: number;
+}
+
+/** The late game: economy, great works, missions and visitors. */
+export interface CivState {
+  res: Resources;
+  done: Record<string, boolean>;
+  building: { id: string; t: number; dur: number } | null;
+  missions: Mission[];
+  decisions: Decision[];
+  armada: { phase: 'rally' | 'hold' | 'away' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean } | null;
+  rogue: { t: number; dur: number; seed: number; ang: number; off: number; offered: boolean } | null;
+  nextLate: number;
+  nextFlavor: number;
+  peace: boolean;
+  allies: string[];
+  artifactFound: boolean;
+  /** Technologies researched beyond the great works. */
+  tech?: number;
+  research?: { t: number; dur: number } | null;
+  stats: { expeditions: number; battles: number; trades: number; colonies: number; armadas: number };
 }
 
 export interface Threat {
@@ -147,6 +217,7 @@ export interface GameState {
   won: boolean;
   /** System age when the first cities appeared (for the civilization calendar). */
   civStart?: number | null;
+  civ?: CivState;
   /** Systems your species has already reached (new game+). */
   legacy: number;
   legacySpecies: Species | null;

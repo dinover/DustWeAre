@@ -1,5 +1,6 @@
 import { int, num, pick, tr } from '../i18n';
-import type { GameState, NewsItem } from '../core/state';
+import type { GameState, NewsItem, Resources } from '../core/state';
+import { RES_ICON, RES_KEYS } from '../sim/civ';
 import type { Tool } from '../sim/formation';
 import { COST } from '../sim/system';
 import { h, stone, clear, ICONS } from './dom';
@@ -92,6 +93,30 @@ export interface HudHandlers {
   settle(): void;
   chronicle(): void;
   cancelTarget(): void;
+  works(): void;
+  decide(id: number, accept: boolean): void;
+}
+
+/** One pending choice, already written for the current language. */
+export interface DecisionView {
+  id: number;
+  icon: string;
+  title: string;
+  body: string;
+  yes: string;
+  yesOk: boolean;
+  no: string;
+  left: number;
+  dur: number;
+}
+
+export interface LateInfo {
+  era: string;
+  label: string;
+  v: number;
+  res: Resources;
+  rates: Resources;
+  canBuild: boolean;
 }
 
 /** Heads-up display: name tablet, progress, starlight, speed, tools, news and hints. */
@@ -116,6 +141,10 @@ export class Hud {
   private banner: HTMLElement | null = null;
   tagEl: HTMLElement;
   private mode: 'formation' | 'system' | null = null;
+  private resEl: HTMLElement;
+  private decisionsEl: HTMLElement;
+  private decisionKey = '';
+  private worksEl: HTMLElement | null = null;
   private tipTimer = 0;
 
   constructor(
@@ -142,14 +171,19 @@ export class Hud {
       this.speedBtns.push(b);
       return b;
     }), h('button', { class: 'btn small', title: tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
-    const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, energy, speed));
+    this.resEl = stone('res-tablet');
+    this.resEl.style.display = 'none';
+    this.resEl.title = tr('Recursos de tu civilización', 'Your civilization’s resources');
+    this.resEl.addEventListener('click', () => this.on.works());
+    const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
+    this.decisionsEl = h('div', { class: 'decisions' });
     this.toolbar = stone('toolbar');
     this.tip = stone('tool-tip');
     this.toolbar.append(this.tip);
     this.newsEl = h('div', { class: 'news' });
     this.tagEl = stone('tag');
     this.tagEl.style.display = 'none';
-    this.root.append(top, this.toolbar, this.newsEl, this.tagEl);
+    this.root.append(top, this.toolbar, this.newsEl, this.tagEl, this.decisionsEl);
     host.append(this.root);
   }
 
@@ -190,6 +224,22 @@ export class Hud {
       const star = h('div', { class: 'tool', 'data-tool': 'star', role: 'button', tabindex: '0' }, h('span', { html: ICONS.star, style: 'display:contents' }), h('span', { class: 't' }, tr('Estrella', 'Star')));
       star.addEventListener('click', () => this.on.star());
       this.toolbar.append(star);
+      const works = h(
+        'div',
+        { class: 'tool works', 'data-tool': 'works', role: 'button', tabindex: '0' },
+        h('span', { class: 'key' }, 'P'),
+        h('span', { html: ICONS.works, style: 'display:contents' }),
+        h('span', { class: 't' }, tr('Proyectos', 'Projects')),
+        h('span', { class: 'badge' }),
+      );
+      works.addEventListener('click', () => this.on.works());
+      works.addEventListener('pointerenter', (e) => {
+        if ((e as PointerEvent).pointerType === 'mouse')
+          this.showTip(tr('<b>Proyectos</b> · Grandes obras, expediciones a otras estrellas y la armada. Se pagan con lo que aporta cada mundo.', '<b>Projects</b> · Great works, expeditions to other stars and the armada. Paid for with what each world contributes.'));
+      });
+      works.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
+      this.worksEl = works;
+      this.toolbar.append(works);
     }
     this.refreshLanguage();
   }
@@ -209,6 +259,9 @@ export class Hud {
     }
     const star = this.toolbar.querySelector('[data-tool="star"] .t');
     if (star) star.textContent = tr('Estrella', 'Star');
+    const works = this.toolbar.querySelector('[data-tool="works"] .t');
+    if (works) works.textContent = tr('Proyectos', 'Projects');
+    this.decisionKey = '';
     const lbl = this.root.querySelector('.energy .lbl');
     if (lbl) lbl.textContent = tr('Luz estelar', 'Starlight');
     this.settleBtn.textContent = tr('Asentar el sistema', 'Settle the system');
@@ -234,7 +287,11 @@ export class Hud {
     for (const b of this.speedBtns) b.classList.toggle('on', Number(b.dataset.v) === v);
   }
 
-  update(s: GameState, info: { progress?: number; gas?: number; canSettle?: boolean; energyRate: number; living?: number; topStage?: number; reached?: number; total?: number }, dt: number) {
+  update(
+    s: GameState,
+    info: { progress?: number; gas?: number; canSettle?: boolean; energyRate: number; energyCap?: number; living?: number; topStage?: number; reached?: number; total?: number; late?: LateInfo | null },
+    dt: number,
+  ) {
     if (this.tipTimer > 0) {
       this.tipTimer -= dt;
       if (this.tipTimer <= 0) this.tip.classList.remove('show');
@@ -249,7 +306,7 @@ export class Hud {
     this.sub.innerHTML = `<span class="phase-chip">${phase}</span><span>${ageTxt}</span>`;
     const e = Math.floor(s.energy);
     this.energyVal.textContent = `${e}`;
-    (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${s.energy}%`);
+    (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${(s.energy / (info.energyCap ?? 100)) * 100}%`);
     this.energyBar.title = tr(`+${num(info.energyRate, 1)} por segundo`, `+${num(info.energyRate, 1)} per second`);
     if (s.phase === 'formation') {
       const p = info.progress ?? 0;
@@ -282,6 +339,27 @@ export class Hud {
       (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(v * 100)}%`);
       this.progBar.className = ark ? 'vessel gold' : 'vessel moss';
       this.row2.style.display = 'none';
+      const late = info.late;
+      if (late) {
+        // The late game: the era, the great work under way, and how far the species has spread.
+        this.progLabel.innerHTML = `<span>${late.era}</span><b>${late.label}</b>`;
+        (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(late.v * 100)}%`);
+        this.progBar.className = 'vessel gold';
+        this.row2.innerHTML = `<span>${tr('Mundos habitados', 'Worlds settled')}</span><div class="vessel thin moss"><i style="--v:${Math.round((reached / Math.max(1, total)) * 100)}%"></i></div><span>${reached}/${total}</span>`;
+        this.row2.style.display = '';
+      }
+    }
+    // Resources of the civilization.
+    const late = s.phase === 'system' ? info.late : null;
+    this.resEl.style.display = late ? '' : 'none';
+    this.root.parentElement?.classList.toggle('late', !!late);
+    if (late) {
+      const html = RES_KEYS.map((k) => `<span class="res ${k}" title="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('');
+      if (this.resEl.innerHTML !== html) this.resEl.innerHTML = html;
+    }
+    if (this.worksEl) {
+      this.worksEl.style.display = late ? '' : 'none';
+      this.worksEl.classList.toggle('ready', !!late?.canBuild);
     }
     // Hints rotate one at a time.
     if (this.hintEl) {
@@ -307,6 +385,37 @@ export class Hud {
 
   clearNews() {
     clear(this.newsEl);
+  }
+
+  // ------------------------------------------------------------------ decisions
+  showDecisions(list: DecisionView[]) {
+    // Newest first: it is shown in full, older ones fold into a single line.
+    list = [...list].reverse();
+    const key = list.map((d) => `${d.id}:${d.yesOk}`).join(',');
+    if (key !== this.decisionKey) {
+      this.decisionKey = key;
+      clear(this.decisionsEl);
+      list.forEach((d, i) => {
+        const card = stone(
+          `decision veined ${i > 0 ? 'compact' : ''}`,
+          h('div', { class: 'd-head' }, h('span', { class: 'glyph' }, d.icon), h('b', null, d.title)),
+          h('div', { class: 'd-body', html: d.body }),
+          h(
+            'div',
+            { class: 'd-buttons' },
+            h('button', { class: 'btn small', onclick: () => this.on.decide(d.id, false) }, d.no),
+            h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes),
+          ),
+          h('div', { class: 'vessel thin gold d-timer' }, h('i')),
+        );
+        card.dataset.id = String(d.id);
+        this.decisionsEl.append(card);
+      });
+    }
+    for (const d of list) {
+      const bar = this.decisionsEl.querySelector(`[data-id="${d.id}"] .d-timer i`) as HTMLElement | null;
+      bar?.style.setProperty('--v', `${Math.max(0, (d.left / d.dur) * 100)}%`);
+    }
   }
 
   // ------------------------------------------------------------------ hints

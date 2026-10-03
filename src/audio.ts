@@ -155,6 +155,16 @@ export class Sound {
     this.noiseBurst(1.4, 3200, 0.18);
     this.tone(220, 1.2, 'sawtooth', 0.03, 0, 2);
   }
+  /** Warp jump: a rising whine and a deep thump. */
+  warp() {
+    this.tone(90, 1.4, 'sawtooth', 0.04, 0, 9);
+    this.tone(180, 1.2, 'sine', 0.06, 0, 6);
+    this.noiseBurst(1.2, 4000, 0.18);
+    this.tone(55, 1.6, 'sine', 0.16, 0.5, 0.5);
+  }
+  laser() {
+    this.tone(1400, 0.18, 'square', 0.025, 0, 0.3);
+  }
   sizzle() {
     this.noiseBurst(0.25, 5000, 0.05);
   }

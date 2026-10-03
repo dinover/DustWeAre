@@ -24,6 +24,10 @@ import { h } from '../ui/dom';
 import { fmtAge, kindName } from '../ui/text';
 import { capName } from '../content/names';
 import { playComets } from '../minigames/Comets';
+import { ProjectsPanel } from '../ui/Projects';
+import { decisionView } from '../ui/decisions';
+import { isSettled } from '../sim/civ';
+import { ERA_NAMES, PROJECTS } from '../content/projects';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
 
@@ -98,6 +102,11 @@ export class Game {
       settle: () => this.confirmSettle(),
       chronicle: () => this.s && chronicle(this.ui, this.s, this.hud),
       cancelTarget: () => this.setTargeting(null),
+      works: () => this.openProjects(),
+      decide: (id, accept) => {
+        sound.click();
+        this.sim?.civ.decide(id, accept);
+      },
     });
     this.inspector = new Inspector(this.ui, {
       close: () => this.select(null),
@@ -424,9 +433,102 @@ export class Game {
     this.hud.hint(id, glyph, html);
   }
 
+  /** Last known position of a ship (it may already be gone from the simulation). */
+  private shipGetter(id: number) {
+    const last = (this.systemView.shipXYZ.get(id) ?? new THREE.Vector3(0, -999, 0)).clone();
+    return () => {
+      const v = this.systemView.shipXYZ.get(id);
+      if (v) last.copy(v);
+      return last;
+    };
+  }
+
+  private worldGetter(id: number) {
+    const last = new THREE.Vector3();
+    return () => {
+      const v = this.systemView.posOf(id);
+      if (v) last.copy(v);
+      return last;
+    };
+  }
+
   private onFx(f: Fx) {
     const s = this.s!;
-    if (f.kind === 'flareShip') return;
+    const own = new THREE.Color().setHSL(s.species?.hue ?? 0.35, 0.7, 0.72).getHex();
+    const alien = new THREE.Color().setHSL(s.alienSpecies?.hue ?? 0.85, 0.8, 0.7).getHex();
+    switch (f.kind) {
+      case 'flareShip':
+        return;
+      case 'laser': {
+        const from = this.worldGetter(f.world);
+        const to = this.shipGetter(f.ship);
+        this.fx.laser(from, to, own);
+        setTimeout(() => this.fx.laser(from, to, own), 260);
+        sound.laser();
+        return;
+      }
+      case 'boom': {
+        const v = this.shipGetter(f.ship)();
+        if (v.y > -500) this.fx.boom(v.x, v.y, v.z, f.big, f.big ? 0xd59aff : 0xffa060);
+        sound.thud(f.big ? 1.2 : 0.35);
+        return;
+      }
+      case 'shieldHit': {
+        const rock = this.systemView.threatPos3(f.threat)?.clone();
+        const from = this.worldGetter(f.world);
+        if (rock) {
+          this.fx.laser(from, () => rock, 0xffd28a);
+          setTimeout(() => this.fx.boom(rock.x, rock.y, rock.z, false, 0xffc070), 250);
+        }
+        sound.laser();
+        return;
+      }
+      case 'warpOut':
+      case 'warpIn':
+        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : own, f.kind === 'warpIn');
+        sound.warp();
+        if (f.count > 6) this.stage.shake(0.6);
+        return;
+      case 'supernova':
+        this.stage.skyFlash = 1;
+        {
+          const d = this.stage.camera.position.clone().normalize().multiplyScalar(-1);
+          const p = d.multiplyScalar(1500).add(new THREE.Vector3(400, 500, 0));
+          this.fx.flash(p.x, p.y, p.z, 0xfff2d8, 700, 7);
+        }
+        sound.thud(1.5);
+        sound.whoosh();
+        return;
+      case 'superflare':
+        this.star.flash();
+        this.fx.ring(0, 0, 0xffa040, 60, 2.5);
+        this.fx.flash(0, 0, 0, 0xffc070, 50, 1.8);
+        sound.flare();
+        return;
+      case 'built': {
+        const p = this.systemView.posOf(f.world) ?? new THREE.Vector3();
+        this.fx.ring(p.x, p.z, 0xffd28a, 14, 2.2);
+        this.fx.flash(p.x, 0, p.z, 0xffe6b0, 12, 1.6);
+        if (f.id === 'dyson') this.fx.ring(0, 0, 0xffd28a, 30, 3);
+        sound.chime('good');
+        return;
+      }
+      case 'rogueCaught': {
+        const p = this.systemView.posOf(f.world) ?? new THREE.Vector3();
+        this.fx.ring(p.x, p.z, 0xe8d2a0, 12, 2.4);
+        this.fx.flash(p.x, 0, p.z, 0xe8d2a0, 10, 1.6);
+        return;
+      }
+      case 'arkWarp': {
+        const v = this.shipGetter(f.ship)();
+        if (v.y > -500) {
+          const d = new THREE.Vector3(v.x, 0, v.z).normalize();
+          this.fx.warp(v.x, v.z, d.x, d.z, 1, 0xfff0c0, false);
+        }
+        sound.warp();
+        return;
+      }
+    }
     const w = s.worlds.find((x) => x.id === f.world);
     const p = w ? this.systemView.pos(w) : new THREE.Vector3();
     const r = w ? worldRadius(w) : 1;
@@ -449,7 +551,7 @@ export class Game {
       this.hint('s.life', '❦', () => tr('¡Vida! Mantén estable su mundo: eras glaciales, calentamientos y asteroides pondrán a prueba su salud.', 'Life! Keep its world steady: ice ages, warming and asteroids will test its health.'));
     } else if (f.kind === 'colony') {
       this.fx.ring(p.x, p.z, 0xdcbb7a, r * 4 + 3, 2);
-      this.hint('s.colony', '⌂', () => tr('Tu especie ya viaja entre mundos. Cuando los habite todos, partirá hacia otras estrellas.', 'Your species now travels between worlds. Once it lives on all of them, it will set out for other stars.'));
+      this.hint('s.colony', '⌂', () => tr('Tu especie ya viaja entre mundos. Cada tipo de mundo aporta algo distinto: los gigantes dan combustible, los helados agua, los rocosos metal y los vivos ciencia.', 'Your species now travels between worlds. Each kind of world gives something different: giants give fuel, icy worlds water, rocky worlds metal and living worlds science.'));
     } else if (f.kind === 'arkLaunch') {
       this.fx.flash(p.x, 0, p.z, 0xfff0c0, 24, 2.5);
       this.fx.ring(p.x, p.z, 0xfff0c0, 30, 3);
@@ -658,6 +760,7 @@ export class Game {
       if (this.formation) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
       else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate'] as Action[])[n - 1]);
     }
+    if (e.key === 'p' || e.key === 'P') this.openProjects();
     if (e.key === '+' || e.key === '=') this.stage.zoom(0.85);
     if (e.key === '-') this.stage.zoom(1.18);
   }
@@ -944,7 +1047,7 @@ export class Game {
           { class: 'summary' },
           h('div', { class: 'w' }, h('span', null, '⌂'), h('span', null, tr('Mundos habitados', 'Worlds settled')), h('b', null, String(reached))),
           h('div', { class: 'w' }, h('span', null, '⧗'), h('span', null, tr('Edad del sistema', 'System age')), h('b', null, fmtAge(s.age))),
-          h('div', { class: 'w' }, h('span', null, '✦'), h('span', null, tr('Sistemas alcanzados', 'Systems reached')), h('b', null, String(s.legacy + 1))),
+          h('div', { class: 'w' }, h('span', null, '✦'), h('span', null, tr('Sistemas alcanzados', 'Systems reached')), h('b', null, String(s.legacy + 1 + (s.civ?.stats.colonies ?? 0)))),
         ),
       ],
       buttons: [
@@ -1054,14 +1157,17 @@ export class Game {
       this.disk.update(activeF, dt, this.time, this.mode === 'play', nudging ? nudging.target ?? nudging.r : null);
       this.bodiesView.update(activeF.bodies, L, dt, this.time);
     }
-    if (s && this.sim) this.systemView.update(s, dt, this.time);
+    if (s && this.sim) {
+      this.systemView.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov);
+      this.systemView.update(s, dt, this.time);
+    }
 
     // Interface.
     this.labels.begin();
     if (this.mode === 'play' && s) {
       this.drawLabels(s, L);
       this.panelT -= dt;
-      const rate = 0.85 * s.dial;
+      const rate = this.sim ? this.sim.energyRate : 0.85 * s.dial;
       if (this.formation) {
         const f = this.formation;
         const canSettle = f.progress >= 0.5 && f.bodies.some((b) => massOf(b) > 0.05);
@@ -1075,7 +1181,29 @@ export class Game {
         const sim = this.sim;
         const all = s.worlds.filter(colonizable);
         const reached = all.filter((w) => w.colony >= 1 || (w.life?.origin && w.life.stage >= 2)).length;
-        this.hud.update(s, { energyRate: rate, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached, total: all.length }, dt);
+        const reachedAll = all.filter((w) => isSettled(w) || (w.life?.origin && w.life.stage >= 2)).length;
+        this.hud.update(
+          s,
+          { energyRate: rate, energyCap: sim.civ.energyCap, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached: Math.max(reached, reachedAll), total: all.length, late: this.lateInfo() },
+          dt,
+        );
+        const civ = s.civ;
+        this.hud.showDecisions(civ ? civ.decisions.map((d) => decisionView(d, s, sim.civ)) : []);
+        if (civ?.decisions.length) this.hint('s.decision', '⚖', () => tr('Llegan visitantes y te piden algo. Decide antes de que se acabe el tiempo; si no, se marchan.', 'Visitors arrive and ask you something. Decide before time runs out; otherwise they leave.'));
+        if (civ && sim.civ.spacefaring)
+          this.hint('s.works', '⚒', () =>
+            tr(
+              'Tu civilización ya puede emprender <b>grandes obras</b>. Abre <b>Proyectos</b> (tecla P): cada tipo de mundo colonizado aporta un recurso distinto.',
+              'Your civilization can now take on <b>great works</b>. Open <b>Projects</b> (P key): each kind of settled world contributes a different resource.',
+            ),
+          );
+        if (this.projects) {
+          this.projectsT -= dt;
+          if (this.projectsT <= 0) {
+            this.projectsT = 0.3;
+            this.projects.refresh();
+          }
+        }
         const afford: Record<string, { ok: boolean; afford: boolean }> = {};
         for (const a of ['flare', 'volcano', 'comets', 'migrate'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
         this.hud.setActionState(afford);
@@ -1101,6 +1229,65 @@ export class Game {
       }
     }
     this.labels.end();
+  }
+
+  /** Summary of the late game for the top slab (null before the civilization has an economy). */
+  private lateInfo() {
+    const s = this.s;
+    const sim = this.sim;
+    const civ = s?.civ;
+    if (!s || !sim || !civ || !sim.civ.spacefaring) return null;
+    const done = PROJECTS.filter((p) => civ.done[p.id]);
+    const era = civ.done.warp ? (done.some((p) => p.era === 3) ? 3 : 2) : done.length ? 1 : 0;
+    const b = civ.building;
+    const def = b ? PROJECTS.find((p) => p.id === b.id) : null;
+    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost));
+    return {
+      era: tr(ERA_NAMES[era].es, ERA_NAMES[era].en),
+      label: def && b ? tr(`Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %`, `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%`) : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
+      v: b ? b.t / b.dur : done.length / PROJECTS.length,
+      res: civ.res,
+      rates: sim.civ.rates,
+      canBuild,
+    };
+  }
+
+  private projects: ProjectsPanel | null = null;
+  private projectsT = 0;
+
+  openProjects() {
+    const sim = this.sim;
+    if (!sim || !this.s?.civ || this.projects || this.mode !== 'play') return;
+    sound.click();
+    const panel = new ProjectsPanel(sim.civ, {
+      start: (id) => {
+        if (sim.civ.start(id)) sound.chime('good');
+        panel.refresh();
+      },
+      expedition: () => {
+        if (sim.civ.sendExpedition()) sound.whoosh();
+        panel.refresh();
+      },
+      armada: () => {
+        if (sim.civ.launchArmada()) sound.chime('good');
+      },
+      research: () => {
+        if (sim.civ.startResearch()) sound.chime('good');
+        panel.refresh();
+      },
+      close: () => {},
+    });
+    this.projects = panel;
+    const close = modal(this.ui, {
+      title: tr('Grandes obras', 'Great works'),
+      lore: tr('Cada mundo aporta lo suyo: los gigantes, combustible; los helados, agua; los rocosos, metal; los mundos vivos, ciencia.', 'Each world contributes its own: giants give fuel, icy worlds water, rocky worlds metal, living worlds science.'),
+      wide: true,
+      cls: 'works-modal',
+      body: [panel.el],
+      buttons: [{ label: tr('Cerrar', 'Close'), primary: true }],
+      onClose: () => (this.projects = null),
+    });
+    panel.bindClose(close);
   }
 
   private drawLabels(s: GameState, L: number) {

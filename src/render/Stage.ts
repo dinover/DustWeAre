@@ -19,6 +19,9 @@ export class Stage {
   maxDist = 240;
   /** Slow drift when nobody touches the camera (title screen). */
   drift = 0;
+  /** The sky brightens (a nearby supernova) and fades back. */
+  skyFlash = 0;
+  private trauma = 0;
   private ray = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -60,6 +63,11 @@ export class Stage {
     this.camera.updateProjectionMatrix();
   }
 
+  /** A short camera tremble (big warp jumps). */
+  shake(v: number) {
+    this.trauma = Math.min(1, this.trauma + v);
+  }
+
   zoom(factor: number) {
     this.goal.dist = clamp(this.goal.dist * factor, this.minDist, this.maxDist);
   }
@@ -83,8 +91,17 @@ export class Stage {
       this.target.y + Math.sin(this.pitch) * this.dist,
       this.target.z + Math.cos(this.yaw) * cp * this.dist,
     );
+    if (this.trauma > 0) {
+      this.trauma = Math.max(0, this.trauma - dt * 1.2);
+      const a = this.trauma * this.trauma * 0.9;
+      this.camera.position.x += (Math.random() - 0.5) * a;
+      this.camera.position.y += (Math.random() - 0.5) * a;
+    }
     this.camera.lookAt(this.target);
     this.backdrop.position.copy(this.camera.position);
+    this.skyFlash = Math.max(0, this.skyFlash - dt * 0.22);
+    const sky = (this.backdrop.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+    sky.color.setRGB(1 + this.skyFlash * 2.4, 1 + this.skyFlash * 1.9, 1 + this.skyFlash * 1.5);
   }
 
   /** Point on the disk plane under the cursor. */

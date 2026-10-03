@@ -4,6 +4,23 @@ import type { WorldStats } from '../sim/worlds';
 import { STAGE_NAMES, STAGE_TIME } from '../sim/system';
 import { capName } from '../content/names';
 import { h, stone, clear } from './dom';
+import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
+
+const ROLE_RES: Record<Role, 'fuel' | 'water' | 'metal' | 'science'> = { fuel: 'fuel', water: 'water', metal: 'metal', science: 'science' };
+
+/** What a world is good for once a civilization lives there. */
+export function roleText(r: Role) {
+  switch (r) {
+    case 'fuel':
+      return tr('<b>Combustible</b>: helio-3 y deuterio de sus nubes, para naves, armadas y motores de curvatura.', '<b>Fuel</b>: helium-3 and deuterium from its clouds, for ships, armadas and warp drives.');
+    case 'water':
+      return tr('<b>Agua</b>: hielo para terraformar otros mundos y mantener a las colonias.', '<b>Water</b>: ice to terraform other worlds and keep colonies alive.');
+    case 'metal':
+      return tr('<b>Metal</b>: minas y fundiciones para construir naves y grandes obras.', '<b>Metal</b>: mines and foundries to build ships and great works.');
+    default:
+      return tr('<b>Ciencia</b>: un mundo vivo donde prosperan ciudades, universidades y nuevas ideas.', '<b>Science</b>: a living world where cities, universities and new ideas thrive.');
+  }
+}
 import { FACTOR_KEYS, factorName, fmtAge, fmtTemp, kindName, tempWord } from './text';
 
 const KIND_DOT: Record<string, string> = {
@@ -178,6 +195,16 @@ export class Inspector {
     } else if (w.spark > 0.5) {
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round((w.spark / 30) * 100)}%"></i></div></section>`;
     }
+    {
+      const role = roleOf(w, st);
+      const settled = isSettled(w);
+      const jewel = role === 'science' && parent && parent.gas / Math.max(1e-6, massOf(parent)) > 0.3;
+      html += `<section><h3>${settled ? tr('APORTA', 'CONTRIBUTES') : tr('SI SE COLONIZA, APORTARÁ', 'IF SETTLED, IT WILL GIVE')}</h3>
+        <div class="role ${ROLE_RES[role]}"><span class="ri">${RES_ICON[ROLE_RES[role]]}</span><span>${roleText(role)}</span></div>
+        ${jewel ? `<div class="small gold" style="margin-top:4px">${tr('Luna viva de un gigante: su ciencia vale el doble.', 'Living moon of a giant: its science is worth double.')}</div>` : ''}
+        ${w.guest ? `<div class="small water" style="margin-top:4px">${tr(`Hogar de los ${w.guest}, refugiados de otra estrella.`, `Home of the ${capName(w.guest)}, refugees from another star.`)}</div>` : ''}
+      </section>`;
+    }
     if (w.colony > 0 || w.terra > 0 || w.sats > 0) {
       html += `<section><h3>${tr('CIVILIZACIÓN', 'CIVILIZATION')}</h3>
         ${w.colony > 0 ? `<div class="stat"><span>${w.colony >= 1 ? tr('Colonia establecida', 'Colony established') : tr('Colonos en camino', 'Settlers arriving')}</span><span>${pct(Math.min(1, w.colony))}</span></div><div class="vessel thin gold"><i style="--v:${Math.round(Math.min(1, w.colony) * 100)}%"></i></div>` : ''}
@@ -307,7 +334,8 @@ export class Ledger {
       r.bar.title = tr(`Habitabilidad ${Math.round(st.H * 100)} %`, `Habitability ${Math.round(st.H * 100)}%`);
       let f = '';
       if (w.life) f += '<span class="moss">❦</span>';
-      if (w.colony >= 1) f += '<span class="gold">⌂</span>';
+      if (isSettled(w)) f += `<span class="role-dot ${ROLE_RES[roleOf(w, st)]}">${RES_ICON[ROLE_RES[roleOf(w, st)]]}</span>`;
+      else if (w.colony >= 1) f += '<span class="gold">⌂</span>';
       if (w.invaded > 0.3) f += '<span class="violet">⚠</span>';
       if (threatened.has(w.id)) f += '<span class="ember">☄</span>';
       if (r.flags.innerHTML !== f) r.flags.innerHTML = f;

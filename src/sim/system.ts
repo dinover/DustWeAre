@@ -1,6 +1,7 @@
 import { massOf, omega, toWorld, type GameState, type NewsItem, type Ship, type World } from '../core/state';
 import { Rng, clamp, smoothstep } from '../util';
 import { worldStats, colonizable, isGiantStuff } from './worlds';
+import { CivSim, type CivFx } from './civ';
 import { capName, speciesName } from '../content/names';
 import { FACTS } from '../content/facts';
 
@@ -20,25 +21,33 @@ const AGE_RATE = [12, 5, 0.6, 0.002, 0.0005, 0.0003];
 export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate: 35 };
 
 export type Fx =
+  | CivFx
   | { kind: 'flare'; world: number }
   | { kind: 'flareShip'; x: number; z: number }
   | { kind: 'impact'; world: number }
   | { kind: 'volcano'; world: number }
   | { kind: 'life'; world: number }
   | { kind: 'colony'; world: number }
-  | { kind: 'arkLaunch'; world: number };
+  | { kind: 'arkLaunch'; world: number }
+  | { kind: 'arkWarp'; ship: number };
 
 /** Everything after formation: climate, life, civilization, colonies and visitors. */
 export class SystemSim {
   onNews: (n: NewsItem) => void = () => {};
   onFx: (f: Fx) => void = () => {};
-  private rng: Rng;
+  rng: Rng;
+  civ: CivSim;
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
 
   constructor(public s: GameState) {
     this.rng = new Rng(s.seed ^ 0x9e3779b9 ^ Math.floor(s.time));
+    this.civ = new CivSim(this);
+  }
+
+  fx(f: CivFx) {
+    this.onFx(f);
   }
 
   get worlds() {
@@ -53,7 +62,7 @@ export class SystemSim {
   stats(w: World) {
     return worldStats(w, this.s.worlds, this.L);
   }
-  private nid() {
+  nid() {
     return this.s.nextId++;
   }
 
@@ -81,7 +90,7 @@ export class SystemSim {
     const top = this.topStage;
     s.age += AGE_RATE[Math.max(0, top)] * dt * (top < 0 ? 1.4 : 1);
     s.L = 1 + 0.07 * (s.age / 1000);
-    s.energy = Math.min(100, s.energy + dt * 0.85 * s.dial);
+    s.energy = Math.min(this.civ.energyCap, s.energy + dt * this.energyRate);
     for (const w of s.worlds) {
       if (w.parent === null) w.th += omega(w.a) * dt * 0.42;
       else w.th += (1.3 / (w.a + 1.5)) * dt;
@@ -89,11 +98,16 @@ export class SystemSim {
     }
     this.updateWorlds(dt);
     this.updateCivilization(dt);
+    this.civ.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);
     this.updateInvasion(dt);
     this.updateEvents(dt);
-    this.updateArk(dt);
+  }
+
+  /** Starlight gained per second. */
+  get energyRate() {
+    return 0.85 * this.s.dial * (this.s.civ?.done.dyson ? 3 : 1);
   }
 
   private updateWorlds(dt: number) {
@@ -187,7 +201,14 @@ export class SystemSim {
         if (w.sats < target && this.rng.next() < dt * 0.08) w.sats++;
         if (w.colony >= 1 && !isGiantStuff(w) && w.terra < 1) {
           const before = w.terra;
-          w.terra = Math.min(1, w.terra + dt / 260);
+          // Terraforming drinks water: icy worlds and moons keep it going.
+          const civ = s.civ;
+          let pace = 1;
+          if (civ) {
+            civ.res.water = Math.max(0, civ.res.water - dt * 0.04);
+            if (civ.res.water < 1) pace = 0.35;
+          }
+          w.terra = Math.min(1, w.terra + (dt / 260) * pace);
           if (before < 0.5 && w.terra >= 0.5) this.news('☘', `${w.name} está a medio terraformar: ya llueve en sus valles.`, `${w.name} is half terraformed: rain now falls in its valleys.`, 'good');
           if (before < 1 && w.terra >= 1) this.news('☘', `Terraformación completa: ${w.name} es un hogar verde y azul.`, `Terraforming complete: ${w.name} is a green and blue home.`, 'good');
         }
@@ -196,7 +217,7 @@ export class SystemSim {
       let t = this.shipTimers.get(w.id) ?? this.rng.range(4, 12);
       t -= dt;
       if (t <= 0) {
-        t = this.rng.range(13, 22);
+        t = this.rng.range(13, 22) * (s.civ?.done.elevator ? 0.6 : 1);
         const target = this.pickTarget(w, false);
         if (target) this.launch(w.id, target.id, false);
       }
@@ -235,7 +256,7 @@ export class SystemSim {
     const b = this.world(to);
     if (!b) return;
     const dist = a ? Math.abs(this.worldPosW(a) - this.worldPosW(b)) : 40;
-    s.ships.push({ id: this.nid(), from, to, t: 0, dur: dur ?? 7 + dist * 0.28, alien });
+    s.ships.push({ id: this.nid(), from, to, t: 0, dur: dur ?? 7 + dist * 0.28, alien, kind: alien ? 'alien' : 'colony' });
   }
 
   private updateShips(dt: number) {
@@ -246,11 +267,13 @@ export class SystemSim {
       s.ships.splice(s.ships.indexOf(sh), 1);
       if (sh.ark) {
         s.won = true;
+        this.onFx({ kind: 'arkWarp', ship: sh.id });
         continue;
       }
+      if (this.civ.arrive(sh)) continue;
       const w = this.world(sh.to);
       if (!w) continue;
-      if (sh.alien) this.alienArrives(w);
+      if (sh.alien) this.alienArrives(w, sh.kind === 'mother');
       else this.colonistsArrive(w, sh.from === -1);
     }
   }
@@ -278,6 +301,11 @@ export class SystemSim {
     const s = this.s;
     for (const th of [...s.threats]) {
       th.t += dt;
+      const target = this.world(th.target);
+      if (target && th.t / th.dur > 0.8 && this.civ.shieldStops(target, th.id)) {
+        s.threats.splice(s.threats.indexOf(th), 1);
+        continue;
+      }
       if (th.t < th.dur) continue;
       s.threats.splice(s.threats.indexOf(th), 1);
       const w = this.world(th.target);
@@ -303,18 +331,36 @@ export class SystemSim {
       s.alienSpecies = { name: speciesName(this.rng), hue: this.rng.range(0.78, 0.95) };
       this.news('⚠', 'Llega una señal desde otra estrella. Algo se acerca a tu sistema.', 'A signal arrives from another star. Something is approaching your system.', 'alien');
     }
-    if (inv.signal && s.time >= inv.next && !s.won) {
+    const civ = s.civ;
+    if (civ?.peace) {
+      // Peace holds for a long while… until someone new arrives from farther away.
+      if (s.time < inv.next) return;
+      civ.peace = false;
+      inv.waves = 0;
+      s.alienSpecies = { name: speciesName(this.rng), hue: this.rng.range(0.78, 0.95) };
+      inv.next = s.time + 45;
+      this.news('⚠', `Desde el otro lado de la galaxia llega una nueva amenaza: los ${s.alienSpecies.name}.`, `A new threat arrives from the far side of the galaxy: the ${capName(s.alienSpecies.name)}.`, 'alien');
+      return;
+    }
+    if (inv.signal && s.time >= inv.next) {
       inv.waves++;
-      inv.next = s.time + this.rng.range(260, 380);
-      const n = 1 + Math.min(4, inv.waves);
+      inv.next = s.time + this.rng.range(240, 360);
+      const n = 1 + Math.min(5, inv.waves);
       const targets = s.worlds.filter((w) => colonizable(w) && w.invaded < 0.9);
-      targets.sort((a, b) => (b.colony + (b.life ? 1 : 0)) - (a.colony + (a.life ? 1 : 0)));
+      targets.sort((a, b) => b.colony + (b.life ? 1 : 0) - (a.colony + (a.life ? 1 : 0)));
+      const from = -1 - ((this.rng.next() * 1000) | 0);
       for (let i = 0; i < n && targets.length; i++) {
         const tg = targets[Math.min(targets.length - 1, (this.rng.next() * Math.min(3, targets.length)) | 0)];
-        s.ships.push({ id: this.nid(), from: -1 - ((this.rng.next() * 1000) | 0), to: tg.id, t: 0, dur: this.rng.range(16, 24), alien: true });
+        s.ships.push({ id: this.nid(), from, to: tg.id, t: -i * 0.8, dur: this.rng.range(18, 26), alien: true, kind: 'alien' });
       }
       const al = s.alienSpecies!.name;
-      this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${capName(al)} enter your system. They are looking for worlds to settle.`, 'alien');
+      // From the third wave on, a mothership leads them, dropping out of warp.
+      if (inv.waves >= 3 && targets.length) {
+        s.ships.push({ id: this.nid(), from, to: targets[0].id, t: -2, dur: 34, alien: true, kind: 'mother', hp: 3 });
+        const a = (Math.abs(from) * 2.399) % (Math.PI * 2);
+        this.onFx({ kind: 'warpIn', x: Math.cos(a) * 110, z: Math.sin(a) * 110, dx: -Math.cos(a), dz: -Math.sin(a), count: n + 1, tint: 'alien' });
+        this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${capName(al)} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
+      } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${capName(al)} enter your system. They are looking for worlds to settle.`, 'alien');
     }
     // Settled visitors spread to nearby worlds.
     for (const w of s.worlds) {
@@ -331,9 +377,9 @@ export class SystemSim {
     }
   }
 
-  private alienArrives(w: World) {
+  private alienArrives(w: World, mother = false) {
     const before = w.invaded;
-    w.invaded = Math.min(1, w.invaded + 0.4);
+    w.invaded = Math.min(1, w.invaded + (mother ? 0.85 : 0.4));
     const al = this.s.alienSpecies?.name ?? '';
     if (before < 0.5 && w.invaded >= 0.5)
       this.news('⚠', `Los ${al} se asientan en ${w.name}. Una llamarada solar podría expulsarlos.`, `The ${capName(al)} settle on ${w.name}. A solar flare could drive them out.`, 'alien');
@@ -367,30 +413,6 @@ export class SystemSim {
     } else {
       s.threats.push({ id: this.nid(), target: w.id, t: 0, dur: 45, angle: this.rng.range(0, Math.PI * 2) });
       this.news('☄', `Un asteroide se dirige hacia ${w.name}. Una llamarada solar puede desviarlo.`, `An asteroid is heading for ${w.name}. A solar flare can deflect it.`, 'warn');
-    }
-  }
-
-  // ------------------------------------------------------------------ the end: to the stars
-  private updateArk(dt: number) {
-    const s = this.s;
-    if (s.won || !s.species) return;
-    const origin = this.origin;
-    // A species that arrived on an ark has no native home: its first colony plays that part.
-    const home = origin ?? s.worlds.find((w) => w.colony >= 1) ?? null;
-    const all = s.worlds.filter(colonizable);
-    const reached = all.every((w) => w.colony >= 1 || w === origin);
-    const clean = all.every((w) => w.invaded < 0.3);
-    if (!home || (origin && origin.life!.stage < 5) || !reached || !clean) {
-      if (s.arkTimer > 0 && s.arkTimer < 60) s.arkTimer = Math.max(0, s.arkTimer - dt * 0.5);
-      return;
-    }
-    const before = s.arkTimer;
-    s.arkTimer += dt;
-    if (before === 0) this.news('✧', `Los ${s.species.name} habitan todos tus mundos. Ahora miran hacia otras estrellas.`, `The ${capName(s.species.name)} live on all of your worlds. Now they look towards other stars.`, 'good');
-    if (before < 60 && s.arkTimer >= 60) {
-      s.ships.push({ id: this.nid(), from: home.id, to: home.id, t: 0, dur: 14, alien: false, ark: true });
-      this.onFx({ kind: 'arkLaunch', world: home.id });
-      this.news('✧', `Parte el arca de los ${s.species.name}: una semilla de vida rumbo a otra estrella.`, `The ark of the ${capName(s.species.name)} departs: a seed of life bound for another star.`, 'good');
     }
   }
 
