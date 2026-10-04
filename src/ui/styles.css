@@ -614,3 +614,17 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .sr-btns .cost-chip { font-size: 11px; padding: 0 5px; }
 .people-row.patrol i { box-shadow: 0 0 0 2px rgba(255, 210, 120, .7), 0 0 8px #6f9bff; }
 .people-row.patrol span { color: #c9d7ff; }
+
+/* naming things */
+.modal.rename { max-width: 420px; }
+.name-row { display: flex; gap: 8px; align-items: center; }
+.name-input { flex: 1; min-width: 0; font: 600 20px var(--title); letter-spacing: .06em; color: var(--sand); padding: 9px 12px; border: 0; border-radius: 7px 10px 8px 11px; background: rgba(0, 0, 0, .45); box-shadow: inset 0 2px 5px rgba(0, 0, 0, .8), 0 0 0 1px rgba(220, 187, 122, .25); outline: none; user-select: text; -webkit-user-select: text; }
+.name-input:focus { box-shadow: inset 0 2px 5px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 140, 60, .6), 0 0 14px rgba(255, 120, 40, .2); }
+.name-err { min-height: 18px; margin-top: 6px; color: #ff8a64; text-align: center; }
+.rename-btn { border: 0; background: none; color: var(--dust-dim); font-size: 14px; cursor: pointer; padding: 0 4px; line-height: 1; vertical-align: middle; transition: color .2s; }
+.rename-btn:hover { color: #ffd08a; }
+.name-line { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.name-line .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector .title-line { display: flex; align-items: center; gap: 4px; padding-right: 28px; }
+.inspector .title-line h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector .title-line .rename-btn { font-size: 16px; }

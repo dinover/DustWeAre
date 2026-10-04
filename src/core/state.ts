@@ -326,6 +326,8 @@ export interface NewsItem {
 export interface Species {
   name: string;
   hue: number;
+  /** English name, when it differs (the invaders' factions). */
+  en?: string;
 }
 
 export interface DiskSave {

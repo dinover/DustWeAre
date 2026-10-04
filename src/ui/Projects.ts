@@ -37,7 +37,7 @@ export class ProjectsPanel {
 
   constructor(
     private civ: CivSim,
-    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void },
+    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void },
     private patrols?: PatrolSim,
   ) {
     this.el = h('div', { class: 'projects' });
@@ -129,7 +129,8 @@ export class ProjectsPanel {
       const b = (e.target as Element).closest('button[data-act]') as HTMLButtonElement | null;
       if (!b || b.disabled) return;
       const id = Number(b.dataset.id);
-      if (b.dataset.act === 'release') this.on.release(id);
+      if (b.dataset.act === 'rename') this.on.rename(id);
+      else if (b.dataset.act === 'release') this.on.release(id);
       else this.on.send(id, b.dataset.act === 'conquer');
     });
     this.refresh();
@@ -197,7 +198,7 @@ export class ProjectsPanel {
       if (st.mode === 'trade' && p) btns += btn('conquer', '', `${tr('Conquistar', 'Conquer')} ${costChips(PATROL_COST.conquer, res)}`, conqLock ? pick(conqLock) : tr('Los Space Patrols someten el sistema: pasará a ser un dominio.', 'The Space Patrols bring the system to heel: it will become a dominion.'), !!conqLock);
       if (st.mode === 'dominion') btns += btn('release', '', tr('Liberar', 'Set free'), tr('Devolverle la libertad: solo comerciará, y el sistema se ganará menos enemigos.', 'Give it back its freedom: it will only trade, and the system will make fewer enemies.'), false);
       html += `<div class="star-row ${st.mode}${st.trouble ? ' trouble' : ''}">
-        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
+        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" title="${tr('Ponerle nombre', 'Give it a name')}">✎</button><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
         <div class="small"><span class="muted">${who}</span> · ${trouble}</div>
         <div class="vessel thin ${st.health > 0.5 ? 'moss' : 'gold'}" data-tip="${tr(`Estado de la colonia: ${Math.round(st.health * 100)} %`, `Colony condition: ${Math.round(st.health * 100)}%`)}"><i style="--v:${Math.round(st.health * 100)}%"></i></div>
         <div class="sr-inc small">${income} <em class="muted">/s</em></div>

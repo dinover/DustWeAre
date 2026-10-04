@@ -21,24 +21,28 @@ const DYSON = 900;
 const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8 };
 /** Hull shape, true size (world units) and smallest on-screen size (pixels) per kind. */
 const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
-  colony: { hull: 'dart', size: 0.5, px: 9 },
-  expedition: { hull: 'dart', size: 0.6, px: 11 },
-  flotilla: { hull: 'dart', size: 0.55, px: 10 },
-  armada: { hull: 'dart', size: 0.65, px: 11 },
-  raider: { hull: 'dart', size: 0.55, px: 10 },
-  freight: { hull: 'hauler', size: 0.45, px: 7 },
-  miner: { hull: 'hauler', size: 0.32, px: 6 },
-  tanker: { hull: 'tanker', size: 0.5, px: 8 },
-  trader: { hull: 'diamond', size: 0.75, px: 12 },
-  refugee: { hull: 'orb', size: 0.6, px: 10 },
-  alien: { hull: 'claw', size: 0.6, px: 11 },
-  mother: { hull: 'mother', size: 2.2, px: 24 },
+  colony: { hull: 'challenger', size: 0.6, px: 15 },
+  expedition: { hull: 'zenith', size: 0.7, px: 16 },
+  flotilla: { hull: 'challenger', size: 0.62, px: 15 },
+  armada: { hull: 'striker', size: 0.7, px: 16 },
+  raider: { hull: 'striker', size: 0.62, px: 15 },
+  freight: { hull: 'imperial', size: 0.6, px: 13 },
+  miner: { hull: 'bob', size: 0.42, px: 10 },
+  tanker: { hull: 'insurgent', size: 0.6, px: 13 },
+  trader: { hull: 'dispatcher', size: 0.85, px: 16 },
+  refugee: { hull: 'zenith', size: 0.65, px: 14 },
+  alien: { hull: 'omen', size: 0.75, px: 16 },
+  mother: { hull: 'pancake', size: 2.8, px: 38 },
   ark: { hull: 'ark', size: 1.8, px: 22 },
   pod: { hull: 'pod', size: 0.42, px: 10 },
-  gunship: { hull: 'gunship', size: 0.6, px: 12 },
+  gunship: { hull: 'executioner', size: 0.65, px: 14 },
 };
-/** Space Patrol engines burn blue-white. */
+/** Each people's shipyards favour one warship design. */
+const WARSHIPS: Hull[] = ['striker', 'spitfire', 'zenith'];
+const hullOf = (kind: ShipKind, people?: number): Hull => (kind === 'armada' || kind === 'raider' ? WARSHIPS[(people ?? 0) % WARSHIPS.length] : HULL_OF[kind].hull);
+/** Space Patrol engines burn blue-white; their gunships wear ultramarine stripes. */
 const PATROL_GLOW = new THREE.Color(0.75, 0.85, 1);
+const PATROL_ACCENT = new THREE.Color(0.25, 0.42, 1);
 
 /** Faction colours: every people its own hue, traders gold, refugees teal, invaders violet. */
 export const FACTION = { trader: new THREE.Color(1, 0.8, 0.32), refugee: new THREE.Color(0.45, 0.95, 0.85) };
@@ -192,7 +196,9 @@ export class SystemView {
     this.threatLines.frustumCulled = false;
     this.group.add(ships, trails, sats, this.threatLines, this.hulls.group);
     const amb = new THREE.AmbientLight(0x403028, 0.6);
-    this.group.add(amb);
+    // Soft light from the galaxy above, so the ships' night sides are never pitch black.
+    const sky = new THREE.HemisphereLight(0xb8c4e0, 0x2a2018, 0.9);
+    this.group.add(amb, sky);
   }
 
   setBelts(belts: { r: number; th: number; s: number }[]) {
@@ -328,7 +334,8 @@ export class SystemView {
     if (kind === 'trader') return out.copy(FACTION.trader);
     if (kind === 'refugee') return out.copy(FACTION.refugee);
     if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
-    if (kind === 'pod' || kind === 'gunship') return out.copy(PATROL_GLOW);
+    if (kind === 'pod') return out.copy(PATROL_GLOW);
+    if (kind === 'gunship') return out.copy(PATROL_ACCENT);
     const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';
     // Whose ship: its own mark, else the people of the world it left (or is heading to).
     let pid = sh.people ?? 0;
@@ -441,7 +448,7 @@ export class SystemView {
       else this.shipPath(s, sh, k - 0.01, q), dir.subVectors(v, q);
       const spec = HULL_OF[kind];
       const flash = sh.doom !== undefined ? 1 + 1.5 * Math.abs(Math.sin(time * 30)) : 1;
-      this.hulls.add(spec.hull, v, dir, flash > 1 ? this.flashCol.copy(hue).multiplyScalar(flash) : hue, spec.size, spec.px, cam);
+      this.hulls.add(hullOf(kind, sh.people), v, dir, flash > 1 ? this.flashCol.copy(hue).multiplyScalar(flash) : hue, spec.size, spec.px, cam);
       // Engine glow just behind the hull.
       dir.normalize();
       const back = Math.max(spec.size, spec.px * this.hulls.pxScale * cam.distanceTo(v)) * 0.55;
@@ -478,13 +485,14 @@ export class SystemView {
       for (let i = 0; i < count && p < MAX_POINTS; i++, p++) {
         // Every people sends its own ships: the formation shows them side by side.
         this.peopleColor(s, ar.crew?.[i], hue, 0.8, 0.62);
+        const hull = hullOf('armada', ar.crew?.[i]);
         const row = Math.floor((i + 1) / 2);
         const side = i === 0 ? 0 : i % 2 ? 1 : -1;
         const back = row * 1.25;
         const lat = side * row * 1.0;
         const bob = Math.sin(time * 2 + i) * 0.15;
         v.set(ar.x - fx * back - fz * lat, 1 + bob, ar.z - fz * back + fx * lat);
-        this.hulls.add('dart', v, dir, hue, 0.7, 11, cam);
+        this.hulls.add(hull, v, dir, hue, 0.75, 14, cam);
         const glow = ar.phase === 'hold' ? 1.3 + 0.8 * Math.min(1, ar.t / 9) : 1.1;
         this.shipPos.set([v.x - fx * 0.6, v.y, v.z - fz * 0.6], p * 3);
         this.shipCol.set([hue.r * glow, hue.g * glow, hue.b * glow], p * 3);
@@ -503,7 +511,7 @@ export class SystemView {
         const row = Math.floor((i + 1) / 2);
         const side = i === 0 ? 0 : i % 2 ? 1 : -1;
         v.set(fl.x - fx * row * 1.1 - fz * side * row * 0.9, 1 + Math.sin(time * 2 + i) * 0.12, fl.z - fz * row * 1.1 + fx * side * row * 0.9);
-        this.hulls.add('dart', v, dir, hue, 0.55, 10, cam);
+        this.hulls.add('challenger', v, dir, hue, 0.62, 13, cam);
         this.shipPos.set([v.x - fx * 0.5, v.y, v.z - fz * 0.5], p * 3);
         this.shipCol.set([hue.r * 1.2, hue.g * 1.2, hue.b * 1.2], p * 3);
         this.shipSize[p] = 0.8;
@@ -517,7 +525,7 @@ export class SystemView {
         const r = 5 + (i % 3) * 1.2;
         v.set(ar.x + Math.cos(a) * r, 1 + Math.sin(a * 3) * 0.4, ar.z + Math.sin(a) * r);
         dir.set(-Math.sin(a), 0, Math.cos(a));
-        this.hulls.add('dart', v, dir, hue, 0.65, 11, cam);
+        this.hulls.add(hullOf('armada', ar.crew?.[i]), v, dir, hue, 0.7, 13, cam);
         this.shipPos.set([v.x, v.y, v.z], p * 3);
         this.shipCol.set([hue.r, hue.g, hue.b], p * 3);
         this.shipSize[p] = 0.7;
@@ -534,7 +542,7 @@ export class SystemView {
           const a = time * 1.4 + j * 2.094 + w.id;
           v.set(c.x + Math.cos(a) * r, Math.sin(a * 2) * 0.3, c.z + Math.sin(a) * r);
           dir.set(-Math.sin(a), 0, Math.cos(a));
-          this.hulls.add('dart', v, dir, hue, 0.35, 6, cam);
+          this.hulls.add('bob', v, dir, hue, 0.4, 8, cam);
         }
       }
     }
@@ -563,7 +571,7 @@ export class SystemView {
         const r = scale * 0.75;
         q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
         const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
-        this.hulls.add('gunship', q, d2, hue, 0.5, 9, cam);
+        this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 11, cam);
       }
     }
     this.hulls.end();

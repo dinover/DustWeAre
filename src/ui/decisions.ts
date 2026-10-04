@@ -1,6 +1,6 @@
 import { int, tr } from '../i18n';
 import type { Decision, GameState, Resources } from '../core/state';
-import { capName } from '../content/names';
+import { capName, invaderNames } from '../content/names';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
 import { PATROL_COST } from '../sim/patrols';
@@ -77,13 +77,13 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
       const who = nameOf(st?.people);
       const where = st?.name ?? '';
       const kind = st?.trouble?.kind ?? 'pirates';
-      const al = s.alienSpecies?.name ?? '';
+      const [al, AL] = invaderNames(s.alienSpecies);
       const p = s.patrol;
       const icons = { pirates: '☠', natives: '⚑', invaders: '⚠', plague: '☣' };
       const what = {
         pirates: tr(`Piratas del vacío saquean la colonia ${who} de ${where}.`, `Void pirates are plundering the ${capName(who)} colony at ${where}.`),
         natives: tr(`Los nativos de ${where} se alzan contra el dominio del sistema.`, `The natives of ${where} rise against the system’s rule.`),
-        invaders: tr(`Los ${al} asedian la colonia ${who} de ${where}.`, `The ${capName(al)} besiege the ${capName(who)} colony at ${where}.`),
+        invaders: tr(`Los ${al} asedian la colonia ${who} de ${where}.`, `The ${AL} besiege the ${capName(who)} colony at ${where}.`),
         plague: tr(`Una plaga diezma la colonia ${who} de ${where}.`, `A plague is ravaging the ${capName(who)} colony at ${where}.`),
       }[kind];
       const res = s.civ?.res;

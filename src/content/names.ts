@@ -26,3 +26,31 @@ const SP_B = ['ari', 'ine', 'ae', 'oth', 'uri', 'esh', 'ani', 'ol', 'ix', 'ena']
 /** Species name, lower case (Spanish "los velari", English "the Velari"). */
 export const speciesName = (rng: Rng) => rng.pick(SP_A) + rng.pick(SP_B);
 export const capName = cap;
+
+/**
+ * The invaders are not one more people: they are a faction with a name of dread, the same in
+ * every swarm they send (Spanish and English).
+ */
+const INVADERS: { es: string; en: string }[] = [
+  { es: 'Devoradores', en: 'Devourers' },
+  { es: 'Segadores', en: 'Reapers' },
+  { es: 'Silentes', en: 'Silent Ones' },
+  { es: 'Hambrientos', en: 'Hungering' },
+  { es: 'Velados', en: 'Veiled' },
+  { es: 'Hijos de la Grieta', en: 'Children of the Rift' },
+  { es: 'Errantes Negros', en: 'Black Wanderers' },
+  { es: 'Ojos Pálidos', en: 'Pale Eyes' },
+];
+
+/** A new invader faction (avoiding the current one). */
+export function invaderName(rng: Rng, current?: string) {
+  const pool = INVADERS.filter((x) => x.es !== current);
+  const n = rng.pick(pool);
+  return { name: n.es, en: n.en };
+}
+
+/** The invaders' name in Spanish and English (older saves: a species name). */
+export function invaderNames(sp: { name: string; en?: string } | null | undefined): [string, string] {
+  if (!sp) return ['', ''];
+  return [sp.name, sp.en ?? cap(sp.name)];
+}

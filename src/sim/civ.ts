@@ -4,7 +4,7 @@ import { colonizable, isGiantStuff, type WorldStats } from './worlds';
 import { worldXZ } from '../render/layout';
 import { MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectId } from '../content/projects';
 import { FLAVOR } from '../content/flavor';
-import { capName, speciesName, worldName } from '../content/names';
+import { capName, speciesName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { PeopleSim, PeopleFx } from './peoples';
 
@@ -469,7 +469,7 @@ export class CivSim {
       if (civ.peace) civ.peace = false;
       s.invasion.next = Math.min(s.invasion.next || s.time + 40, s.time + 40);
       s.invasion.signal = 1;
-      if (!s.alienSpecies) s.alienSpecies = { name: speciesName(rng), hue: rng.range(0.78, 0.95) };
+      if (!s.alienSpecies) s.alienSpecies = { ...invaderName(rng), hue: rng.range(0.78, 0.95) };
       this.h.news('⚠', `La expedición regresa… seguida. Algo ha visto la luz de nuestros motores.`, `The expedition returns… followed. Something has seen the glow of our engines.`, 'alien');
     }
   }
@@ -578,7 +578,7 @@ export class CivSim {
       this.h.fx({ kind: 'warpOut', x: a.x, z: a.z, dx, dz, count: a.launched, tint: 'own' });
       const sn = this.leaderName();
       if (a.vsAliens && s.alienSpecies)
-        this.h.news('⚔', `¡Salto! La armada de los pueblos parte hacia la estrella de los ${s.alienSpecies.name}.`, `Jump! The armada of the peoples heads for the star of the ${capName(s.alienSpecies.name)}.`, 'good');
+        this.h.news('⚔', `¡Salto! La armada de los pueblos parte hacia la estrella de los ${invaderNames(s.alienSpecies)[0]}.`, `Jump! The armada of the peoples heads for the star of the ${invaderNames(s.alienSpecies)[1]}.`, 'good');
       else this.h.news('⚔', `¡Salto! La armada de los pueblos se pierde entre las estrellas, rumbo a lo desconocido.`, `Jump! The armada of the peoples vanishes among the stars, bound for the unknown.`, 'good');
     } else if (a.phase === 'away' && a.t > 70) {
       this.h.fx({ kind: 'warpIn', x: a.x, z: a.z, dx: -dx, dz: -dz, count: a.launched, tint: 'own' });
@@ -590,7 +590,7 @@ export class CivSim {
         s.ships = s.ships.filter((x) => !x.alien);
         for (const w of s.worlds) w.invaded *= 0.15;
         gain(civ.res, { science: 180, metal: 120 });
-        this.h.news('⚔', `La armada vuelve victoriosa: los ${s.alienSpecies.name} firman la paz y abandonan tu sistema.`, `The armada returns victorious: the ${capName(s.alienSpecies.name)} sign a peace and leave your system.`, 'good');
+        this.h.news('⚔', `La armada vuelve victoriosa: los ${invaderNames(s.alienSpecies)[0]} firman la paz y abandonan tu sistema.`, `The armada returns victorious: the ${invaderNames(s.alienSpecies)[1]} sign a peace and leave your system.`, 'good');
       } else {
         const name = speciesName(this.h.rng);
         civ.allies.push(name);
@@ -634,8 +634,8 @@ export class CivSim {
         s.ships.splice(s.ships.indexOf(sh), 1);
         civ.stats.battles++;
         if (civ.stats.battles === 1 || civ.stats.battles % 6 === 0) {
-          const al = s.alienSpecies?.name ?? '';
-          this.h.news('⟁', `La flota de defensa intercepta a los ${al}. Ya van ${civ.stats.battles} naves derribadas.`, `The defence fleet intercepts the ${capName(al)}. ${civ.stats.battles} ships brought down so far.`, 'good');
+          const [al, AL] = invaderNames(s.alienSpecies);
+          this.h.news('⟁', `La flota de defensa intercepta a los ${al}. Ya van ${civ.stats.battles} naves derribadas.`, `The defence fleet intercepts the ${AL}. ${civ.stats.battles} ships brought down so far.`, 'good');
         }
         continue;
       }
@@ -750,7 +750,7 @@ export class CivSim {
       civ.peace = false;
       s.invasion.signal = 1;
       s.invasion.next = s.time + 25;
-      if (!s.alienSpecies) s.alienSpecies = { name: speciesName(rng), hue: rng.range(0.78, 0.95) };
+      if (!s.alienSpecies) s.alienSpecies = { ...invaderName(rng), hue: rng.range(0.78, 0.95) };
       this.h.news('◬', 'El artefacto era una baliza. Al despertarla, algo respondió desde la oscuridad.', 'The artefact was a beacon. When it woke, something answered from the dark.', 'alien');
     }
   }

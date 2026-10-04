@@ -22,7 +22,8 @@ import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens'
 import { modal, closeTopModal, anyModal, confirmBox, closeAllModals } from '../ui/Modal';
 import { h } from '../ui/dom';
 import { fmtAge, kindName, listOf } from '../ui/text';
-import { capName } from '../content/names';
+import { capName, worldName } from '../content/names';
+import { renameDialog } from '../ui/Rename';
 import { playComets } from '../minigames/Comets';
 import { ProjectsPanel } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
@@ -113,9 +114,11 @@ export class Game {
         sound.click();
         this.sim?.decide(id, accept);
       },
+      renameSystem: () => this.rename('star'),
     });
     this.inspector = new Inspector(this.ui, {
       close: () => this.select(null),
+      rename: (t) => this.rename(t),
       focus: (id) => this.focus(id),
       dial: (v) => {
         if (this.s) this.s.dial = v;
@@ -416,6 +419,75 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ news & hints
+  /** Lets the player name — or rename — the system, a world (its moons follow) or a distant star. */
+  private rename(target: number | 'star' | { star: number }) {
+    const s = this.s;
+    if (!s) return;
+    sound.click();
+    const rng = new Rng(randomSeed());
+    const names = () => [s.name, ...s.worlds.map((w) => w.name), ...(s.stars ?? []).map((x) => x.name)];
+    const taken = (own: string) => (v: string) =>
+      v.toLowerCase() !== own.toLowerCase() && names().some((n) => n.toLowerCase() === v.toLowerCase()) ? tr('Ese nombre ya lo lleva otro astro.', 'Another body already bears that name.') : null;
+    const suggest = () => worldName(rng, new Set(names()));
+    const done = (old: string, v: string) => {
+      this.news('✎', `${old} ahora se llama ${v}.`, `${old} is now called ${v}.`, 'info');
+      this.save();
+    };
+    if (target === 'star') {
+      renameDialog(this.ui, {
+        title: tr('Nombre del sistema', 'Name of the system'),
+        label: tr('La estrella y todo su sistema llevarán este nombre.', 'The star and its whole system will bear this name.'),
+        value: s.name,
+        suggest,
+        validate: taken(s.name),
+        onSave: (v) => {
+          const old = s.name;
+          if (v === old) return;
+          s.name = v;
+          done(old, v);
+        },
+      });
+      return;
+    }
+    if (typeof target === 'number') {
+      const w = s.worlds.find((x) => x.id === target);
+      if (!w) return;
+      const moon = w.parent !== null;
+      renameDialog(this.ui, {
+        title: moon ? tr('Nombre de la luna', 'Name of the moon') : tr('Nombre del mundo', 'Name of the world'),
+        label: moon ? tr('¿Cómo se llamará esta luna?', 'What shall this moon be called?') : tr('¿Cómo se llamará este mundo? Sus lunas lo seguirán.', 'What shall this world be called? Its moons will follow.'),
+        value: w.name,
+        suggest,
+        validate: taken(w.name),
+        onSave: (v) => {
+          const old = w.name;
+          if (v === old) return;
+          w.name = v;
+          // Moons named after their planet ("Kadra I") take the new name too.
+          for (const m of s.worlds) if (m.parent === w.id && m.name.startsWith(`${old} `)) m.name = `${v}${m.name.slice(old.length)}`;
+          done(old, v);
+        },
+      });
+      return;
+    }
+    const st = s.stars?.find((x) => x.id === target.star);
+    if (!st) return;
+    renameDialog(this.ui, {
+      title: tr('Nombre de la estrella', 'Name of the star'),
+      label: tr('La estrella lejana donde vive esta colonia.', 'The distant star where this colony lives.'),
+      value: st.name,
+      suggest,
+      validate: taken(st.name),
+      onSave: (v) => {
+        const old = st.name;
+        if (v === old) return;
+        st.name = v;
+        this.projects?.refresh();
+        done(old, v);
+      },
+    });
+  }
+
   private news(icon: string, es: string, en: string, kind: GameState['news'][number]['kind'] = 'info') {
     const s = this.s;
     if (!s) return;
@@ -1246,6 +1318,13 @@ export class Game {
         left -= step;
       }
       if (s.threats.length) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
+      if (s.time > 110)
+        this.hint('s.names', '✎', () =>
+          tr(
+            'Los nombres son tuyos: toca <b>✎</b> junto al nombre del sistema (arriba) o de cualquier mundo para ponerle el que quieras.',
+            'The names are yours: tap <b>✎</b> next to the name of the system (top) or of any world to give it the one you like.',
+          ),
+        );
       if (s.time > 200) this.hint('s.star', '☀', () => tr('Toca la <b>estrella</b> para ajustar su brillo: más luz calienta tus mundos y recarga antes tu luz estelar.', 'Tap the <b>star</b> to adjust its brightness: more light warms your worlds and refills your starlight faster.'));
       if (s.won && !s.tutorials.victory && !this.hold) this.victory();
     }
@@ -1407,6 +1486,7 @@ export class Game {
         if (sim.patrols.release(id)) sound.chime('good');
         panel.refresh();
       },
+      rename: (id) => this.rename({ star: id }),
       close: () => {},
     }, sim.patrols);
     this.projects = panel;

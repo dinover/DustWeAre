@@ -47,6 +47,8 @@ npm run dev      # servidor local / local server
 npm run build    # comprobación de tipos + compilación / typecheck + build
 ```
 
-Vite + TypeScript + Three.js. Sin recursos externos: el sonido y las texturas se generan en el navegador. / No external assets: sound and textures are generated in the browser.
+Vite + TypeScript + Three.js. El sonido y las texturas de los planetas se generan en el navegador. / Sound and planet textures are generated in the browser.
+
+Naves / Ships: [Ultimate Spaceships Pack](https://quaternius.com/packs/ultimatespaceships.html) de / by Quaternius (CC0), convertido a glTF con texturas de 512 px y una máscara de acento para pintar el color de cada pueblo (`public/models/ships`). / converted to glTF with 512 px textures and an accent mask that paints each people's colour.
 
 `?lang=es` o `?lang=en` fija el idioma; `?from=uib` muestra la bienvenida desde Universe is Born. / `?lang=es` or `?lang=en` sets the language; `?from=uib` shows the welcome from Universe is Born.

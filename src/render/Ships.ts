@@ -1,6 +1,27 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
-export type Hull = 'dart' | 'hauler' | 'tanker' | 'diamond' | 'claw' | 'mother' | 'orb' | 'ark' | 'barge' | 'pod' | 'gunship';
+/**
+ * Real ship models: the Quaternius “Ultimate Spaceships” pack (CC0), converted to glTF with a
+ * 512 px texture and an accent mask, so each people's colour goes on the livery stripes.
+ */
+export type ModelHull = 'striker' | 'spitfire' | 'zenith' | 'challenger' | 'bob' | 'dispatcher' | 'executioner' | 'imperial' | 'insurgent' | 'omen' | 'pancake';
+export type Hull = 'dart' | 'hauler' | 'tanker' | 'diamond' | 'claw' | 'mother' | 'orb' | 'ark' | 'barge' | 'pod' | 'gunship' | ModelHull;
+type ProcHull = Exclude<Hull, ModelHull>;
+
+const MODELS: Record<ModelHull, { cap: number; fallback: ProcHull }> = {
+  striker: { cap: 120, fallback: 'dart' },
+  spitfire: { cap: 120, fallback: 'dart' },
+  zenith: { cap: 120, fallback: 'dart' },
+  challenger: { cap: 80, fallback: 'dart' },
+  bob: { cap: 60, fallback: 'hauler' },
+  dispatcher: { cap: 30, fallback: 'diamond' },
+  executioner: { cap: 40, fallback: 'gunship' },
+  imperial: { cap: 80, fallback: 'hauler' },
+  insurgent: { cap: 50, fallback: 'tanker' },
+  omen: { cap: 70, fallback: 'claw' },
+  pancake: { cap: 8, fallback: 'mother' },
+};
 
 /** Space Patrol livery: ultramarine plate, gold trim, a little bone and iron. */
 const BLUE: [number, number, number] = [0.16, 0.3, 0.78];
@@ -175,6 +196,37 @@ function mergeAll(geos: THREE.BufferGeometry[]) {
   return out;
 }
 
+/**
+ * Lit, textured hull material: the star lights it, a faint glow keeps the night side readable,
+ * and the instance colour paints only the accent stripes (the people's livery).
+ */
+function modelMaterial(map: THREE.Texture, accent: THREE.Texture) {
+  const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.55, metalness: 0.35, emissive: new THREE.Color(0.2, 0.2, 0.22), emissiveMap: map });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.accentMap = { value: accent };
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D accentMap;')
+      .replace(
+        '#include <color_fragment>',
+        `float acc = 0.0;
+        #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA ) || defined( USE_INSTANCING_COLOR )
+          acc = texture2D( accentMap, vMapUv ).r;
+          float lum = dot( diffuseColor.rgb, vec3( 0.299, 0.587, 0.114 ) );
+          // The livery: the people's colour, keeping the paint's wear and panel lines.
+          diffuseColor.rgb = mix( diffuseColor.rgb * mix( vec3( 1.0 ), vColor.rgb, 0.12 ), vColor.rgb * ( 0.3 + 1.5 * lum ), acc );
+        #endif`,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA ) || defined( USE_INSTANCING_COLOR )
+          totalEmissiveRadiance += vColor.rgb * acc * 0.22;
+        #endif`,
+      );
+  };
+  return mat;
+}
+
 /** Two-tone shading baked into the hull: light deck, dark belly, a brighter nose. */
 function finish(geo: THREE.BufferGeometry, paint?: Paint[]) {
   const g = geo.index ? geo.toNonIndexed() : geo;
@@ -190,8 +242,8 @@ function finish(geo: THREE.BufferGeometry, paint?: Paint[]) {
     if (pos.getX(i) > 0.35) c *= 1.12;
     const p = paint?.[i];
     if (p) {
-      // Paint is picked in sRGB; vertex colours are linear.
-      const lin = (v: number) => Math.pow(Math.min(1, v * c * 1.1), 2.2);
+      // Paint is picked in sRGB; vertex colours are linear. The light does the shading.
+      const lin = (v: number) => Math.pow(Math.min(1, v), 2.2);
       col[i * 3] = lin(p[0]);
       col[i * 3 + 1] = lin(p[1]);
       col[i * 3 + 2] = lin(p[2]);
@@ -201,7 +253,7 @@ function finish(geo: THREE.BufferGeometry, paint?: Paint[]) {
   return g;
 }
 
-const CAP: Record<Hull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2, barge: 1, pod: 30, gunship: 24 };
+const CAP: Record<ProcHull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2, barge: 1, pod: 30, gunship: 24 };
 
 /**
  * Every ship as a tiny 3D hull, batched per shape. Hulls keep a minimum size on screen, so a
@@ -211,6 +263,7 @@ export class ShipHulls {
   group = new THREE.Group();
   private meshes = new Map<Hull, THREE.InstancedMesh>();
   private counts = new Map<Hull, number>();
+  private caps = new Map<Hull, number>();
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private v = new THREE.Vector3();
@@ -224,18 +277,60 @@ export class ShipHulls {
   pxScale = 0.001;
 
   constructor() {
-    for (const h of Object.keys(CAP) as Hull[]) {
+    for (const h of Object.keys(CAP) as ProcHull[]) {
       // Shading is baked into vertex colours: the faction colour always reads, whatever the light.
       const painted = paintedGeometry(h);
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, side: painted ? THREE.DoubleSide : THREE.FrontSide });
+      const mat = painted
+        ? new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.42, metalness: 0.55, side: THREE.DoubleSide, emissive: new THREE.Color(0.03, 0.04, 0.08) })
+        : new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
       const geo = painted ? finish(painted.geo, painted.paint) : finish(hullGeometry(h));
-      const mesh = new THREE.InstancedMesh(geo, mat, CAP[h]);
-      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      mesh.setColorAt(0, new THREE.Color(1, 1, 1));
-      mesh.count = 0;
-      mesh.frustumCulled = false;
-      this.meshes.set(h, mesh);
-      this.group.add(mesh);
+      this.addMesh(h, geo, mat, CAP[h]);
+    }
+    this.loadModels();
+  }
+
+  private addMesh(h: Hull, geo: THREE.BufferGeometry, mat: THREE.Material, cap: number) {
+    const mesh = new THREE.InstancedMesh(geo, mat, cap);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.setColorAt(0, new THREE.Color(1, 1, 1));
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    this.meshes.set(h, mesh);
+    this.caps.set(h, cap);
+    this.counts.set(h, 0);
+    this.group.add(mesh);
+  }
+
+  /** Loads the real models; until each arrives, its simple hull stands in. */
+  private loadModels() {
+    const base = `${import.meta.env.BASE_URL}models/ships/`;
+    const loader = new GLTFLoader();
+    const tex = new THREE.TextureLoader();
+    for (const name of Object.keys(MODELS) as ModelHull[]) {
+      loader.load(
+        `${base}${name}.glb`,
+        (gltf) => {
+          let geo: THREE.BufferGeometry | null = null;
+          gltf.scene.traverse((o) => {
+            if (!geo && (o as THREE.Mesh).isMesh) geo = (o as THREE.Mesh).geometry;
+          });
+          if (!geo) return;
+          const g = geo as THREE.BufferGeometry;
+          // The models fly along +Z; our hulls point along +X.
+          g.rotateY(Math.PI / 2);
+          const map = tex.load(`${base}${name}.jpg`);
+          map.flipY = false;
+          map.colorSpace = THREE.SRGBColorSpace;
+          map.anisotropy = 4;
+          const accent = tex.load(`${base}${name}_mask.png`);
+          accent.flipY = false;
+          this.addMesh(name, g, modelMaterial(map, accent), MODELS[name].cap);
+        },
+        undefined,
+        () => {
+          /* Missing model: the simple hull keeps standing in. */
+        },
+      );
     }
   }
 
@@ -248,9 +343,10 @@ export class ShipHulls {
    * `px` the smallest size it may look on screen.
    */
   add(h: Hull, pos: THREE.Vector3, dir: THREE.Vector3, color: THREE.Color, size: number, px: number, camPos: THREE.Vector3) {
+    if (!this.meshes.has(h)) h = MODELS[h as ModelHull]?.fallback ?? 'dart';
     const mesh = this.meshes.get(h)!;
     const i = this.counts.get(h)!;
-    if (i >= CAP[h]) return;
+    if (i >= (this.caps.get(h) ?? 0)) return;
     const d = camPos.distanceTo(pos);
     const scale = Math.max(size, px * this.pxScale * d);
     this.fwd.copy(dir);

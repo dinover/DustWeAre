@@ -95,6 +95,7 @@ export interface HudHandlers {
   cancelTarget(): void;
   works(): void;
   decide(id: number, accept: boolean): void;
+  renameSystem(): void;
 }
 
 /** One pending choice, already written for the current language. */
@@ -155,7 +156,19 @@ export class Hud {
   ) {
     this.root = h('div', { class: 'hud passthrough', style: 'position:absolute;inset:0' });
     this.settleBtn = h('button', { class: 'btn small primary settle', onclick: () => this.on.settle() }) as HTMLButtonElement;
-    const tablet = stone('tablet', this.name, this.sub, h('div', { class: 'seam bottom' }));
+    const rename = h(
+      'button',
+      {
+        class: 'rename-btn',
+        title: tr('Ponerle nombre al sistema', 'Name the system'),
+        onclick: (e: Event) => {
+          e.stopPropagation();
+          this.on.renameSystem();
+        },
+      },
+      '✎',
+    );
+    const tablet = stone('tablet', h('div', { class: 'name-line' }, this.name, rename), this.sub, h('div', { class: 'seam bottom' }));
     tablet.style.cursor = 'pointer';
     tablet.title = tr('Ver la estrella', 'View the star');
     tablet.addEventListener('click', () => this.on.star());

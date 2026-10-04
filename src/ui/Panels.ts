@@ -2,7 +2,7 @@ import { int, num, pick, tr } from '../i18n';
 import { habZone, massOf, snowLine, type GameState, type People, type World } from '../core/state';
 import type { WorldStats } from '../sim/worlds';
 import { STAGE_NAMES, STAGE_TIME } from '../sim/system';
-import { capName } from '../content/names';
+import { capName, invaderNames } from '../content/names';
 import { h, stone, clear } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
 import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
@@ -263,6 +263,7 @@ export function advice(w: World, st: WorldStats): { text: string; warn: boolean 
 
 export interface InspectorHandlers {
   close(): void;
+  rename(target: number | 'star'): void;
   focus(id: number | 'star'): void;
   dial(v: number): void;
 }
@@ -283,13 +284,24 @@ export class Inspector {
     private on: InspectorHandlers,
   ) {
     this.title = h('h2');
+    const rename = h(
+      'button',
+      {
+        class: 'rename-btn',
+        title: tr('Ponerle nombre', 'Give it a name'),
+        onclick: () => {
+          if (this.target !== null) this.on.rename(this.target);
+        },
+      },
+      '✎',
+    );
     this.kind = h('div', { class: 'kind' });
     this.body = h('div');
     this.extra = h('div');
     this.el = stone(
       'inspector veined',
       h('button', { class: 'btn icon small x ghost', title: tr('Cerrar', 'Close'), onclick: () => this.on.close() }, '✕'),
-      this.title,
+      h('div', { class: 'title-line' }, this.title, rename),
       this.kind,
       this.body,
       this.extra,
@@ -414,7 +426,7 @@ export class Inspector {
       </section>`;
     }
     if (w.invaded > 0.02) {
-      const al = s.alienSpecies ? pick({ es: s.alienSpecies.name, en: capName(s.alienSpecies.name) }) : '';
+      const al = pick(((n) => ({ es: n[0], en: n[1] }))(invaderNames(s.alienSpecies)));
       html += `<section><h3 class="violet">${tr('VISITANTES', 'VISITORS')}</h3>
         <div class="stat"><span>${tr(`Ocupado por los ${al}`, `Occupied by the ${al}`)}</span><span>${pct(w.invaded)}</span></div>
         <div class="vessel thin violet"><i style="--v:${Math.round(w.invaded * 100)}%"></i></div>
@@ -561,7 +573,10 @@ export class Ledger {
         f += flag(`role-dot ${res}`, '', RES_ICON[res], tr(`Aporta <b>${resWord(res)}</b> a los pueblos del sistema`, `Gives <b>${resWord(res)}</b> to the peoples of the system`));
       }
       if (pp && (s.relations ?? []).some((x) => x.state === 'war' && (x.a === pp.id || x.b === pp.id))) f += flag('rel war', '', '⚔', tr(`Los ${pName(pp)} están en guerra`, `The ${pName(pp)} are at war`));
-      if (w.invaded > 0.3) f += flag('violet', '', '⚠', tr('<b>Ocupado</b> por invasores de otra estrella. Una llamarada los expulsa.', '<b>Occupied</b> by invaders from another star. A flare drives them out.'));
+      if (w.invaded > 0.3) {
+        const [ies, ien] = invaderNames(s.alienSpecies);
+        f += flag('violet', '', '⚠', tr(`<b>Ocupado</b> por los ${ies}, invasores de otra estrella. Una llamarada los expulsa.`, `<b>Occupied</b> by the ${ien}, invaders from another star. A flare drives them out.`));
+      }
       if (threatened.has(w.id)) f += flag('ember', '', '☄', tr('<b>Un asteroide</b> se dirige hacia aquí. Una llamarada puede desviarlo.', '<b>An asteroid</b> is heading here. A flare can deflect it.'));
       if (r.f !== f) r.flags.innerHTML = r.f = f;
       r.row.classList.toggle('sel', selected === w.id);
@@ -613,7 +628,10 @@ export class Ledger {
       for (const p of alive) lg += `<span data-tip="${attr(tr(`Naves de los ${pName(p)}`, `Ships of the ${pName(p)}`))}"><b style="color:${hsl(p.hue, 85, 60)}">➤</b> ${pName(p)}</span>`;
       lg += `<span data-tip="${attr(tr('Mercaderes de otras estrellas', 'Traders from other stars'))}"><b style="color:#ffcc52">◆</b> ${tr('comercio', 'traders')}</span>`;
       if (s.ships.some((x) => x.kind === 'refugee')) lg += `<span data-tip="${attr(tr('Refugiados que buscan un mundo', 'Refugees looking for a world'))}"><b style="color:#73f2d9">●</b> ${tr('refugiados', 'refugees')}</span>`;
-      if (s.alienSpecies) lg += `<span data-tip="${attr(tr('Invasores de otra estrella', 'Invaders from another star'))}"><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr('invasores', 'invaders')}</span>`;
+      if (s.alienSpecies) {
+        const [ies, ien] = invaderNames(s.alienSpecies);
+        lg += `<span data-tip="${attr(tr(`Los ${ies}: invasores de otra estrella`, `The ${ien}: invaders from another star`))}"><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr(ies, ien)}</span>`;
+      }
       if (s.patrol) lg += `<span data-tip="${attr(tr('Space Patrols: barcaza de batalla, cápsulas de desembarco y cañoneras, en azul y oro', 'Space Patrols: battle barge, drop pods and gunships, in blue and gold'))}"><b style="color:#6f9bff">⛨</b> Space Patrols</span>`;
     }
     if (this.legendHtml !== lg) this.legend.innerHTML = this.legendHtml = lg;

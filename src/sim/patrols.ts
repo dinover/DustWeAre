@@ -1,7 +1,7 @@
 import type { Decision, GameState, OuterStar, PatrolState, Resources, Ship, World } from '../core/state';
 import { Rng, TAU, easeInOut } from '../util';
 import { worldRadius, worldXZ } from '../render/layout';
-import { capName, speciesName, worldName } from '../content/names';
+import { capName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { CivFx, CivSim } from './civ';
 import { peopleOf, type PeopleFx, type PeopleSim } from './peoples';
@@ -151,11 +151,11 @@ export class PatrolSim {
     const barge = this.h.rng.pick(BARGES);
     s.patrol = { barge, born: s.time, phase: 'rising', t: 0, x: q.x, y: 0, z: q.z, sx: q.x, sy: 0, sz: q.z, ang: Math.atan2(q.z, q.x), next: s.time + 16, lanceT: 4, kills: 0, purges: 0, wars: 0, strikes: 0 };
     this.h.fx({ kind: 'deploy', world: home.id });
-    const al = s.alienSpecies?.name ?? '';
+    const [al, AL] = invaderNames(s.alienSpecies);
     this.h.news(
       '⛨',
       `Ante la amenaza de los ${al}, los pueblos del sistema fundan los Space Patrols: guerreros acorazados que juran proteger la estrella. No conocerán el miedo.`,
-      `Facing the threat of the ${capName(al)}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They shall know no fear.`,
+      `Facing the threat of the ${AL}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They shall know no fear.`,
       'good',
     );
     this.h.news('⛨', `La barcaza de batalla «${barge.es}» se eleva desde ${home.name}. ¡Por la Estrella!`, `The battle barge “${barge.en}” rises from ${home.name}. For the Star!`, 'good');
@@ -327,8 +327,8 @@ export class PatrolSim {
     p.pair = pair;
     this.phase(p, 'approach');
     if (goal === 'purge') {
-      const al = this.h.s.alienSpecies?.name ?? '';
-      this.h.news('⛨', `La «${p.barge.es}» pone rumbo a ${w.name}: los ${al} serán purgados. Ningún xenos quedará en pie.`, `The “${p.barge.en}” sets course for ${w.name}: the ${capName(al)} will be purged. No xenos shall be left standing.`, 'info');
+      const [al, AL] = invaderNames(this.h.s.alienSpecies);
+      this.h.news('⛨', `La «${p.barge.es}» pone rumbo a ${w.name}: los ${al} serán purgados. Ningún xenos quedará en pie.`, `The “${p.barge.en}” sets course for ${w.name}: the ${AL} will be purged. No xenos shall be left standing.`, 'info');
     } else if (pair) {
       const a = peoples.get(pair[0]);
       const b = peoples.get(pair[1]);
@@ -384,8 +384,8 @@ export class PatrolSim {
       if (before > 0.02 && w.invaded <= 0.02) {
         w.invaded = 0;
         if (p) p.purges++;
-        const al = this.h.s.alienSpecies?.name ?? '';
-        this.h.news('⛨', `${w.name} queda limpio de ${al}. Los Space Patrols plantan su estandarte entre las ruinas.`, `${w.name} is cleansed of the ${capName(al)}. The Space Patrols plant their banner among the ruins.`, 'good');
+        const [al, AL] = invaderNames(this.h.s.alienSpecies);
+        this.h.news('⛨', `${w.name} queda limpio de ${al}. Los Space Patrols plantan su estandarte entre las ruinas.`, `${w.name} is cleansed of the ${AL}. The Space Patrols plant their banner among the ruins.`, 'good');
       }
     }
     return true;
@@ -480,11 +480,11 @@ export class PatrolSim {
     p.kills += rng.int(4, 12);
     st.trouble = null;
     st.health = 1;
-    const al = this.h.s.alienSpecies?.name ?? '';
+    const [al, AL] = invaderNames(this.h.s.alienSpecies);
     const lines: Record<string, Bi> = {
       pirates: { es: `Los piratas de ${st.name} ya no saquearán a nadie.`, en: `The pirates of ${st.name} will plunder no one again.` },
       natives: { es: `La revuelta de ${st.name} ha sido aplastada.`, en: `The revolt on ${st.name} has been crushed.` },
-      invaders: { es: `Los ${al} huyen de ${st.name}.`, en: `The ${capName(al)} flee from ${st.name}.` },
+      invaders: { es: `Los ${al} huyen de ${st.name}.`, en: `The ${AL} flee from ${st.name}.` },
       plague: { es: `Los apotecarios de los Space Patrols contienen la plaga de ${st.name}.`, en: `The Space Patrol apothecaries contain the plague on ${st.name}.` },
       none: { es: `Nadie en ${st.name} pudo resistirse.`, en: `No one on ${st.name} could resist.` },
     };
@@ -586,11 +586,11 @@ export class PatrolSim {
     st.trouble = { kind, t: 0, dur: 75 };
     const who = this.h.peoples.get(st.people)?.name;
     const W = who ?? '';
-    const al = s.alienSpecies?.name ?? '';
+    const [al, AL] = invaderNames(s.alienSpecies);
     const lines: Record<string, Bi> = {
       pirates: { es: `Piratas del vacío asaltan la colonia ${W} de ${st.name}.`, en: `Void pirates raid the ${capName(W)} colony at ${st.name}.` },
       natives: { es: `Los nativos de ${st.name} se alzan contra el dominio del sistema.`, en: `The natives of ${st.name} rise against the system’s rule.` },
-      invaders: { es: `Los ${al} asedian la colonia ${W} de ${st.name}.`, en: `The ${capName(al)} besiege the ${capName(W)} colony at ${st.name}.` },
+      invaders: { es: `Los ${al} asedian la colonia ${W} de ${st.name}.`, en: `The ${AL} besiege the ${capName(W)} colony at ${st.name}.` },
       plague: { es: `Una plaga se extiende por la colonia ${W} de ${st.name}.`, en: `A plague spreads through the ${capName(W)} colony at ${st.name}.` },
     };
     this.h.news(kind === 'plague' ? '☣' : kind === 'natives' ? '⚑' : '⚠', lines[kind].es, lines[kind].en, 'warn');
@@ -600,7 +600,7 @@ export class PatrolSim {
       civ.peace = false;
       s.invasion.signal = 1;
       s.invasion.next = Math.min(s.invasion.next || s.time + 45, s.time + 45);
-      if (!s.alienSpecies) s.alienSpecies = { name: speciesName(rng), hue: rng.range(0.78, 0.95) };
+      if (!s.alienSpecies) s.alienSpecies = { ...invaderName(rng), hue: rng.range(0.78, 0.95) };
       this.h.news('⚠', `Los aliados de ${st.name} juran venganza: una flota de represalia viene hacia el sistema.`, `The allies of ${st.name} swear revenge: a reprisal fleet is heading for the system.`, 'alien');
     }
   }

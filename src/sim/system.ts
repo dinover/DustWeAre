@@ -4,7 +4,7 @@ import { worldStats, colonizable, isGiantStuff } from './worlds';
 import { CivSim, type CivFx } from './civ';
 import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from './peoples';
 import { PatrolSim, type PatrolFx } from './patrols';
-import { capName, moonName, speciesName } from '../content/names';
+import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
 import { FACTS } from '../content/facts';
 
 /** Seconds (at speed 1) each life stage needs before the next one. */
@@ -417,7 +417,7 @@ export class SystemSim {
     if (!inv.signal && trigger) {
       inv.signal = 1;
       inv.next = s.time + 50;
-      s.alienSpecies = { name: speciesName(this.rng), hue: this.rng.range(0.78, 0.95) };
+      s.alienSpecies = { ...invaderName(this.rng, s.alienSpecies?.name), hue: this.rng.range(0.78, 0.95) };
       this.news('⚠', 'Llega una señal desde otra estrella. Algo se acerca a tu sistema.', 'A signal arrives from another star. Something is approaching your system.', 'alien');
     }
     const civ = s.civ;
@@ -426,9 +426,9 @@ export class SystemSim {
       if (s.time < inv.next) return;
       civ.peace = false;
       inv.waves = 0;
-      s.alienSpecies = { name: speciesName(this.rng), hue: this.rng.range(0.78, 0.95) };
+      s.alienSpecies = { ...invaderName(this.rng, s.alienSpecies?.name), hue: this.rng.range(0.78, 0.95) };
       inv.next = s.time + 45;
-      this.news('⚠', `Desde el otro lado de la galaxia llega una nueva amenaza: los ${s.alienSpecies.name}.`, `A new threat arrives from the far side of the galaxy: the ${capName(s.alienSpecies.name)}.`, 'alien');
+      this.news('⚠', `Desde el otro lado de la galaxia llega una nueva amenaza: los ${invaderNames(s.alienSpecies)[0]}.`, `A new threat arrives from the far side of the galaxy: the ${invaderNames(s.alienSpecies)[1]}.`, 'alien');
       return;
     }
     // Conquered stars make enemies: waves come sooner and bigger.
@@ -444,14 +444,14 @@ export class SystemSim {
         const tg = targets[Math.min(targets.length - 1, (this.rng.next() * Math.min(3, targets.length)) | 0)];
         s.ships.push({ id: this.nid(), from, to: tg.id, t: -i * 0.8, dur: this.rng.range(18, 26), alien: true, kind: 'alien' });
       }
-      const al = s.alienSpecies!.name;
+      const [al, AL] = invaderNames(s.alienSpecies);
       // From the third wave on, a mothership leads them, dropping out of warp.
       if (inv.waves >= 3 && targets.length) {
         s.ships.push({ id: this.nid(), from, to: targets[0].id, t: -2, dur: 34, alien: true, kind: 'mother', hp: 3 });
         const a = (Math.abs(from) * 2.399) % (Math.PI * 2);
         this.onFx({ kind: 'warpIn', x: Math.cos(a) * 110, z: Math.sin(a) * 110, dx: -Math.cos(a), dz: -Math.sin(a), count: n + 1, tint: 'alien' });
-        this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${capName(al)} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
-      } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${capName(al)} enter your system. They are looking for worlds to settle.`, 'alien');
+        this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${AL} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
+      } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${AL} enter your system. They are looking for worlds to settle.`, 'alien');
     }
     // The peoples fight back on their own, slowly; a flare, the defence fleet or the Space Patrols are much faster.
     const held = s.worlds.filter((w) => w.invaded >= 0.6).length;
@@ -480,9 +480,9 @@ export class SystemSim {
   private alienArrives(w: World, mother = false) {
     const before = w.invaded;
     w.invaded = Math.min(1, w.invaded + (mother ? 0.85 : 0.4));
-    const al = this.s.alienSpecies?.name ?? '';
+    const [al, AL] = invaderNames(this.s.alienSpecies);
     if (before < 0.5 && w.invaded >= 0.5)
-      this.news('⚠', `Los ${al} se asientan en ${w.name}. Una llamarada solar podría expulsarlos.`, `The ${capName(al)} settle on ${w.name}. A solar flare could drive them out.`, 'alien');
+      this.news('⚠', `Los ${al} se asientan en ${w.name}. Una llamarada solar podría expulsarlos.`, `The ${AL} settle on ${w.name}. A solar flare could drive them out.`, 'alien');
   }
 
   // ------------------------------------------------------------------ random events & facts
