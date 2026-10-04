@@ -2,7 +2,8 @@ import { massOf, omega, toWorld, type GameState, type NewsItem, type Ship, type 
 import { Rng, clamp, smoothstep } from '../util';
 import { worldStats, colonizable, isGiantStuff } from './worlds';
 import { CivSim, type CivFx } from './civ';
-import { capName, speciesName } from '../content/names';
+import { PeopleSim, rivalOf, type PeopleFx } from './peoples';
+import { capName, moonName, speciesName } from '../content/names';
 import { FACTS } from '../content/facts';
 
 /** Seconds (at speed 1) each life stage needs before the next one. */
@@ -22,6 +23,7 @@ export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate
 
 export type Fx =
   | CivFx
+  | PeopleFx
   | { kind: 'flare'; world: number }
   | { kind: 'flareShip'; x: number; z: number }
   | { kind: 'impact'; world: number }
@@ -37,17 +39,31 @@ export class SystemSim {
   onFx: (f: Fx) => void = () => {};
   rng: Rng;
   civ: CivSim;
+  peoples: PeopleSim;
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
+  private wildT = 140;
 
   constructor(public s: GameState) {
     this.rng = new Rng(s.seed ^ 0x9e3779b9 ^ Math.floor(s.time));
     this.civ = new CivSim(this);
+    this.peoples = new PeopleSim(this);
   }
 
-  fx(f: CivFx) {
+  fx(f: CivFx | PeopleFx) {
     this.onFx(f);
+  }
+
+  /** A choice made by the player on one of the pending decisions. */
+  decide(id: number, accept: boolean) {
+    const civ = this.s.civ;
+    const d = civ?.decisions.find((x) => x.id === id);
+    if (!civ || !d) return;
+    if (d.kind === 'incident' || d.kind === 'alliance' || d.kind === 'peace') {
+      civ.decisions.splice(civ.decisions.indexOf(d), 1);
+      this.peoples.decide(d, accept);
+    } else this.civ.decide(id, accept);
   }
 
   get worlds() {
@@ -79,8 +95,9 @@ export class SystemSim {
     for (const w of this.s.worlds) if (w.life) st = Math.max(st, w.life.stage);
     return st;
   }
+  /** Home world of your species. */
   get origin() {
-    return this.s.worlds.find((w) => w.life?.origin && w.life.stage >= 2) ?? null;
+    return this.s.worlds.find((w) => w.life?.origin && w.life.stage >= 2 && !w.life.people) ?? null;
   }
 
   // ------------------------------------------------------------------ frame
@@ -95,14 +112,17 @@ export class SystemSim {
       if (w.parent === null) w.th += omega(w.a) * dt * 0.42;
       else w.th += (1.3 / (w.a + 1.5)) * dt;
       w.volcanoCd = Math.max(0, w.volcanoCd - dt);
+      if (w.hot) w.hot = Math.max(0, w.hot - dt);
     }
     this.updateWorlds(dt);
     this.updateCivilization(dt);
+    this.peoples.update(dt);
     this.civ.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);
     this.updateInvasion(dt);
     this.updateEvents(dt);
+    this.wildImpacts(dt);
   }
 
   /** Starlight gained per second. */
@@ -147,19 +167,27 @@ export class SystemSim {
     else life.health -= (0.5 - H) * 0.07 * dt * resilience;
     life.health -= w.invaded * 0.025 * dt * resilience;
     if (life.health <= 0) {
-      const wasSpecies = life.stage >= 2 && s.species;
+      const wasSpecies = life.stage >= 2 && !life.people && s.species;
+      const rival = life.people ? s.rivals?.[life.people - 1] : undefined;
       w.life = null;
       this.news('✝', `La vida de ${w.name} se ha extinguido. Las condiciones se volvieron demasiado duras.`, `Life on ${w.name} has died out. Conditions became too harsh.`, 'warn');
-      if (wasSpecies && !s.worlds.some((x) => x.colony >= 1)) {
+      if (rival) {
+        rival.relation = 'peace';
+        this.news('✝', `Los ${rival.name} pierden su mundo natal. Sus colonias quedan a la deriva.`, `The ${capName(rival.name)} lose their home world. Their colonies are left adrift.`, 'warn');
+      }
+      if (wasSpecies && !s.worlds.some((x) => x.colony >= 1 && !x.owner)) {
         this.news('✝', `Los ${s.species!.name} ya no existen. Quizá la vida vuelva a intentarlo.`, `The ${capName(s.species!.name)} are gone. Perhaps life will try again.`, 'warn');
         s.species = null;
       }
       return;
     }
-    // Only one species becomes a civilization; other living worlds stay wild.
-    const cap = s.species && !(life.origin && life.stage >= 2) ? 1 : 5;
-    if (life.stage >= Math.min(cap, 4)) {
-      if (life.stage === 4 && s.worlds.some((x) => x.colony >= 1)) this.advance(w, 5);
+    // Every living world keeps evolving. Worlds already colonized by someone stay wild, and a
+    // system holds at most three peoples (yours and two neighbours).
+    const primaryHome = life.origin && !life.people && life.stage >= 2;
+    const canRise = !w.colony && (primaryHome || !!life.people || !s.species || (s.rivals?.length ?? 0) < 2);
+    const cap = canRise ? 4 : 1;
+    if (life.stage >= cap) {
+      if (life.stage === 4 && primaryHome && s.worlds.some((x) => x.colony >= 1 && !x.owner)) this.advance(w, 5);
       return;
     }
     const rate = (0.4 + 0.6 * life.health) * (H >= 0.5 ? 1 : 0.4);
@@ -170,14 +198,22 @@ export class SystemSim {
   private advance(w: World, stage: number) {
     const s = this.s;
     const life = w.life!;
+    const n = w.name;
+    // A second intelligent species: a neighbour, not yours.
+    if (stage === 2 && s.species && !life.people && !this.origin?.life?.people && this.origin !== w) {
+      if (!this.peoples.emerge(w)) return;
+    }
     life.stage = stage;
     life.progress = 0;
-    const n = w.name;
+    if (life.people) {
+      if (stage >= 3) this.peoples.advance(w, stage);
+      return;
+    }
     if (stage === 1) this.news('❀', `La vida de ${n} se vuelve compleja: algas, corales y criaturas que nadan.`, `Life on ${n} grows complex: algae, reefs and swimming creatures.`, 'life');
     if (stage === 2) {
       if (!s.species) {
         const name = s.legacySpecies?.name ?? speciesName(this.rng);
-        s.species = { name, hue: s.legacySpecies?.hue ?? this.rng.range(0.25, 0.55) };
+        s.species = { name, hue: s.legacySpecies?.hue ?? this.rng.range(0.24, 0.42) };
       }
       const sp = s.species;
       this.news('✧', `En ${n} surge una especie que se pregunta por las estrellas: los ${sp.name}.`, `A species that wonders about the stars arises on ${n}: the ${capName(sp.name)}.`, 'life');
@@ -195,7 +231,7 @@ export class SystemSim {
     if (!s.species) return;
     const spacefaring = origin ? origin.life!.stage >= 4 : s.worlds.some((w) => w.colony >= 1);
     for (const w of s.worlds) {
-      const settled = w.colony >= 1 || (w.life?.origin && w.life.stage >= 4);
+      const settled = (w.colony >= 1 && !w.owner) || (w === origin && w.life!.stage >= 4);
       if (settled) {
         const target = w === origin ? 12 : 3;
         if (w.sats < target && this.rng.next() < dt * 0.08) w.sats++;
@@ -238,7 +274,7 @@ export class SystemSim {
     let bd = Infinity;
     for (const w of s.worlds) {
       if (w === from || !colonizable(w)) continue;
-      if (alien ? w.invaded >= 0.9 : w.colony >= 1 || (w.life?.origin && w.life.stage >= 2)) continue;
+      if (alien ? w.invaded >= 0.9 : w.colony >= 1 || (w.colony > 0 && !!w.owner) || (w.life && w.life.stage >= 2) || !!w.guest) continue;
       const inbound = s.ships.filter((x) => x.to === w.id && x.alien === alien).length;
       if (inbound >= 2) continue;
       const d = Math.abs(this.worldPosW(w) - fw) + (w.parent === from.id ? -100 : 0) + (w.parent !== null && w.parent === from.parent ? -20 : 0);
@@ -270,6 +306,7 @@ export class SystemSim {
         this.onFx({ kind: 'arkWarp', ship: sh.id });
         continue;
       }
+      if (this.peoples.arrive(sh)) continue;
       if (this.civ.arrive(sh)) continue;
       const w = this.world(sh.to);
       if (!w) continue;
@@ -280,7 +317,8 @@ export class SystemSim {
 
   private colonistsArrive(w: World, ark = false) {
     const s = this.s;
-    if (w.colony >= 1) return;
+    if (w.colony >= 1 || (w.owner && w.colony > 0)) return;
+    w.owner = 0;
     // The ark from your previous system brings the whole species at once.
     if (ark && !s.species && s.legacySpecies) s.species = { ...s.legacySpecies };
     w.colony = Math.min(1, w.colony + (ark ? 1 : 0.34));
@@ -317,7 +355,77 @@ export class SystemSim {
         w.life.health -= w.life.stage >= 3 ? 0.2 : 0.35;
         this.news('☄', `Un asteroide golpeó ${w.name}. La vida resiste como puede.`, `An asteroid struck ${w.name}. Life holds on as best it can.`, 'warn');
       } else this.news('☄', `Un asteroide cayó sobre ${w.name} y dejó agua y compuestos orgánicos.`, `An asteroid fell on ${w.name}, leaving water and organic compounds.`, 'info');
+      this.aftermath(w);
     }
+  }
+
+  /** What an impact leaves behind: a glowing scar, and sometimes a ring, a new moon or a trail of debris. */
+  aftermath(w: World) {
+    const s = this.s;
+    const rng = this.rng;
+    w.hot = 25;
+    const planet = w.parent === null ? w : this.world(w.parent);
+    if (!planet) return;
+    const giant = isGiantStuff(planet);
+    const moons = s.worlds.filter((x) => x.parent === planet.id).length;
+    const roll = rng.next();
+    if (roll < 0.3 && !planet.ring) {
+      planet.ring = true;
+      planet.debrisRing = !giant;
+      this.news('◌', `Los escombros del choque quedan girando alrededor de ${planet.name}: ahora tiene un anillo.`, `The debris of the impact keeps circling ${planet.name}: it now has a ring.`, 'info');
+    } else if (roll < 0.55 && moons < 5) {
+      const m = massOf(planet);
+      const share = giant ? 0.002 : 0.012;
+      const moon: World = {
+        id: this.nid(),
+        name: moonName(planet.name, moons),
+        seed: (rng.next() * 1e9) | 0,
+        a: moons,
+        th: rng.range(0, Math.PI * 2),
+        parent: planet.id,
+        metal: m * share * 0.2,
+        rock: m * share * 0.7,
+        water: m * share * 0.1,
+        gas: 0,
+        org: m * share * 0.01,
+        atm: 0,
+        ocean: 0,
+        organics: 0.02,
+        mag: 0,
+        climate: 0,
+        life: null,
+        spark: 0,
+        colony: 0,
+        terra: 0,
+        invaded: 0,
+        sats: 0,
+        ring: false,
+        volcanoCd: 0,
+        hot: 30,
+      };
+      s.worlds.push(moon);
+      this.news('☾', `De los restos del choque se forma una pequeña luna: ${moon.name}.`, `A small moon gathers from the impact debris: ${moon.name}.`, 'good');
+    } else if (roll < 0.8 && planet.parent === null) {
+      for (let i = 0; i < 46; i++) s.belts.push({ r: planet.a * (1 + rng.gauss(0, 0.012)), th: planet.th - 0.05 - rng.range(0, 0.9), s: 0.0005 });
+      this.news('⁘', `Una estela de escombros sigue a ${planet.name} por su órbita.`, `A trail of debris follows ${planet.name} along its orbit.`, 'info');
+    }
+  }
+
+  /** Stray rocks and comets that hit any world now and then (no warning). */
+  private wildImpacts(dt: number) {
+    this.wildT -= dt;
+    if (this.wildT > 0) return;
+    this.wildT = this.rng.range(110, 190);
+    const s = this.s;
+    const pool = s.worlds.filter((w) => colonizable(w));
+    if (!pool.length) return;
+    const w = this.rng.pick(pool);
+    if (this.civ.shieldStops(w, -1)) return;
+    this.onFx({ kind: 'impact', world: w.id });
+    if (w.life) w.life.health -= 0.08;
+    if (isGiantStuff(w)) this.news('☄', `Un cometa se hunde en las nubes de ${w.name} y deja una mancha oscura que tardará años en borrarse.`, `A comet plunges into the clouds of ${w.name}, leaving a dark scar that will take years to fade.`, 'info');
+    else this.news('☄', `Un meteorito golpea ${w.name}. Desde lejos se ve el resplandor del cráter.`, `A meteorite strikes ${w.name}. The crater's glow can be seen from afar.`, 'info');
+    this.aftermath(w);
   }
 
   // ------------------------------------------------------------------ visitors from other stars
@@ -445,6 +553,7 @@ export class SystemSim {
     if (!this.canAfford(COST.flare)) return false;
     s.energy -= COST.flare;
     this.onFx({ kind: 'flare', world: w.id });
+    this.peoples.flared(w);
     const had = w.invaded;
     w.invaded = Math.max(0, w.invaded - 0.75);
     if (!isGiantStuff(w)) w.atm = Math.max(0, w.atm - 0.05 * (1 - w.mag));

@@ -1,4 +1,4 @@
-import { massOf, solidsOf, type Body, type Stuff, type World } from '../core/state';
+import { T_EXP, massOf, solidsOf, type Body, type Stuff, type World } from '../core/state';
 import { Rng, clamp, ramp, smoothstep } from '../util';
 import { moonName, worldName } from '../content/names';
 
@@ -46,8 +46,9 @@ export function worldStats(w: World, worlds: World[], L: number): WorldStats {
   const atm = w.terra > 0 ? w.atm + (clamp(w.atm, 0.8, 1.6) - w.atm) * w.terra : w.atm;
   const organics = Math.max(w.organics, w.terra);
   const tidal = parent && isGiantStuff(parent) ? 55 / (w.a + 1) : 0;
-  const Teq = (255 * Math.pow(L, 0.25)) / Math.sqrt(Math.max(a, 0.05));
-  const greenhouse = 33 * Math.pow(Math.min(atm, 120), 0.8);
+  const Teq = 255 * Math.pow(L, 0.25) * Math.pow(Math.max(a, 0.05), -T_EXP);
+  // Giants are measured at their cloud tops: no greenhouse there.
+  const greenhouse = giant ? 0 : 33 * Math.pow(Math.min(atm, 120), 0.8);
   let T = Teq + greenhouse + w.climate + tidal;
   if (w.terra > 0) T += (290 - T) * 0.85 * w.terra;
   const f: Factors = {

@@ -5,6 +5,9 @@ import { STAGE_NAMES, STAGE_TIME } from '../sim/system';
 import { capName } from '../content/names';
 import { h, stone, clear } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
+import { RELATION_TEXT, rivalOf } from '../sim/peoples';
+
+const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
 
 const ROLE_RES: Record<Role, 'fuel' | 'water' | 'metal' | 'science'> = { fuel: 'fuel', water: 'water', metal: 'metal', science: 'science' };
 
@@ -195,6 +198,17 @@ export class Inspector {
     } else if (w.spark > 0.5) {
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round((w.spark / 30) * 100)}%"></i></div></section>`;
     }
+    const ri = rivalOf(w);
+    const rival = ri ? s.rivals?.[ri - 1] : undefined;
+    if (rival) {
+      const home = w.life?.people === ri;
+      const rel = RELATION_TEXT[rival.relation];
+      const moodTxt = rival.mood > 0.3 ? tr('Os aprecian.', 'They like you.') : rival.mood < -0.3 ? tr('Desconfían de vosotros.', 'They distrust you.') : tr('Os observan con cautela.', 'They watch you warily.');
+      html += `<section><h3>${tr('PUEBLO', 'PEOPLE')}</h3>
+        <div class="people-row big"><i style="background:${hsl(rival.hue)}"></i><span>${home ? tr(`Hogar de los ${rival.name}`, `Home of the ${capName(rival.name)}`) : tr(`Colonia de los ${rival.name}`, `Colony of the ${capName(rival.name)}`)}</span><em class="rel ${rival.relation}">${tr(rel.es, rel.en)}</em></div>
+        <div class="small muted" style="margin-top:4px">${moodTxt} ${rival.relation === 'war' ? tr('Lanza la <b>armada</b> para terminar la guerra, o espera a que pidan la paz.', 'Launch the <b>armada</b> to end the war, or wait for them to ask for peace.') : rival.relation === 'alliance' ? tr('Comparten ciencia y defensa contigo.', 'They share science and defence with you.') : tr('Una llamarada sobre sus mundos los enfadaría.', 'A flare on their worlds would anger them.')}</div>
+      </section>`;
+    }
     {
       const role = roleOf(w, st);
       const settled = isSettled(w);
@@ -284,6 +298,8 @@ export class Ledger {
   private list: HTMLElement;
   private head: HTMLElement;
   private order = '';
+  private peoplesEl: HTMLElement;
+  private legend: HTMLElement;
 
   constructor(
     host: HTMLElement,
@@ -291,7 +307,9 @@ export class Ledger {
   ) {
     this.head = h('h3');
     this.list = h('div', { class: 'rows' });
-    this.el = stone('ledger obsidian', this.head, this.list);
+    this.peoplesEl = h('div', { class: 'peoples' });
+    this.legend = h('div', { class: 'legend-ships' });
+    this.el = stone('ledger obsidian', this.head, this.peoplesEl, this.list, this.legend);
     this.head.addEventListener('click', () => this.el.classList.toggle('collapsed'));
     this.head.style.cursor = 'pointer';
     host.append(this.el);
@@ -334,12 +352,34 @@ export class Ledger {
       r.bar.title = tr(`Habitabilidad ${Math.round(st.H * 100)} %`, `Habitability ${Math.round(st.H * 100)}%`);
       let f = '';
       if (w.life) f += '<span class="moss">❦</span>';
-      if (isSettled(w)) f += `<span class="role-dot ${ROLE_RES[roleOf(w, st)]}">${RES_ICON[ROLE_RES[roleOf(w, st)]]}</span>`;
+      const ri = rivalOf(w);
+      const rival = ri ? s.rivals?.[ri - 1] : undefined;
+      if (rival) f += `<span style="color:${hsl(rival.hue)}" title="${rival.name}">⌂</span>`;
+      else if (isSettled(w)) f += `<span class="role-dot ${ROLE_RES[roleOf(w, st)]}">${RES_ICON[ROLE_RES[roleOf(w, st)]]}</span>`;
       else if (w.colony >= 1) f += '<span class="gold">⌂</span>';
       if (w.invaded > 0.3) f += '<span class="violet">⚠</span>';
       if (threatened.has(w.id)) f += '<span class="ember">☄</span>';
       if (r.flags.innerHTML !== f) r.flags.innerHTML = f;
       r.row.classList.toggle('sel', selected === w.id);
     }
+    // The peoples of the system and how they get along with yours.
+    let ph = '';
+    if (s.species) {
+      ph += `<div class="people-row"><i style="background:${hsl(s.species.hue)}"></i><span>${tr('Los', 'The')} ${tr(s.species.name, capName(s.species.name))}</span><em>${tr('tu especie', 'your species')}</em></div>`;
+      for (const r of s.rivals ?? []) {
+        const rel = RELATION_TEXT[r.relation];
+        ph += `<div class="people-row"><i style="background:${hsl(r.hue)}"></i><span>${tr('Los', 'The')} ${tr(r.name, capName(r.name))}</span><em class="rel ${r.relation}">${tr(rel.es, rel.en)}</em></div>`;
+      }
+    }
+    if (this.peoplesEl.innerHTML !== ph) this.peoplesEl.innerHTML = ph;
+    // What the ship colours mean.
+    let lg = '';
+    if (s.species) {
+      lg += `<span><b style="color:${hsl(s.species.hue)}">➤</b> ${tr('tuyas', 'yours')}</span>`;
+      for (const r of s.rivals ?? []) lg += `<span><b style="color:${hsl(r.hue)}">➤</b> ${tr(r.name, capName(r.name))}</span>`;
+      lg += `<span><b style="color:#ffcc52">◆</b> ${tr('comercio', 'traders')}</span>`;
+      if (s.alienSpecies) lg += `<span><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr('invasores', 'invaders')}</span>`;
+    }
+    if (this.legend.innerHTML !== lg) this.legend.innerHTML = lg;
   }
 }

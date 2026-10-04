@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { R_MAX, R_MIN, toWorld } from '../core/state';
+import { R_MAX, R_MIN, SCALE_EXP, toWorld } from '../core/state';
 import { TOOL_RADIUS, type Formation, type Tool } from '../sim/formation';
 import { NOISE } from './glsl';
 import { glowTexture } from './Stage';
@@ -44,7 +44,7 @@ export class DiskView {
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aColor', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
-    this.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 90);
+    this.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 110);
     this.pmat = new THREE.ShaderMaterial({
       uniforms: { uScale: { value: 600 }, uMap: { value: glowTexture() } },
       vertexShader: /* glsl */ `
@@ -98,9 +98,9 @@ export class DiskView {
         ${NOISE}
         void main() {
           float rw = length(vW.xz);
-          float rau = pow(rw / 14.0, 1.0 / 0.55);
+          float rau = pow(rw / 14.0, 1.0 / ${SCALE_EXP.toFixed(3)});
           float ang = atan(vW.z, vW.x);
-          float prof = smoothstep(5.5, 9.0, rw) * smoothstep(74.0, 48.0, rw);
+          float prof = smoothstep(5.0, 8.5, rw) * smoothstep(90.0, 60.0, rw);
           float spin = ang - uTime * 0.18 * pow(max(rau, 0.1), -0.75);
           vec3 q = vec3(cos(spin) * 2.2, sin(spin) * 2.2, log(rau) * 2.4);
           float n = fbm3(q) * 0.5 + 0.5;
@@ -125,7 +125,7 @@ export class DiskView {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
     });
-    this.haze = new THREE.Mesh(new THREE.RingGeometry(5, 76, 180, 8), this.hazeMat);
+    this.haze = new THREE.Mesh(new THREE.RingGeometry(5, 92, 200, 8), this.hazeMat);
     this.haze.rotation.x = -Math.PI / 2;
     this.haze.position.y = -0.2;
 

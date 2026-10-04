@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { omega, toWorld, type GameState, type Ship, type ShipKind, type World } from '../core/state';
 import { worldStats, isGiantStuff } from '../sim/worlds';
 import { isSettled } from '../sim/civ';
-import { PlanetMesh, lookOfWorld, type Look } from './Planet';
+import { PlanetMesh, baseLook, lookOfWorld, ringStyleOf, type Look } from './Planet';
 import { glowTexture } from './Stage';
 import { worldRadius, worldXZ } from './layout';
 import { Rng, TAU, easeInOut } from '../util';
+import { ShipHulls, type Hull } from './Ships';
 
 const MAX_SHIPS = 96;
 /** Ships plus armada formation slots plus patrols. */
@@ -14,16 +15,27 @@ const TRAIL = 12;
 const MAX_SATS = 220;
 const DYSON = 900;
 
-const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.9, tanker: 1.1, miner: 0.8, trader: 1.3, refugee: 1.4, expedition: 1.5, armada: 1.2, alien: 1.4, mother: 3.6, ark: 3 };
-const KIND_RGB: Partial<Record<ShipKind, [number, number, number]>> = {
-  freight: [1, 0.86, 0.62],
-  tanker: [1, 0.62, 0.28],
-  miner: [0.95, 0.52, 0.32],
-  trader: [1, 0.92, 0.45],
-  refugee: [0.5, 0.95, 0.85],
-  expedition: [1, 0.97, 0.85],
-  ark: [1, 0.95, 0.8],
+/** Engine glow size per kind. */
+const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2 };
+/** Hull shape, true size (world units) and smallest on-screen size (pixels) per kind. */
+const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
+  colony: { hull: 'dart', size: 0.5, px: 9 },
+  expedition: { hull: 'dart', size: 0.6, px: 11 },
+  flotilla: { hull: 'dart', size: 0.55, px: 10 },
+  armada: { hull: 'dart', size: 0.65, px: 11 },
+  raider: { hull: 'dart', size: 0.55, px: 10 },
+  freight: { hull: 'hauler', size: 0.45, px: 7 },
+  miner: { hull: 'hauler', size: 0.32, px: 6 },
+  tanker: { hull: 'tanker', size: 0.5, px: 8 },
+  trader: { hull: 'diamond', size: 0.75, px: 12 },
+  refugee: { hull: 'orb', size: 0.6, px: 10 },
+  alien: { hull: 'claw', size: 0.6, px: 11 },
+  mother: { hull: 'mother', size: 2.2, px: 24 },
+  ark: { hull: 'ark', size: 1.8, px: 22 },
 };
+
+/** Faction colours: yours (your species' hue), rivals (their hue), traders gold, refugees teal, invaders violet. */
+export const FACTION = { trader: new THREE.Color(1, 0.8, 0.32), refugee: new THREE.Color(0.45, 0.95, 0.85) };
 
 const SHIP_VS = /* glsl */ `
   attribute vec3 aColor;
@@ -59,6 +71,7 @@ export class SystemView {
   private orbitGeo: THREE.BufferGeometry;
   private belts: THREE.Points | null = null;
   private beltData: { r: number; th: number; s: number }[] = [];
+  private beltCount = -1;
   private shipGeo: THREE.BufferGeometry;
   private shipMat: THREE.ShaderMaterial;
   private shipPos = new Float32Array(MAX_POINTS * 3);
@@ -88,7 +101,13 @@ export class SystemView {
   /** Ship positions (for flare targeting). */
   shipXYZ = new Map<number, THREE.Vector3>();
 
-  constructor(private hi: boolean) {
+  private hulls = new ShipHulls();
+  private flashCol = new THREE.Color();
+
+  constructor(
+    private hi: boolean,
+    private camera: THREE.Camera,
+  ) {
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= 200; i++) pts.push(new THREE.Vector3(Math.cos((i / 200) * TAU), 0, Math.sin((i / 200) * TAU)));
     this.orbitGeo = new THREE.BufferGeometry().setFromPoints(pts);
@@ -165,7 +184,7 @@ export class SystemView {
     tg.setAttribute('position', new THREE.BufferAttribute(this.threatPos, 3).setUsage(THREE.DynamicDrawUsage));
     this.threatLines = new THREE.LineSegments(tg, new THREE.LineDashedMaterial({ color: 0xff7a3a, dashSize: 1, gapSize: 1.2, transparent: true, opacity: 0.6 }));
     this.threatLines.frustumCulled = false;
-    this.group.add(ships, trails, sats, this.threatLines);
+    this.group.add(ships, trails, sats, this.threatLines, this.hulls.group);
     const amb = new THREE.AmbientLight(0x403028, 0.6);
     this.group.add(amb);
   }
@@ -176,6 +195,7 @@ export class SystemView {
       this.belts.geometry.dispose();
     }
     this.beltData = belts;
+    this.beltCount = belts.length;
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array(belts.length * 3);
     const col = new Float32Array(belts.length * 3);
@@ -272,8 +292,22 @@ export class SystemView {
     return out;
   }
 
-  setScale(heightPx: number, fovDeg: number) {
-    this.shipMat.uniforms.uScale.value = heightPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
+  setScale(heightPx: number, fovDeg: number, cssHeight: number) {
+    const t = 2 * Math.tan((fovDeg * Math.PI) / 360);
+    this.shipMat.uniforms.uScale.value = heightPx / t;
+    this.hulls.pxScale = t / Math.max(1, cssHeight);
+  }
+
+  /** The colour that tells who a ship belongs to. */
+  private shipColor(s: GameState, sh: Ship, kind: ShipKind, out: THREE.Color) {
+    if (sh.alien) return out.setHSL(s.alienSpecies?.hue ?? 0.86, 0.85, kind === 'mother' ? 0.5 : 0.58);
+    if (kind === 'trader') return out.copy(FACTION.trader);
+    if (kind === 'refugee') return out.copy(FACTION.refugee);
+    if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
+    const rival = sh.people ? s.rivals?.[sh.people - 1] : undefined;
+    if (rival) return out.setHSL(rival.hue, 0.75, 0.6);
+    const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';
+    return out.setHSL(s.species?.hue ?? 0.35, cargo ? 0.5 : 0.75, cargo ? 0.55 : 0.58);
   }
 
   update(s: GameState, dt: number, time: number) {
@@ -305,7 +339,7 @@ export class SystemView {
         e.lookT = 0.35;
         const st = worldStats(w, s.worlds, L);
         e.mesh.setLook(lookOfWorld(w, st));
-        e.mesh.setRing(w.ring, w.seed, st.kind === 'icegiant' ? [0.62, 0.74, 0.8] : [0.82, 0.72, 0.56]);
+        e.mesh.setRing(w.ring ? ringStyleOf(w, st.kind === 'icegiant') : null);
         e.mesh.setInvaderHue(alienHue);
       }
       const sel = this.selected === w.id ? 1 : this.hovered === w.id ? 0.55 : 0;
@@ -326,7 +360,8 @@ export class SystemView {
       this.map.delete(id);
     }
 
-    // Asteroid belts drift with their orbits.
+    // Asteroid belts drift with their orbits (and grow when impacts leave debris).
+    if (s.belts.length !== this.beltCount) this.setBelts(s.belts);
     if (this.belts) {
       const pos = this.belts.geometry.attributes.position as THREE.BufferAttribute;
       const arr = pos.array as Float32Array;
@@ -341,11 +376,14 @@ export class SystemView {
       pos.needsUpdate = true;
     }
 
-    // Ships with their trails.
+    // Ships: a small 3D hull each, an engine glow and a fading trail.
     const v = new THREE.Vector3();
     const q = new THREE.Vector3();
+    const dir = new THREE.Vector3();
     const hue = new THREE.Color();
+    const cam = this.camera.position;
     this.shipXYZ.clear();
+    this.hulls.begin();
     let n = 0;
     const sp = s.species?.hue ?? 0.35;
     const civ = s.civ;
@@ -356,16 +394,21 @@ export class SystemView {
       this.shipPath(s, sh, k, v);
       this.shipXYZ.set(sh.id, v.clone());
       const kind: ShipKind = sh.kind ?? (sh.ark ? 'ark' : sh.alien ? 'alien' : 'colony');
-      const rgb = KIND_RGB[kind];
-      if (sh.alien) hue.setHSL(alienHue, 0.8, kind === 'mother' ? 0.5 : 0.62);
-      else if (rgb) hue.setRGB(rgb[0], rgb[1], rgb[2]);
-      else hue.setHSL(sp, kind === 'armada' ? 0.75 : 0.55, kind === 'armada' ? 0.7 : 0.62);
+      this.shipColor(s, sh, kind, hue);
+      // Heading: towards where it will be a moment later.
+      if (k < 0.98) this.shipPath(s, sh, k + 0.01, q), dir.subVectors(q, v);
+      else this.shipPath(s, sh, k - 0.01, q), dir.subVectors(v, q);
+      const spec = HULL_OF[kind];
       const flash = sh.doom !== undefined ? 1 + 1.5 * Math.abs(Math.sin(time * 30)) : 1;
-      this.shipPos.set([v.x, v.y, v.z], n * 3);
-      this.shipCol.set([hue.r * 1.4 * flash, hue.g * 1.4 * flash, hue.b * 1.4 * flash], n * 3);
-      this.shipSize[n] = KIND_SIZE[kind] ?? 1.5;
+      this.hulls.add(spec.hull, v, dir, flash > 1 ? this.flashCol.copy(hue).multiplyScalar(flash) : hue, spec.size, spec.px, cam);
+      // Engine glow just behind the hull.
+      dir.normalize();
+      const back = Math.max(spec.size, spec.px * this.hulls.pxScale * cam.distanceTo(v)) * 0.55;
+      this.shipPos.set([v.x - dir.x * back, v.y - dir.y * back, v.z - dir.z * back], n * 3);
+      this.shipCol.set([hue.r * 1.3 * flash, hue.g * 1.3 * flash, hue.b * 1.3 * flash], n * 3);
+      this.shipSize[n] = KIND_SIZE[kind] ?? 0.8;
       const step = sh.ark ? 0.02 : kind === 'mother' ? 0.016 : 0.012;
-      const trail = kind === 'freight' || kind === 'miner' ? 0.45 : 0.75;
+      const trail = kind === 'freight' || kind === 'miner' || kind === 'tanker' ? 0.35 : 0.7;
       let prev = v.clone();
       for (let j = 0; j < TRAIL; j++) {
         this.shipPath(s, sh, Math.max(0, k - (j + 1) * step), q);
@@ -390,34 +433,70 @@ export class SystemView {
       const len = Math.hypot(ar.x, ar.z) || 1;
       const fx = ar.x / len;
       const fz = ar.z / len;
-      hue.setHSL(sp, 0.75, 0.7);
+      dir.set(fx, 0, fz);
+      hue.setHSL(sp, 0.75, 0.62);
       for (let i = 0; i < count && p < MAX_POINTS; i++, p++) {
         const row = Math.floor((i + 1) / 2);
         const side = i === 0 ? 0 : i % 2 ? 1 : -1;
-        const back = row * 0.95;
-        const lat = side * row * 0.75;
+        const back = row * 1.25;
+        const lat = side * row * 1.0;
         const bob = Math.sin(time * 2 + i) * 0.15;
-        this.shipPos.set([ar.x - fx * back - fz * lat, 1 + bob + (ar.phase === 'hold' ? Math.sin(time * 6) * 0.05 : 0), ar.z - fz * back + fx * lat], p * 3);
-        const glow = ar.phase === 'hold' ? 1.3 + 0.6 * Math.min(1, ar.t / 9) : 1.2;
+        v.set(ar.x - fx * back - fz * lat, 1 + bob, ar.z - fz * back + fx * lat);
+        this.hulls.add('dart', v, dir, hue, 0.7, 11, cam);
+        const glow = ar.phase === 'hold' ? 1.3 + 0.8 * Math.min(1, ar.t / 9) : 1.1;
+        this.shipPos.set([v.x - fx * 0.6, v.y, v.z - fz * 0.6], p * 3);
         this.shipCol.set([hue.r * glow, hue.g * glow, hue.b * glow], p * 3);
-        this.shipSize[p] = 1.2;
+        this.shipSize[p] = 0.9;
+      }
+    }
+    // Colonists waiting for the jump to another star.
+    const fl = civ?.flotilla;
+    if (fl && fl.gathered > 0) {
+      const len = Math.hypot(fl.x, fl.z) || 1;
+      const fx = fl.x / len;
+      const fz = fl.z / len;
+      dir.set(fx, 0, fz);
+      hue.setHSL(sp, 0.7, 0.62);
+      for (let i = 0; i < fl.gathered && p < MAX_POINTS; i++, p++) {
+        const row = Math.floor((i + 1) / 2);
+        const side = i === 0 ? 0 : i % 2 ? 1 : -1;
+        v.set(fl.x - fx * row * 1.1 - fz * side * row * 0.9, 1 + Math.sin(time * 2 + i) * 0.12, fl.z - fz * row * 1.1 + fx * side * row * 0.9);
+        this.hulls.add('dart', v, dir, hue, 0.55, 10, cam);
+        this.shipPos.set([v.x - fx * 0.5, v.y, v.z - fz * 0.5], p * 3);
+        this.shipCol.set([hue.r * 1.2, hue.g * 1.2, hue.b * 1.2], p * 3);
+        this.shipSize[p] = 0.8;
+      }
+    }
+    // The armada over an enemy world: circling it while the battle rages.
+    if (ar && ar.phase === 'battle') {
+      hue.setHSL(sp, 0.75, 0.62);
+      for (let i = 0; i < ar.launched && p < MAX_POINTS; i++, p++) {
+        const a = time * 0.9 + (i / ar.launched) * TAU;
+        const r = 5 + (i % 3) * 1.2;
+        v.set(ar.x + Math.cos(a) * r, 1 + Math.sin(a * 3) * 0.4, ar.z + Math.sin(a) * r);
+        dir.set(-Math.sin(a), 0, Math.cos(a));
+        this.hulls.add('dart', v, dir, hue, 0.65, 11, cam);
+        this.shipPos.set([v.x, v.y, v.z], p * 3);
+        this.shipCol.set([hue.r, hue.g, hue.b], p * 3);
+        this.shipSize[p] = 0.7;
       }
     }
     // Defence fleet: guard ships circling every settled world.
     if (civ?.done.fleet) {
-      hue.setHSL(sp, 0.7, 0.66);
+      hue.setHSL(sp, 0.7, 0.6);
       for (const w of s.worlds) {
         if (!isSettled(w)) continue;
         const c = worldXZ(w, this.byId, this.tmp);
         const r = worldRadius(w) * 2.1 + 1;
-        for (let j = 0; j < 3 && p < MAX_POINTS; j++, p++) {
+        for (let j = 0; j < 3; j++) {
           const a = time * 1.4 + j * 2.094 + w.id;
-          this.shipPos.set([c.x + Math.cos(a) * r, Math.sin(a * 2) * 0.3, c.z + Math.sin(a) * r], p * 3);
-          this.shipCol.set([hue.r, hue.g, hue.b], p * 3);
-          this.shipSize[p] = 0.8;
+          v.set(c.x + Math.cos(a) * r, Math.sin(a * 2) * 0.3, c.z + Math.sin(a) * r);
+          dir.set(-Math.sin(a), 0, Math.cos(a));
+          this.hulls.add('dart', v, dir, hue, 0.35, 6, cam);
         }
       }
     }
+    this.hulls.end();
     for (let i = p; i < MAX_POINTS; i++) this.shipSize[i] = 0;
     this.shipGeo.attributes.position.needsUpdate = true;
     this.shipGeo.attributes.aColor.needsUpdate = true;
@@ -522,19 +601,12 @@ export class SystemView {
       if (!this.rogue) {
         this.rogue = new PlanetMesh(this.hi, rg.seed);
         const look: Look = {
-          seed: (rg.seed % 1000) / 37,
+          ...baseLook(rg.seed),
           rock: [0.16, 0.15, 0.16],
           rock2: [0.3, 0.28, 0.3],
-          ocean: 0,
           ice: 0.35,
-          veg: 0,
-          city: 0,
           lava: 0.15,
-          cloud: 0,
-          gas: 0,
-          band1: [0, 0, 0],
-          band2: [0, 0, 0],
-          invade: 0,
+          crater: 0.8,
           atm: 0.2,
           atmCol: [0.6, 0.3, 0.25],
         };

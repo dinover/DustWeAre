@@ -144,6 +144,7 @@ export class Hud {
   private resEl: HTMLElement;
   private decisionsEl: HTMLElement;
   private decisionKey = '';
+  private ageT = 0;
   private worksEl: HTMLElement | null = null;
   private tipTimer = 0;
 
@@ -298,12 +299,18 @@ export class Hud {
     }
     this.name.textContent = s.name;
     const phase = s.phase === 'formation' ? tr('FORMACIÓN', 'FORMATION') : tr('SISTEMA', 'SYSTEM');
-    let ageTxt = fmtAge(s.age);
-    if (s.civStart != null && s.species) {
-      const years = (s.age - s.civStart) * 1e6;
-      ageTxt = tr(`Año ${int(years)} de los ${s.species.name}`, `Year ${int(years)} of the ${capName(s.species.name)}`);
+    // The calendar ticks a couple of times per second, in round steps, so the slab never jitters.
+    this.ageT -= dt;
+    if (this.ageT <= 0) {
+      this.ageT = 0.6;
+      let ageTxt = fmtAge(s.age);
+      if (s.civStart != null && s.species) {
+        const years = Math.floor(((s.age - s.civStart) * 1e6) / 50) * 50;
+        ageTxt = tr(`Año ${int(years)} de los ${s.species.name}`, `Year ${int(years)} of the ${capName(s.species.name)}`);
+      }
+      const html = `<span class="phase-chip">${phase}</span><span class="age-txt">${ageTxt}</span>`;
+      if (this.sub.innerHTML !== html) this.sub.innerHTML = html;
     }
-    this.sub.innerHTML = `<span class="phase-chip">${phase}</span><span>${ageTxt}</span>`;
     const e = Math.floor(s.energy);
     this.energyVal.textContent = `${e}`;
     (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${(s.energy / (info.energyCap ?? 100)) * 100}%`);

@@ -104,9 +104,9 @@ export class Effects {
 
   /** An explosion: a hot flash and a fading shock ring. */
   boom(x: number, y: number, z: number, big: boolean, color = 0xffa060) {
-    this.flash(x, y, z, color, big ? 16 : 5, big ? 1.4 : 0.7);
-    this.flash(x, y, z, 0xffffff, big ? 6 : 2, 0.3);
-    this.ring(x, z, color, big ? 14 : 4, big ? 1.6 : 0.8, y);
+    this.flash(x, y, z, color, big ? 9 : 3.5, big ? 1.2 : 0.6);
+    this.flash(x, y, z, 0xffffff, big ? 4 : 1.5, 0.3);
+    this.ring(x, z, color, big ? 6 : 2.2, big ? 1.2 : 0.6, y, true);
   }
 
   /**
@@ -121,9 +121,9 @@ export class Effects {
     const t0 = this.time;
     const tn = (i: number) => Math.min(1, Math.max(0, (this.time - t0) / 0.85 - i * 0.004));
     this.flash(x, 1, z, 0xffffff, 6 + n * 0.35, arriving ? 0.6 : 0.8);
-    this.flash(x, 1, z, color, 14 + n * 0.6, 1.1);
-    this.ring(x, z, color, 9 + n * 0.3, 1.1, 1, true);
-    this.ring(x, z, 0xffffff, 5 + n * 0.2, 0.7, 1, true);
+    this.flash(x, 1, z, color, 10 + n * 0.4, 1.0);
+    this.ring(x, z, color, 6 + n * 0.2, 1.0, 1, true);
+    this.ring(x, z, 0xffffff, 3.5 + n * 0.12, 0.6, 1, true);
     for (let i = 0; i < n; i++) {
       const row = Math.floor((i + 1) / 2);
       const s = i === 0 ? 0 : i % 2 ? 1 : -1;

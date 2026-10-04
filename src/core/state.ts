@@ -6,17 +6,27 @@
 
 export const R_MIN = 0.32;
 export const R_MAX = 14;
+/** How much the map compresses distance: lower squeezes the outer system more. */
+export const SCALE_EXP = 0.62;
 /** Orbit radius (AU) → world units. */
-export const toWorld = (au: number) => 14 * Math.pow(au, 0.55);
+export const toWorld = (au: number) => 14 * Math.pow(au, SCALE_EXP);
 /** World units → orbit radius (AU). */
-export const toAU = (w: number) => Math.pow(Math.max(0, w) / 14, 1 / 0.55);
+export const toAU = (w: number) => Math.pow(Math.max(0, w) / 14, 1 / SCALE_EXP);
 /** Angular speed (rad/s at game speed 1). Gentler than Kepler so inner orbits stay readable. */
 export const omega = (au: number) => 0.5 * Math.pow(Math.max(au, 0.05), -0.75);
 
 /** Snow line: beyond it water freezes into ice (scales with the star's light). */
 export const snowLine = (L: number) => 2.7 * Math.sqrt(L);
+/**
+ * Sunlight fades with distance more gently than in reality (a^-0.3 instead of a^-0.5): it gives a
+ * roomier habitable zone, so several worlds can live in it without being packed together.
+ */
+export const T_EXP = 0.3;
 /** Habitable zone (liquid water on a world with an Earth-like atmosphere). */
-export const habZone = (L: number): [number, number] => [0.95 * Math.sqrt(L), 1.55 * Math.sqrt(L)];
+export const habZone = (L: number): [number, number] => {
+  const k = Math.pow(L, 0.25 / T_EXP);
+  return [0.6 * k, 1.6 * k];
+};
 /** Disk midplane temperature (K). */
 export const diskTemp = (au: number, L: number) => (280 * Math.pow(L, 0.25)) / Math.sqrt(au);
 
@@ -54,6 +64,24 @@ export interface Life {
   health: number;
   /** True on the world where this species was born. */
   origin: boolean;
+  /** When this life became a people: 0 (or none) yours, 1+ a rival people (index + 1). */
+  people?: number;
+}
+
+/** Another people born in the same system. */
+export interface Rival {
+  name: string;
+  hue: number;
+  /** World where they were born. */
+  home: number;
+  /** −1 hostile … +1 friendly. */
+  mood: number;
+  relation: 'peace' | 'tension' | 'war' | 'alliance';
+  /** Seconds since the war began (0 in peace). */
+  warT: number;
+  nextTalk: number;
+  nextShip: number;
+  nextSkirmish: number;
 }
 
 /** A finished world: planet or moon. */
@@ -81,9 +109,15 @@ export interface World extends Stuff {
   volcanoCd: number;
   /** Refugees from another star who were given this world. */
   guest?: string;
+  /** Seconds a fresh impact scar keeps glowing. */
+  hot?: number;
+  /** Its ring is made of impact debris (thin and grey). */
+  debrisRing?: boolean;
+  /** Colony of a rival people (index + 1); none means yours. */
+  owner?: number;
 }
 
-export type ShipKind = 'colony' | 'freight' | 'tanker' | 'miner' | 'trader' | 'refugee' | 'expedition' | 'armada' | 'alien' | 'mother' | 'ark';
+export type ShipKind = 'colony' | 'freight' | 'tanker' | 'miner' | 'trader' | 'refugee' | 'expedition' | 'flotilla' | 'armada' | 'raider' | 'alien' | 'mother' | 'ark';
 
 export interface Ship {
   id: number;
@@ -112,6 +146,8 @@ export interface Ship {
   hp?: number;
   /** Refugee species on board. */
   species?: string;
+  /** Which people of this system flies it: 0 (or none) yours, 1+ a rival people. */
+  people?: number;
 }
 
 export interface Resources {
@@ -123,7 +159,9 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'incident' | 'alliance' | 'peace';
+  /** Rival people involved (index + 1). */
+  rival?: number;
   /** Seconds left before it expires. */
   left: number;
   dur: number;
@@ -149,7 +187,10 @@ export interface CivState {
   building: { id: string; t: number; dur: number } | null;
   missions: Mission[];
   decisions: Decision[];
-  armada: { phase: 'rally' | 'hold' | 'away' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean } | null;
+  armada: { phase: 'rally' | 'hold' | 'away' | 'battle' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean; vsRival?: number } | null;
+  /** A group of colonists gathering to leave for another star. */
+  flotilla?: { launched: number; gathered: number; x: number; z: number; star: string } | null;
+  nextFlotilla?: number;
   rogue: { t: number; dur: number; seed: number; ang: number; off: number; offered: boolean } | null;
   nextLate: number;
   nextFlavor: number;
@@ -218,6 +259,7 @@ export interface GameState {
   /** System age when the first cities appeared (for the civilization calendar). */
   civStart?: number | null;
   civ?: CivState;
+  rivals?: Rival[];
   /** Systems your species has already reached (new game+). */
   legacy: number;
   legacySpecies: Species | null;

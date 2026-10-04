@@ -190,13 +190,17 @@ a { color: var(--dust); }
 /* ------------------------------------------------------------------ HUD */
 .hud-top { position: absolute; top: calc(10px + var(--safe-t)); left: 10px; right: 10px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; pointer-events: none; }
 .hud-top > * { pointer-events: auto; }
-.tablet { padding: 9px 16px 11px; min-width: 210px; }
+.tablet { padding: 9px 16px 11px; width: 304px; flex: 0 0 auto; }
+.tablet .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tablet .sub { white-space: nowrap; overflow: hidden; }
+.tablet .age-txt { overflow: hidden; text-overflow: ellipsis; }
 .tablet .name { font: 700 17px var(--title); letter-spacing: .14em; color: var(--dust); line-height: 1.15; text-shadow: 0 -1px 0 #000, 0 0 16px rgba(255, 180, 90, .2); }
 .tablet .sub { font-size: 13px; color: var(--sand-dim); display: flex; gap: 10px; align-items: center; margin-top: 2px; }
 .tablet .sub b { color: var(--sand); font-weight: 500; }
 .phase-chip { font: 700 10px var(--title); letter-spacing: .18em; padding: 2px 8px; border-radius: 9px; border: 1px solid rgba(220, 187, 122, .3); color: var(--dust); background: rgba(0, 0, 0, .25); }
 
-.progress-slab { padding: 9px 16px 12px; min-width: min(380px, 40vw); text-align: center; }
+.progress-slab { padding: 9px 16px 12px; width: min(400px, 36vw); flex: 0 0 auto; text-align: center; }
+.progress-slab .label span, .progress-slab .label b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .progress-slab .label { display: flex; justify-content: space-between; font-size: 13px; color: var(--sand-dim); margin-bottom: 5px; gap: 12px; }
 .progress-slab .label b { color: var(--sand); font-weight: 700; }
 .progress-slab .row2 { display: flex; gap: 10px; align-items: center; margin-top: 7px; font-size: 12px; color: var(--sand-dim); }
@@ -502,3 +506,28 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .decision.compact .d-buttons { margin-top: 6px; }
 .decision.compact .btn { min-height: 26px; font-size: 11px; padding: 2px 10px; }
 .decision.compact .d-timer { margin-top: 6px; height: 4px; }
+
+/* Numbers that change every frame keep a fixed width. */
+.tablet .sub, .energy .top b, .res-tablet, .progress-slab .label b, .progress-slab .row2, .res-pill b { font-variant-numeric: tabular-nums; }
+.res-tablet .res { min-width: 64px; }
+.energy { width: 200px; }
+@media (max-width: 760px) {
+  .tablet { width: auto; flex: 1 1 auto; min-width: 0; }
+  .progress-slab { width: auto; flex: 1 1 100%; }
+  .energy { width: auto; }
+}
+
+/* peoples of the system */
+.peoples { display: flex; flex-direction: column; gap: 3px; margin: 0 8px 6px; }
+.peoples:empty { display: none; }
+.people-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 7px; align-items: center; font-size: 12.5px; }
+.people-row i { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
+.people-row em { font-style: normal; font-size: 11px; color: var(--sand-dim); padding: 0 6px; border-radius: 8px; background: rgba(0, 0, 0, .3); }
+.people-row.big { font-size: 14px; }
+.rel.war { color: #ff7a5a !important; }
+.rel.tension { color: #e5b65a !important; }
+.rel.alliance { color: var(--moss) !important; }
+.legend-ships { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 8px 8px 2px; padding-top: 6px; border-top: 1px solid rgba(220, 187, 122, .12); font-size: 11.5px; color: var(--sand-dim); }
+.legend-ships:empty { display: none; }
+.legend-ships b { font-family: var(--body); text-shadow: 0 0 6px currentColor; }
+.ledger.collapsed .peoples, .ledger.collapsed .legend-ships { display: none; }

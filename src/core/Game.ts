@@ -27,6 +27,7 @@ import { playComets } from '../minigames/Comets';
 import { ProjectsPanel } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
 import { isSettled } from '../sim/civ';
+import { rivalOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
@@ -90,7 +91,7 @@ export class Game {
     this.stage = new Stage(sceneEl, this.quality);
     this.fx = new Effects(this.stage.camera);
     this.bodiesView = new BodiesView(this.quality === 'high');
-    this.systemView = new SystemView(this.quality === 'high');
+    this.systemView = new SystemView(this.quality === 'high', this.stage.camera);
     this.stage.scene.add(this.star.group, this.guides.group, this.bodiesView.group, this.systemView.group, this.fx.group);
     this.labels = new Labels(root.querySelector('#labels') as HTMLElement, this.stage);
     this.hud = new Hud(this.ui, {
@@ -105,7 +106,7 @@ export class Game {
       works: () => this.openProjects(),
       decide: (id, accept) => {
         sound.click();
-        this.sim?.civ.decide(id, accept);
+        this.sim?.decide(id, accept);
       },
     });
     this.inspector = new Inspector(this.ui, {
@@ -145,7 +146,7 @@ export class Game {
     this.demo = Formation.create(Math.round(this.particles * 0.7), rng, () => ids.n++);
     for (let i = 0; i < 40; i++) this.demo.update(0.25);
     this.attachDisk(this.demo);
-    this.stage.goal.dist = 150;
+    this.stage.goal.dist = 178;
     this.stage.goal.pitch = 0.62;
     this.stage.drift = 0.03;
     this.stage.goal.target.set(0, 0, 0);
@@ -251,7 +252,7 @@ export class Game {
     }
     this.mode = 'play';
     this.stage.drift = 0;
-    this.stage.goal.dist = 132;
+    this.stage.goal.dist = 158;
     this.stage.goal.pitch = 0.98;
     this.stage.goal.target.set(0, 0, 0);
     this.hud.setVisible(true);
@@ -511,6 +512,37 @@ export class Game {
         this.fx.flash(p.x, 0, p.z, 0xffe6b0, 12, 1.6);
         if (f.id === 'dyson') this.fx.ring(0, 0, 0xffd28a, 30, 3);
         sound.chime('good');
+        return;
+      }
+      case 'raid': {
+        // Defenders fire on the raider; it either explodes or gets through.
+        const to = this.shipGetter(f.ship);
+        const from = this.worldGetter(f.world);
+        const tw = s.worlds.find((x) => x.id === f.world);
+        const ri = tw ? rivalOf(tw) : 0;
+        const defender = ri && s.rivals?.[ri - 1] ? new THREE.Color().setHSL(s.rivals[ri - 1].hue, 0.75, 0.65).getHex() : own;
+        this.fx.laser(from, to, defender);
+        const v = to();
+        if (!f.hit && v.y > -500) setTimeout(() => this.fx.boom(v.x, v.y, v.z, false, 0xffa060), 200);
+        if (f.hit) {
+          const p = this.systemView.posOf(f.world);
+          if (p) this.fx.flash(p.x, 0, p.z, 0xff7a3a, 4, 0.6);
+        }
+        sound.laser();
+        return;
+      }
+      case 'siege': {
+        // The armada pounds an enemy world: lasers from the circling ships, fire on the ground.
+        const p = this.systemView.posOf(f.world);
+        if (!p) return;
+        for (let i = 0; i < 3; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const from = new THREE.Vector3(p.x + Math.cos(a) * 5.5, 1, p.z + Math.sin(a) * 5.5);
+          const to = new THREE.Vector3(p.x + (Math.random() - 0.5) * 1.5, 0.3, p.z + (Math.random() - 0.5) * 1.5);
+          this.fx.laser(() => from, () => to, own);
+          setTimeout(() => this.fx.boom(to.x, to.y, to.z, Math.random() < 0.3, 0xffa060), 250);
+        }
+        sound.laser();
         return;
       }
       case 'rogueCaught': {
@@ -793,7 +825,7 @@ export class Game {
     }
     if (this.formation) {
       const g = this.stage.groundPoint(e.clientX, e.clientY);
-      if (g && Math.hypot(g.x, g.z) < 78) {
+      if (g && Math.hypot(g.x, g.z) < 94) {
         this.formation.pointerDown(g.x, g.z);
         this.toolActive = true;
         if (this.formation.tool === 'heat' || this.formation.tool === 'cool') sound.whoosh();
@@ -826,7 +858,7 @@ export class Game {
     if (this.mode !== 'play') return;
     if (this.formation) {
       const g = this.stage.groundPoint(e.clientX, e.clientY);
-      const valid = !!g && Math.hypot(g.x, g.z) < 78;
+      const valid = !!g && Math.hypot(g.x, g.z) < 94;
       if (g) this.formation.pointerMove(g.x, g.z, valid && (e.pointerType === 'mouse' || this.toolActive));
       this.hoverBody = !this.toolActive && g ? this.bodyAt(g.x, g.z) : null;
       this.showBodyTag(e.clientX, e.clientY);
@@ -1158,7 +1190,7 @@ export class Game {
       this.bodiesView.update(activeF.bodies, L, dt, this.time);
     }
     if (s && this.sim) {
-      this.systemView.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov);
+      this.systemView.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov, this.stage.canvas.clientHeight || window.innerHeight);
       this.systemView.update(s, dt, this.time);
     }
 
@@ -1309,7 +1341,10 @@ export class Game {
       worldXZ(w, byId, tmp);
       let f = '';
       if (w.life) f += '<span class="l">❦</span>';
-      if (w.colony >= 1) f += '<span class="c">⌂</span>';
+      const ri = rivalOf(w);
+      const rv = ri ? s.rivals?.[ri - 1] : undefined;
+      if (rv) f += `<span style="color:hsl(${Math.round(rv.hue * 360)} 70% 62%)">⌂</span>`;
+      else if (w.colony >= 1) f += '<span class="c">⌂</span>';
       if (w.invaded > 0.3) f += '<span class="a">⚠</span>';
       const r = worldRadius(w);
       const px = r / this.stage.pixelScale(tmp.x, 0, tmp.z);

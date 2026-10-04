@@ -1,4 +1,4 @@
-import { massOf, toWorld, type CivState, type Decision, type GameState, type Resources, type Ship, type World } from '../core/state';
+import { massOf, toAU, toWorld, type CivState, type Decision, type GameState, type Resources, type Ship, type World } from '../core/state';
 import { Rng, TAU, clamp } from '../util';
 import { colonizable, isGiantStuff, type WorldStats } from './worlds';
 import { worldXZ } from '../render/layout';
@@ -6,6 +6,7 @@ import { MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectId } from '../
 import { FLAVOR } from '../content/flavor';
 import { capName, speciesName, worldName } from '../content/names';
 import type { Bi } from '../i18n';
+import type { PeopleSim, PeopleFx } from './peoples';
 
 export type Role = 'fuel' | 'water' | 'science' | 'metal';
 export const RES_KEYS: (keyof Resources)[] = ['metal', 'fuel', 'water', 'science'];
@@ -19,7 +20,8 @@ export function roleOf(w: World, st: WorldStats): Role {
   return 'metal';
 }
 
-export const isSettled = (w: World) => w.colony >= 1 || !!w.guest || (!!w.life?.origin && w.life.stage >= 3);
+/** A world of yours: a colony, refugees you took in, or your species' home. */
+export const isSettled = (w: World) => (w.colony >= 1 && !w.owner) || !!w.guest || (!!w.life?.origin && !w.life.people && w.life.stage >= 3);
 
 export function newCiv(time: number): CivState {
   return {
@@ -47,9 +49,10 @@ export interface CivHost {
   world(id: number): World | undefined;
   stats(w: World): WorldStats;
   news(icon: string, es: string, en: string, kind?: 'info' | 'good' | 'warn' | 'life' | 'alien' | 'fact'): void;
-  fx(f: CivFx): void;
+  fx(f: CivFx | PeopleFx): void;
   readonly topStage: number;
   readonly origin: World | null;
+  readonly peoples: PeopleSim;
 }
 
 export type CivFx =
@@ -120,6 +123,7 @@ export class CivSim {
     this.traffic(civ, dt);
     this.missions(civ, dt);
     this.armada(civ, dt);
+    this.flotillas(civ);
     this.defend(civ, dt);
     this.decisions(civ, dt);
     this.rogue(civ, dt);
@@ -153,6 +157,8 @@ export class CivSim {
     }
     if (civ.done.mining && this.h.s.belts.length) r.metal += 0.6;
     if (civ.done.ring) r.science *= 1.5;
+    // Allied peoples share their science.
+    r.science *= 1 + 0.15 * (this.h.s.rivals ?? []).filter((x) => x.relation === 'alliance').length;
     const diversity = roles.size >= 4 ? 1.3 : roles.size >= 3 ? 1.15 : 1;
     const tech = 1 + 0.1 * (civ.tech ?? 0);
     for (const k of RES_KEYS) {
@@ -177,8 +183,9 @@ export class CivSim {
       return { es: 'Necesita una colonia en un gigante gaseoso o de hielo.', en: 'Needs a colony on a gas or ice giant.' };
     if (id === 'mining' && !s.belts.length) return { es: 'Tu sistema no tiene cinturones de asteroides.', en: 'Your system has no asteroid belts.' };
     if (id === 'armada' && !civ.done.fleet) return { es: 'Necesita la flota de defensa.', en: 'Needs the defence fleet.' };
-    if (id === 'ark' && !s.worlds.filter(colonizable).every((w) => isSettled(w)))
-      return { es: 'Tu especie debe habitar todos tus mundos.', en: 'Your species must live on all of your worlds.' };
+    if (id === 'ark' && !s.worlds.filter(colonizable).every((w) => isSettled(w) || this.h.peoples.allied(w)))
+      return { es: 'Tu especie (o tus aliados) deben habitar todos los mundos.', en: 'Your species (or your allies) must live on every world.' };
+    if (id === 'ark' && this.h.peoples.atWar()) return { es: 'No se puede partir en plena guerra.', en: 'You cannot leave in the middle of a war.' };
     if (civ.building) return { es: 'Ya hay una gran obra en marcha.', en: 'A great work is already under way.' };
     return null;
   }
@@ -276,8 +283,8 @@ export class CivSim {
       let t = this.freightT.get(w.id) ?? rng.range(2, 10);
       t -= dt * (civ.done.elevator ? 1.5 : 1);
       if (t <= 0) {
-        t = rng.range(9, 16);
-        if (this.shipCount() < 56 && settled.length >= 2) {
+        t = rng.range(18, 30);
+        if (this.shipCount() < 40 && settled.length >= 2) {
           const others = settled.filter((o) => o !== w);
           const to = w !== home && home && rng.next() < 0.55 ? home : rng.pick(others);
           const role = roleOf(w, this.h.stats(w));
@@ -292,11 +299,26 @@ export class CivSim {
     if (civ.done.mining && s.belts.length) {
       this.minerT -= dt;
       if (this.minerT <= 0) {
-        this.minerT = rng.range(3, 6);
+        this.minerT = rng.range(6, 10);
         const bases = settled.filter((w) => !isGiantStuff(w));
-        if (bases.length && this.shipCount() < 60) {
+        if (bases.length && this.shipCount() < 50) {
           const w = rng.pick(bases);
-          s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: rng.range(8, 13), alien: false, kind: 'miner', belt: (rng.next() * s.belts.length) | 0 });
+          // Miners work the rocks closest to home, never the far edge of the system.
+          const p = this.pos(w);
+          let best = -1;
+          let bd = Infinity;
+          for (let k = 0; k < 16; k++) {
+            const i = (rng.next() * s.belts.length) | 0;
+            const b = s.belts[i];
+            const th = b.th + 0.5 * Math.pow(Math.max(b.r, 0.05), -0.75) * 0.42 * s.time;
+            const rw = toWorld(b.r);
+            const d = Math.hypot(Math.cos(th) * rw - p.x, Math.sin(th) * rw - p.z);
+            if (d < bd) {
+              bd = d;
+              best = i;
+            }
+          }
+          if (best >= 0 && bd < 30) s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 6 + bd * 0.2, alien: false, kind: 'miner', belt: best });
         }
       }
     }
@@ -322,6 +344,10 @@ export class CivSim {
       } else this.expeditionReturns(civ);
     }
     if (k === 'armada' && civ?.armada && !sh.back) civ.armada.gathered++;
+    if (k === 'flotilla' && civ?.flotilla) {
+      civ.flotilla.gathered++;
+      if (civ.flotilla.gathered >= civ.flotilla.launched) this.flotillaJumps(civ);
+    }
     if (k === 'refugee') {
       const w = this.h.world(sh.to);
       if (w && sh.back !== true) {
@@ -420,6 +446,52 @@ export class CivSim {
     }
   }
 
+  // ------------------------------------------------------------------ colonists to other stars
+  /** Now and then, once warp travel exists, a group of colonists gathers and jumps to a new star. */
+  private flotillas(civ: CivState) {
+    const s = this.h.s;
+    if (!civ.done.warp) return;
+    if (civ.nextFlotilla === undefined) civ.nextFlotilla = s.time + 100;
+    const f = civ.flotilla;
+    if (f) {
+      if (s.time > (civ.nextFlotilla ?? 0) - 160) this.flotillaJumps(civ);
+      return;
+    }
+    if (s.time < civ.nextFlotilla) return;
+    const rng = this.h.rng;
+    civ.nextFlotilla = s.time + rng.range(240, 380);
+    const home = this.home();
+    const ports = this.settled();
+    if (!home || !ports.length) return;
+    const p = this.pos(home);
+    const ang = Math.atan2(p.z, p.x) + rng.range(-0.8, 0.8);
+    const R = Math.hypot(p.x, p.z) + 22;
+    const x = Math.cos(ang) * R;
+    const z = Math.sin(ang) * R;
+    const n = Math.min(7, 3 + ports.length);
+    for (let k = 0; k < n; k++) {
+      const w = k < 2 ? home : rng.pick(ports);
+      const q = this.pos(w);
+      s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -k * 0.8, dur: 6 + Math.hypot(q.x - x, q.z - z) * 0.18, alien: false, kind: 'flotilla', tx: x, tz: z });
+    }
+    civ.flotilla = { launched: n, gathered: 0, x, z, star: worldName(rng, new Set()) };
+    const sn = s.species?.name ?? '';
+    this.h.news('✶', `Una flotilla de colonos ${sn} se reúne para partir hacia la estrella ${civ.flotilla.star}.`, `A flotilla of ${capName(sn)} colonists gathers to leave for the star ${civ.flotilla.star}.`, 'info');
+  }
+
+  private flotillaJumps(civ: CivState) {
+    const f = civ.flotilla;
+    if (!f) return;
+    const s = this.h.s;
+    s.ships = s.ships.filter((x) => x.kind !== 'flotilla');
+    const len = Math.hypot(f.x, f.z) || 1;
+    this.h.fx({ kind: 'warpOut', x: f.x, z: f.z, dx: f.x / len, dz: f.z / len, count: f.launched, tint: 'own' });
+    civ.stats.colonies++;
+    civ.flotilla = null;
+    const sn = s.species?.name ?? '';
+    this.h.news('✶', `¡Salto! La flotilla llega a ${f.star}: los ${sn} ya habitan ${civ.stats.colonies + 1} sistemas.`, `Jump! The flotilla reaches ${f.star}: the ${capName(sn)} now live in ${civ.stats.colonies + 1} systems.`, 'good');
+  }
+
   // ------------------------------------------------------------------ armada
   launchArmada() {
     const civ = this.civ;
@@ -440,8 +512,10 @@ export class CivSim {
         launched++;
       }
     }
-    const vsAliens = !!s.alienSpecies && !civ.peace;
-    civ.armada = { phase: 'rally', t: 0, x: R.x, z: R.z, launched, gathered: 0, vsAliens };
+    // A war at home comes first; then the invaders; otherwise, the unknown.
+    const war = this.h.peoples.atWar();
+    const vsAliens = !war && !!s.alienSpecies && !civ.peace;
+    civ.armada = { phase: 'rally', t: 0, x: R.x, z: R.z, launched, gathered: 0, vsAliens, vsRival: war || undefined };
     civ.stats.armadas++;
     const sn = s.species?.name ?? '';
     this.h.news('⚔', `¡Convocatoria general! Las naves de los ${sn} se reúnen junto a ${home.name}.`, `General muster! The ships of the ${capName(sn)} gather by ${home.name}.`, 'good');
@@ -467,10 +541,40 @@ export class CivSim {
       a.t = 0;
       this.h.fx({ kind: 'warpOut', x: a.x, z: a.z, dx, dz, count: a.launched, tint: 'own' });
       const sn = s.species?.name ?? '';
-      if (a.vsAliens && s.alienSpecies)
+      const foe = a.vsRival ? this.h.peoples.rival(a.vsRival) : undefined;
+      if (foe) this.h.news('⚔', `¡Salto! La armada de los ${sn} cae sobre el mundo de los ${foe.name}.`, `Jump! The armada of the ${capName(sn)} falls upon the world of the ${capName(foe.name)}.`, 'good');
+      else if (a.vsAliens && s.alienSpecies)
         this.h.news('⚔', `¡Salto! La armada de los ${sn} parte hacia la estrella de los ${s.alienSpecies.name}.`, `Jump! The armada of the ${capName(sn)} heads for the star of the ${capName(s.alienSpecies.name)}.`, 'good');
       else this.h.news('⚔', `¡Salto! La armada de los ${sn} se pierde entre las estrellas, rumbo a lo desconocido.`, `Jump! The armada of the ${capName(sn)} vanishes among the stars, bound for the unknown.`, 'good');
-    } else if (a.phase === 'away' && a.t > 70) {
+    } else if (a.phase === 'away' && a.vsRival && a.t > 3) {
+      // Out of warp right over the enemy's home world.
+      const home = this.h.peoples.home(a.vsRival);
+      if (!home) {
+        civ.armada = null;
+        return;
+      }
+      const p = this.pos(home);
+      const l2 = Math.hypot(p.x, p.z) || 1;
+      a.x = p.x + (p.x / l2) * 5;
+      a.z = p.z + (p.z / l2) * 5;
+      a.phase = 'battle';
+      a.t = 0;
+      this.h.fx({ kind: 'warpIn', x: a.x, z: a.z, dx: -p.x / l2, dz: -p.z / l2, count: a.launched, tint: 'own' });
+    } else if (a.phase === 'battle') {
+      const home = a.vsRival ? this.h.peoples.home(a.vsRival) : undefined;
+      if (home && Math.floor((a.t - dt) / 0.7) !== Math.floor(a.t / 0.7)) this.h.fx({ kind: 'siege', world: home.id });
+      if (a.t > 10) {
+        if (a.vsRival) this.h.peoples.armadaVictory(a.vsRival);
+        civ.stats.battles += 10;
+        gain(civ.res, { metal: 150, science: 100 });
+        const ports = this.settled();
+        for (let i = 0; i < a.launched && ports.length; i++) {
+          const w = ports[i % ports.length];
+          s.ships.push({ id: this.h.nid(), from: -4, to: w.id, t: -i * 0.25, dur: this.h.rng.range(6, 11), alien: false, kind: 'armada', sx: a.x, sz: a.z, back: true });
+        }
+        civ.armada = null;
+      }
+    } else if (a.phase === 'away' && !a.vsRival && a.t > 70) {
       this.h.fx({ kind: 'warpIn', x: a.x, z: a.z, dx: -dx, dz: -dz, count: a.launched, tint: 'own' });
       const sn = s.species?.name ?? '';
       if (a.vsAliens && s.alienSpecies) {
@@ -502,7 +606,8 @@ export class CivSim {
   private defend(civ: CivState, dt: number) {
     const s = this.h.s;
     if (!civ.done.fleet) return;
-    const guards = this.settled();
+    // Your worlds and those of your allies shoot at intruders.
+    const guards = [...this.settled(), ...s.worlds.filter((w) => this.h.peoples.allied(w))];
     if (!guards.length) return;
     for (const sh of [...s.ships]) {
       if (!sh.alien) continue;
@@ -538,7 +643,7 @@ export class CivSim {
   shieldStops(w: World, threatId: number) {
     const civ = this.civ;
     if (!civ?.done.shield || !isSettled(w)) return false;
-    this.h.fx({ kind: 'shieldHit', world: w.id, threat: threatId });
+    if (threatId >= 0) this.h.fx({ kind: 'shieldHit', world: w.id, threat: threatId });
     this.h.news('⛨', `El escudo de ${w.name} pulveriza un asteroide antes de que toque la atmósfera.`, `The shield of ${w.name} shatters an asteroid before it touches the atmosphere.`, 'good');
     return true;
   }
@@ -604,10 +709,8 @@ export class CivSim {
   private tradersLeave(w: World | null | undefined) {
     const s = this.h.s;
     if (!w) return;
-    for (let i = 0; i < 3; i++) {
-      const a = this.h.rng.range(0, TAU);
-      s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -i * 0.5, dur: 12, alien: false, kind: 'trader', tx: Math.cos(a) * 120, tz: Math.sin(a) * 120 });
-    }
+    const a = this.h.rng.range(0, TAU);
+    s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 13, alien: false, kind: 'trader', tx: Math.cos(a) * 125, tz: Math.sin(a) * 125 });
   }
 
   private decisions(civ: CivState, dt: number) {
@@ -690,7 +793,7 @@ export class CivSim {
     const rng = new Rng(r.seed);
     const used = new Set(s.worlds.map((w) => w.name));
     const dist = Math.hypot(p.x, p.z);
-    const a = clamp(Math.pow(dist / 14, 1 / 0.55), 7, 15);
+    const a = clamp(toAU(dist), 7, 15);
     const w: World = {
       id: this.h.nid(),
       name: worldName(rng, used),
@@ -729,12 +832,13 @@ export class CivSim {
     const s = this.h.s;
     if (!this.spacefaring || s.time < civ.nextLate) return;
     const rng = this.h.rng;
-    civ.nextLate = s.time + rng.range(45, 80);
+    civ.nextLate = s.time + rng.range(55, 95);
     const settled = this.settled();
     if (!settled.length) return;
-    const open = s.worlds.filter((w) => colonizable(w) && !isSettled(w) && !w.life && w.invaded < 0.3);
+    // Only worlds nobody has claimed: not yours, not your neighbours'.
+    const open = s.worlds.filter((w) => colonizable(w) && w.colony <= 0 && !w.guest && !w.life && w.invaded < 0.3);
     const pool: [string, number][] = [
-      ['trade', 3 + civ.allies.length * 0.5],
+      ['trade', 1.8 + Math.min(1.5, civ.allies.length * 0.25)],
       ['refugees', open.length ? 1.3 : 0],
       ['signal', civ.done.warp ? 1 : 0],
       ['artifact', !civ.artifactFound ? 0.9 : 0],
@@ -763,10 +867,8 @@ export class CivSim {
       const getK = rng.pick(keys.slice(1));
       const give = Math.max(20, Math.round(Math.min(civ.res[giveK] * 0.4, rng.range(40, 90))));
       const get = Math.round(give * rng.range(1.3, 1.8));
-      for (let i = 0; i < 3; i++) {
-        const a = rng.range(0, TAU);
-        s.ships.push({ id: this.h.nid(), from: -6, to: w.id, t: -i * 0.6, dur: 13, alien: false, kind: 'trader', sx: Math.cos(a) * 120, sz: Math.sin(a) * 120 });
-      }
+      const a = rng.range(0, TAU);
+      s.ships.push({ id: this.h.nid(), from: -6, to: w.id, t: 0, dur: 14, alien: false, kind: 'trader', sx: Math.cos(a) * 125, sz: Math.sin(a) * 125 });
       this.offer({ kind: 'trade', world: w.id, give: { [giveK]: give }, get: { [getK]: get }, species: name });
       this.h.news('⚖', `Una caravana de los ${name} se acerca a ${w.name} con ganas de comerciar.`, `A caravan of the ${capName(name)} approaches ${w.name}, eager to trade.`, 'info');
     } else if (pick === 'refugees') {

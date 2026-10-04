@@ -65,6 +65,51 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
         yesOk: civ.canAfford({ science: 40 }),
         no: tr('Sellarlo', 'Seal it'),
       };
+    case 'incident': {
+      const r = s.rivals?.[(d.rival ?? 1) - 1];
+      const rn = r?.name ?? '';
+      return {
+        ...base,
+        icon: '⚠',
+        title: tr(`Incidente con los ${rn}`, `Incident with the ${capName(rn)}`),
+        body: tr(
+          `Una nave de los ${rn} y otra de los ${mine} chocan en una ruta disputada. Los ${rn} culpan a tus pilotos.`,
+          `A ${capName(rn)} ship and a ${capName(mine)} ship collide on a disputed route. The ${capName(rn)} blame your pilots.`,
+        ),
+        yes: tr('Calmar los ánimos · ✦ 30', 'Calm things down · ✦ 30'),
+        yesOk: true,
+        no: tr('Exigir disculpas', 'Demand an apology'),
+      };
+    }
+    case 'alliance': {
+      const r = s.rivals?.[(d.rival ?? 1) - 1];
+      const rn = r?.name ?? '';
+      return {
+        ...base,
+        icon: '⚭',
+        title: tr(`Los ${rn} proponen una alianza`, `The ${capName(rn)} propose an alliance`),
+        body: tr(
+          `Compartir ciencia, rutas comerciales y defensa contra los invasores. Sus naves lucharían a tu lado.`,
+          `Share science, trade routes and defence against invaders. Their ships would fight at your side.`,
+        ),
+        yes: tr('Firmar la alianza', 'Sign the alliance'),
+        yesOk: true,
+        no: tr('Mejor no', 'Better not'),
+      };
+    }
+    case 'peace': {
+      const r = s.rivals?.[(d.rival ?? 1) - 1];
+      const rn = r?.name ?? '';
+      return {
+        ...base,
+        icon: '☮',
+        title: tr(`Los ${rn} piden la paz`, `The ${capName(rn)} ask for peace`),
+        body: tr(`Tras meses de batallas, sus embajadores esperan respuesta. La paz salvaría colonias de ambos lados.`, `After months of battles, their envoys await an answer. Peace would save colonies on both sides.`),
+        yes: tr('Firmar la paz', 'Sign the peace'),
+        yesOk: true,
+        no: tr('Seguir luchando', 'Keep fighting'),
+      };
+    }
     default:
       return {
         ...base,
