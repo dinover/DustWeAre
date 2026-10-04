@@ -2,7 +2,7 @@ import { massOf, omega, toWorld, type GameState, type NewsItem, type Ship, type 
 import { Rng, clamp, smoothstep } from '../util';
 import { worldStats, colonizable, isGiantStuff } from './worlds';
 import { CivSim, type CivFx } from './civ';
-import { PeopleSim, rivalOf, type PeopleFx } from './peoples';
+import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from './peoples';
 import { capName, moonName, speciesName } from '../content/names';
 import { FACTS } from '../content/facts';
 
@@ -14,7 +14,7 @@ export const STAGE_NAMES = [
   { es: 'Inteligencia', en: 'Intelligence' },
   { es: 'Civilización', en: 'Civilization' },
   { es: 'Era espacial', en: 'Space age' },
-  { es: 'Especie interplanetaria', en: 'Interplanetary species' },
+  { es: 'Era interplanetaria', en: 'Interplanetary age' },
 ];
 /** System age advances faster while nothing is alive, slower as history gets busy (millions of years per second). */
 const AGE_RATE = [12, 5, 0.6, 0.002, 0.0005, 0.0003];
@@ -47,6 +47,7 @@ export class SystemSim {
 
   constructor(public s: GameState) {
     this.rng = new Rng(s.seed ^ 0x9e3779b9 ^ Math.floor(s.time));
+    migratePeoples(s);
     this.civ = new CivSim(this);
     this.peoples = new PeopleSim(this);
   }
@@ -60,7 +61,7 @@ export class SystemSim {
     const civ = this.s.civ;
     const d = civ?.decisions.find((x) => x.id === id);
     if (!civ || !d) return;
-    if (d.kind === 'incident' || d.kind === 'alliance' || d.kind === 'peace') {
+    if (d.kind === 'tension' || d.kind === 'war') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.peoples.decide(d, accept);
     } else this.civ.decide(id, accept);
@@ -95,9 +96,9 @@ export class SystemSim {
     for (const w of this.s.worlds) if (w.life) st = Math.max(st, w.life.stage);
     return st;
   }
-  /** Home world of your species. */
+  /** Home world of the most advanced people (where the great works rise). */
   get origin() {
-    return this.s.worlds.find((w) => w.life?.origin && w.life.stage >= 2 && !w.life.people) ?? null;
+    return this.peoples.home(this.peoples.leader()) ?? null;
   }
 
   // ------------------------------------------------------------------ frame
@@ -167,29 +168,18 @@ export class SystemSim {
     else life.health -= (0.5 - H) * 0.07 * dt * resilience;
     life.health -= w.invaded * 0.025 * dt * resilience;
     if (life.health <= 0) {
-      const wasSpecies = life.stage >= 2 && !life.people && s.species;
-      const rival = life.people ? s.rivals?.[life.people - 1] : undefined;
+      const people = this.peoples.get(life.people);
       w.life = null;
       this.news('✝', `La vida de ${w.name} se ha extinguido. Las condiciones se volvieron demasiado duras.`, `Life on ${w.name} has died out. Conditions became too harsh.`, 'warn');
-      if (rival) {
-        rival.relation = 'peace';
-        this.news('✝', `Los ${rival.name} pierden su mundo natal. Sus colonias quedan a la deriva.`, `The ${capName(rival.name)} lose their home world. Their colonies are left adrift.`, 'warn');
-      }
-      if (wasSpecies && !s.worlds.some((x) => x.colony >= 1 && !x.owner)) {
-        this.news('✝', `Los ${s.species!.name} ya no existen. Quizá la vida vuelva a intentarlo.`, `The ${capName(s.species!.name)} are gone. Perhaps life will try again.`, 'warn');
-        s.species = null;
-      }
+      if (people && !people.gone)
+        this.news('✝', `Los ${people.name} pierden su mundo natal. Lo que quede de ellos vive en sus colonias.`, `The ${capName(people.name)} lose their home world. Whatever remains of them lives on in their colonies.`, 'warn');
       return;
     }
-    // Every living world keeps evolving. Worlds already colonized by someone stay wild, and a
-    // system holds at most three peoples (yours and two neighbours).
-    const primaryHome = life.origin && !life.people && life.stage >= 2;
-    const canRise = !w.colony && (primaryHome || !!life.people || !s.species || (s.rivals?.length ?? 0) < 2);
+    // Every living world keeps evolving. Worlds colonized by some people stay wild, and a system
+    // holds at most a few peoples at once.
+    const canRise = !w.colony && (!!life.people || this.peoples.alive().length < MAX_PEOPLES);
     const cap = canRise ? 4 : 1;
-    if (life.stage >= cap) {
-      if (life.stage === 4 && primaryHome && s.worlds.some((x) => x.colony >= 1 && !x.owner)) this.advance(w, 5);
-      return;
-    }
+    if (life.stage >= cap) return;
     const rate = (0.4 + 0.6 * life.health) * (H >= 0.5 ? 1 : 0.4);
     life.progress += (rate * dt) / STAGE_TIME[life.stage];
     if (life.progress >= 1) this.advance(w, life.stage + 1);
@@ -198,64 +188,50 @@ export class SystemSim {
   private advance(w: World, stage: number) {
     const s = this.s;
     const life = w.life!;
-    const n = w.name;
-    // A second intelligent species: a neighbour, not yours.
-    if (stage === 2 && s.species && !life.people && !this.origin?.life?.people && this.origin !== w) {
-      if (!this.peoples.emerge(w)) return;
-    }
+    // Intelligence: a new people is born (unless the system is already full of them).
+    if (stage === 2 && !life.people && !this.peoples.emerge(w)) return;
     life.stage = stage;
     life.progress = 0;
-    if (life.people) {
-      if (stage >= 3) this.peoples.advance(w, stage);
-      return;
-    }
-    if (stage === 1) this.news('❀', `La vida de ${n} se vuelve compleja: algas, corales y criaturas que nadan.`, `Life on ${n} grows complex: algae, reefs and swimming creatures.`, 'life');
-    if (stage === 2) {
-      if (!s.species) {
-        const name = s.legacySpecies?.name ?? speciesName(this.rng);
-        s.species = { name, hue: s.legacySpecies?.hue ?? this.rng.range(0.24, 0.42) };
-      }
-      const sp = s.species;
-      this.news('✧', `En ${n} surge una especie que se pregunta por las estrellas: los ${sp.name}.`, `A species that wonders about the stars arises on ${n}: the ${capName(sp.name)}.`, 'life');
-    }
+    if (stage === 1) this.news('❀', `La vida de ${w.name} se vuelve compleja: algas, corales y criaturas que nadan.`, `Life on ${w.name} grows complex: algae, reefs and swimming creatures.`, 'life');
     if (stage === 3 && s.civStart == null) s.civStart = s.age;
-    if (stage === 3) this.news('⌂', `Los ${s.species?.name ?? ''} construyen ciudades: sus luces ya se ven desde el espacio.`, `The ${capName(s.species?.name ?? '')} build cities: their lights can now be seen from space.`, 'life');
-    if (stage === 4) this.news('◎', `Los ${s.species?.name ?? ''} ponen en órbita su primer satélite alrededor de ${n}.`, `The ${capName(s.species?.name ?? '')} launch their first satellite around ${n}.`, 'good');
-    if (stage === 5) this.news('⇄', `Los ${s.species?.name ?? ''} ya son una especie interplanetaria.`, `The ${capName(s.species?.name ?? '')} have become an interplanetary species.`, 'good');
+    if (stage >= 3) this.peoples.advance(w, stage);
   }
 
   // ------------------------------------------------------------------ civilization
+  /** Every people: satellites, terraforming of its colonies, and colonists for free worlds. */
   private updateCivilization(dt: number) {
     const s = this.s;
-    const origin = this.origin;
-    if (!s.species) return;
-    const spacefaring = origin ? origin.life!.stage >= 4 : s.worlds.some((w) => w.colony >= 1);
+    const crowd = 1 + 0.25 * Math.max(0, this.peoples.alive().length - 1);
     for (const w of s.worlds) {
-      const settled = (w.colony >= 1 && !w.owner) || (w === origin && w.life!.stage >= 4);
-      if (settled) {
-        const target = w === origin ? 12 : 3;
-        if (w.sats < target && this.rng.next() < dt * 0.08) w.sats++;
-        if (w.colony >= 1 && !isGiantStuff(w) && w.terra < 1) {
-          const before = w.terra;
-          // Terraforming drinks water: icy worlds and moons keep it going.
-          const civ = s.civ;
-          let pace = 1;
-          if (civ) {
-            civ.res.water = Math.max(0, civ.res.water - dt * 0.04);
-            if (civ.res.water < 1) pace = 0.35;
-          }
-          w.terra = Math.min(1, w.terra + (dt / 260) * pace);
-          if (before < 0.5 && w.terra >= 0.5) this.news('☘', `${w.name} está a medio terraformar: ya llueve en sus valles.`, `${w.name} is half terraformed: rain now falls in its valleys.`, 'good');
-          if (before < 1 && w.terra >= 1) this.news('☘', `Terraformación completa: ${w.name} es un hogar verde y azul.`, `Terraforming complete: ${w.name} is a green and blue home.`, 'good');
+      const pid = peopleOf(w);
+      const p = this.peoples.get(pid);
+      if (!p || p.gone) continue;
+      const native = w.life?.people === pid;
+      const settled = (w.colony >= 1 && w.owner === pid) || (native && w.life!.stage >= 3);
+      if (!settled) continue;
+      const stage = this.peoples.stage(p);
+      const target = native ? 10 : 3;
+      if (stage >= 4 && w.sats < target && this.rng.next() < dt * 0.08) w.sats++;
+      if (!native && w.colony >= 1 && !isGiantStuff(w) && w.terra < 1) {
+        const before = w.terra;
+        // Terraforming drinks water: icy worlds and moons keep it going.
+        const civ = s.civ;
+        let pace = 1;
+        if (civ) {
+          civ.res.water = Math.max(0, civ.res.water - dt * 0.04);
+          if (civ.res.water < 1) pace = 0.35;
         }
+        w.terra = Math.min(1, w.terra + (dt / 260) * pace);
+        if (before < 0.5 && w.terra >= 0.5) this.news('☘', `${w.name} está a medio terraformar: ya llueve en sus valles.`, `${w.name} is half terraformed: rain now falls in its valleys.`, 'good');
+        if (before < 1 && w.terra >= 1) this.news('☘', `Terraformación completa: ${w.name} es un hogar verde y azul para los ${p.name}.`, `Terraforming complete: ${w.name} is a green and blue home for the ${capName(p.name)}.`, 'good');
       }
-      if (!spacefaring || !settled || w.invaded > 0.5) continue;
+      if (stage < 4 || w.invaded > 0.5) continue;
       let t = this.shipTimers.get(w.id) ?? this.rng.range(4, 12);
       t -= dt;
       if (t <= 0) {
-        t = this.rng.range(13, 22) * (s.civ?.done.elevator ? 0.6 : 1);
-        const target = this.pickTarget(w, false);
-        if (target) this.launch(w.id, target.id, false);
+        t = this.rng.range(13, 22) * (s.civ?.done.elevator ? 0.6 : 1) * crowd;
+        const tgt = this.pickTarget(w, false, pid);
+        if (tgt) this.launch(w.id, tgt.id, false, undefined, pid);
       }
       this.shipTimers.set(w.id, t);
     }
@@ -266,18 +242,19 @@ export class SystemSim {
     return toWorld(p.a);
   }
 
-  /** Nearest world still waiting for colonists (or for visitors, when `alien`). */
-  private pickTarget(from: World, alien: boolean) {
+  /** Nearest world still waiting for colonists (or for visitors, when `alien`): a free one, or a half-built colony of the same people. */
+  private pickTarget(from: World, alien: boolean, people = 0) {
     const s = this.s;
     const fw = this.worldPosW(from);
     let best: World | null = null;
     let bd = Infinity;
     for (const w of s.worlds) {
       if (w === from || !colonizable(w)) continue;
-      if (alien ? w.invaded >= 0.9 : w.colony >= 1 || (w.colony > 0 && !!w.owner) || (w.life && w.life.stage >= 2) || !!w.guest) continue;
+      const ours = !alien && people > 0 && w.owner === people && w.colony > 0 && w.colony < 1 && w.invaded < 0.5;
+      if (alien ? w.invaded >= 0.9 : !ours && !this.peoples.free(w)) continue;
       const inbound = s.ships.filter((x) => x.to === w.id && x.alien === alien).length;
       if (inbound >= 2) continue;
-      const d = Math.abs(this.worldPosW(w) - fw) + (w.parent === from.id ? -100 : 0) + (w.parent !== null && w.parent === from.parent ? -20 : 0);
+      const d = Math.abs(this.worldPosW(w) - fw) + (w.parent === from.id ? -100 : 0) + (w.parent !== null && w.parent === from.parent ? -20 : 0) + (ours ? -30 : 0);
       if (d < bd) {
         bd = d;
         best = w;
@@ -286,13 +263,13 @@ export class SystemSim {
     return best;
   }
 
-  private launch(from: number, to: number, alien: boolean, dur?: number) {
+  private launch(from: number, to: number, alien: boolean, dur?: number, people?: number) {
     const s = this.s;
     const a = from >= 0 ? this.world(from) : null;
     const b = this.world(to);
     if (!b) return;
     const dist = a ? Math.abs(this.worldPosW(a) - this.worldPosW(b)) : 40;
-    s.ships.push({ id: this.nid(), from, to, t: 0, dur: dur ?? 7 + dist * 0.28, alien, kind: alien ? 'alien' : 'colony' });
+    s.ships.push({ id: this.nid(), from, to, t: 0, dur: dur ?? 7 + dist * 0.28, alien, kind: alien ? 'alien' : 'colony', people });
   }
 
   private updateShips(dt: number) {
@@ -315,23 +292,14 @@ export class SystemSim {
     }
   }
 
+  /** Colonists without a people of this system: the ark from your previous system. */
   private colonistsArrive(w: World, ark = false) {
     const s = this.s;
-    if (w.colony >= 1 || (w.owner && w.colony > 0)) return;
-    w.owner = 0;
-    // The ark from your previous system brings the whole species at once.
-    if (ark && !s.species && s.legacySpecies) s.species = { ...s.legacySpecies };
-    w.colony = Math.min(1, w.colony + (ark ? 1 : 0.34));
-    w.invaded = Math.max(0, w.invaded - 0.15);
-    if (w.colony >= 1) {
-      const first = s.worlds.filter((x) => x.colony >= 1).length === 1;
-      this.onFx({ kind: 'colony', world: w.id });
-      const sp = s.species?.name ?? '';
-      const giant = isGiantStuff(w);
-      if (giant) this.news('⌂', `Los ${sp} levantan ciudades flotantes en las nubes de ${w.name}.`, `The ${capName(sp)} raise floating cities in the clouds of ${w.name}.`, 'good');
-      else if (w.parent !== null) this.news('⌂', `Primera colonia en la luna ${w.name}.`, `First colony on the moon ${w.name}.`, 'good');
-      else this.news('⌂', `Los ${sp} fundan una colonia en ${w.name}${first ? ': su primer hogar fuera de casa' : ''}.`, `The ${capName(sp)} found a colony on ${w.name}${first ? ': their first home away from home' : ''}.`, 'good');
-    }
+    if (!ark || !s.legacySpecies || w.colony > 0 || (w.life && w.life.stage >= 2)) return;
+    const p = this.peoples.newcomers(s.legacySpecies.name, s.legacySpecies.hue, w);
+    if (!p) return;
+    this.onFx({ kind: 'colony', world: w.id });
+    this.news('⌂', `El arca se posa en ${w.name}: los ${p.name} tienen un nuevo hogar.`, `The ark lands on ${w.name}: the ${capName(p.name)} have a new home.`, 'good');
   }
 
   // ------------------------------------------------------------------ threats
@@ -470,6 +438,12 @@ export class SystemSim {
         this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${capName(al)} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
       } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${capName(al)} enter your system. They are looking for worlds to settle.`, 'alien');
     }
+    // The peoples fight back on their own, slowly; a flare or the defence fleet is much faster.
+    for (const w of s.worlds) {
+      if (w.invaded <= 0) continue;
+      const p = this.peoples.get(peopleOf(w));
+      if (p && this.peoples.stage(p) >= 4) w.invaded = Math.max(0, w.invaded - dt * 0.0016);
+    }
     // Settled visitors spread to nearby worlds.
     for (const w of s.worlds) {
       if (w.invaded < 0.6 || s.won) continue;
@@ -553,7 +527,6 @@ export class SystemSim {
     if (!this.canAfford(COST.flare)) return false;
     s.energy -= COST.flare;
     this.onFx({ kind: 'flare', world: w.id });
-    this.peoples.flared(w);
     const had = w.invaded;
     w.invaded = Math.max(0, w.invaded - 0.75);
     if (!isGiantStuff(w)) w.atm = Math.max(0, w.atm - 0.05 * (1 - w.mag));

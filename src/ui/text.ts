@@ -64,3 +64,9 @@ export function factorName(k: keyof Factors) {
       return tr('Tamaño', 'Size');
   }
 }
+
+/** "a, b y c" / "a, b and c". */
+export function listOf(items: string[], and: string) {
+  if (items.length < 2) return items.join('');
+  return `${items.slice(0, -1).join(', ')} ${and} ${items[items.length - 1]}`;
+}

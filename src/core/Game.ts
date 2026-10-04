@@ -21,13 +21,14 @@ import { Labels } from '../ui/Labels';
 import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
 import { modal, closeTopModal, anyModal, confirmBox, closeAllModals } from '../ui/Modal';
 import { h } from '../ui/dom';
-import { fmtAge, kindName } from '../ui/text';
+import { fmtAge, kindName, listOf } from '../ui/text';
 import { capName } from '../content/names';
 import { playComets } from '../minigames/Comets';
 import { ProjectsPanel } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
+import { installTips } from '../ui/Tip';
 import { isSettled } from '../sim/civ';
-import { rivalOf } from '../sim/peoples';
+import { peopleOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
@@ -88,6 +89,7 @@ export class Game {
     this.quality = this.settings.quality;
     const sceneEl = root.querySelector('#scene') as HTMLElement;
     this.ui = root.querySelector('#ui') as HTMLElement;
+    installTips(this.ui);
     this.stage = new Stage(sceneEl, this.quality);
     this.fx = new Effects(this.stage.camera);
     this.bodiesView = new BodiesView(this.quality === 'high');
@@ -455,7 +457,15 @@ export class Game {
 
   private onFx(f: Fx) {
     const s = this.s!;
-    const own = new THREE.Color().setHSL(s.species?.hue ?? 0.35, 0.7, 0.72).getHex();
+    // Each people has its own colour; mixed fleets of the whole system glow a warm gold.
+    const tone = (id: number | undefined, l = 0.68) => {
+      const p = id ? s.peoples?.find((x) => x.id === id) : undefined;
+      return p ? new THREE.Color().setHSL(p.hue, 0.75, l).getHex() : 0xffe2b0;
+    };
+    const worldTone = (id: number) => {
+      const w = s.worlds.find((x) => x.id === id);
+      return tone(w ? peopleOf(w) : 0);
+    };
     const alien = new THREE.Color().setHSL(s.alienSpecies?.hue ?? 0.85, 0.8, 0.7).getHex();
     switch (f.kind) {
       case 'flareShip':
@@ -463,8 +473,9 @@ export class Game {
       case 'laser': {
         const from = this.worldGetter(f.world);
         const to = this.shipGetter(f.ship);
-        this.fx.laser(from, to, own);
-        setTimeout(() => this.fx.laser(from, to, own), 260);
+        const c = worldTone(f.world);
+        this.fx.laser(from, to, c);
+        setTimeout(() => this.fx.laser(from, to, c), 260);
         sound.laser();
         return;
       }
@@ -486,7 +497,7 @@ export class Game {
       }
       case 'warpOut':
       case 'warpIn':
-        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : own, f.kind === 'warpIn');
+        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : tone(f.people), f.kind === 'warpIn');
         sound.warp();
         if (f.count > 6) this.stage.shake(0.6);
         return;
@@ -518,10 +529,7 @@ export class Game {
         // Defenders fire on the raider; it either explodes or gets through.
         const to = this.shipGetter(f.ship);
         const from = this.worldGetter(f.world);
-        const tw = s.worlds.find((x) => x.id === f.world);
-        const ri = tw ? rivalOf(tw) : 0;
-        const defender = ri && s.rivals?.[ri - 1] ? new THREE.Color().setHSL(s.rivals[ri - 1].hue, 0.75, 0.65).getHex() : own;
-        this.fx.laser(from, to, defender);
+        this.fx.laser(from, to, worldTone(f.world));
         const v = to();
         if (!f.hit && v.y > -500) setTimeout(() => this.fx.boom(v.x, v.y, v.z, false, 0xffa060), 200);
         if (f.hit) {
@@ -531,18 +539,25 @@ export class Game {
         sound.laser();
         return;
       }
-      case 'siege': {
-        // The armada pounds an enemy world: lasers from the circling ships, fire on the ground.
-        const p = this.systemView.posOf(f.world);
-        if (!p) return;
-        for (let i = 0; i < 3; i++) {
-          const a = Math.random() * Math.PI * 2;
-          const from = new THREE.Vector3(p.x + Math.cos(a) * 5.5, 1, p.z + Math.sin(a) * 5.5);
-          const to = new THREE.Vector3(p.x + (Math.random() - 0.5) * 1.5, 0.3, p.z + (Math.random() - 0.5) * 1.5);
-          this.fx.laser(() => from, () => to, own);
-          setTimeout(() => this.fx.boom(to.x, to.y, to.z, Math.random() < 0.3, 0xffa060), 250);
+      case 'truce': {
+        // A treaty: a soft ring around every world of both peoples.
+        for (const w of s.worlds) {
+          const id = peopleOf(w);
+          if (id !== f.a && id !== f.b) continue;
+          const p = this.systemView.posOf(w.id);
+          if (p) this.fx.ring(p.x, p.z, tone(id, 0.8), worldRadius(w) * 3 + 3, 2.2);
         }
-        sound.laser();
+        sound.chime('good');
+        return;
+      }
+      case 'settled': {
+        const w = s.worlds.find((x) => x.id === f.world);
+        const p = this.systemView.posOf(f.world);
+        if (w && p) {
+          this.fx.ring(p.x, p.z, worldTone(w.id), worldRadius(w) * 4 + 3, 2);
+          this.fx.flash(p.x, 0, p.z, worldTone(w.id), worldRadius(w) * 3 + 2, 1.2);
+        }
+        this.colonyHint();
         return;
       }
       case 'rogueCaught': {
@@ -582,13 +597,22 @@ export class Game {
       this.fx.flash(p.x, 0, p.z, 0xa8e080, r * 5 + 3, 2);
       this.hint('s.life', '❦', () => tr('¡Vida! Mantén estable su mundo: eras glaciales, calentamientos y asteroides pondrán a prueba su salud.', 'Life! Keep its world steady: ice ages, warming and asteroids will test its health.'));
     } else if (f.kind === 'colony') {
-      this.fx.ring(p.x, p.z, 0xdcbb7a, r * 4 + 3, 2);
-      this.hint('s.colony', '⌂', () => tr('Tu especie ya viaja entre mundos. Cada tipo de mundo aporta algo distinto: los gigantes dan combustible, los helados agua, los rocosos metal y los vivos ciencia.', 'Your species now travels between worlds. Each kind of world gives something different: giants give fuel, icy worlds water, rocky worlds metal and living worlds science.'));
+      this.fx.ring(p.x, p.z, w ? worldTone(w.id) : 0xdcbb7a, r * 4 + 3, 2);
+      this.colonyHint();
     } else if (f.kind === 'arkLaunch') {
       this.fx.flash(p.x, 0, p.z, 0xfff0c0, 24, 2.5);
       this.fx.ring(p.x, p.z, 0xfff0c0, 30, 3);
       sound.whoosh();
     }
+  }
+
+  private colonyHint() {
+    this.hint('s.colony', '⌂', () =>
+      tr(
+        'Un pueblo ya viaja entre mundos. Tú no eres ninguno de ellos: los observas a todos y decides si intervienes. Cada tipo de mundo aporta algo: los gigantes dan combustible, los helados agua, los rocosos metal y los vivos ciencia.',
+        'A people now travels between worlds. You are none of them: you watch over them all and choose whether to step in. Each kind of world gives something: giants give fuel, icy worlds water, rocky worlds metal and living worlds science.',
+      ),
+    );
   }
 
   private onFormationEvent(e: FormationEvent) {
@@ -1056,11 +1080,15 @@ export class Game {
 
   private victory() {
     const s = this.s!;
-    const sp = s.species ?? s.legacySpecies;
+    // The ark carries every people of the system; the next one remembers them by the most advanced.
+    const lead = this.sim?.peoples.leader();
+    const sp = lead ? { name: lead.name, hue: lead.hue } : s.legacySpecies;
     if (!sp) return;
+    const names = (s.peoples ?? []).filter((p) => !p.gone).map((p) => p.name);
+    const many = names.length > 1;
     s.tutorials.victory = true;
     this.hold++;
-    const reached = s.worlds.filter((w) => w.colony >= 1 || w.life?.origin).length;
+    const reached = s.worlds.filter((w) => isSettled(w)).length;
     modal(this.ui, {
       title: tr('Hacia otras estrellas', 'To other stars'),
       cls: 'victory',
@@ -1070,8 +1098,12 @@ export class Game {
           'p',
           { class: 'lore' },
           tr(
-            `Los ${sp.name} habitan cada rincón de ${s.name}. Su arca ya surca la oscuridad entre las estrellas, llevando consigo un poco del polvo del que todos estamos hechos.`,
-            `The ${capName(sp.name)} live in every corner of ${s.name}. Their ark is already crossing the dark between the stars, carrying a little of the dust we are all made of.`,
+            many
+              ? `Los pueblos de ${s.name} (${listOf(names, 'y')}) habitan cada rincón del sistema. Su arca ya surca la oscuridad entre las estrellas, llevando consigo un poco del polvo del que todos estamos hechos.`
+              : `Los ${sp.name} habitan cada rincón de ${s.name}. Su arca ya surca la oscuridad entre las estrellas, llevando consigo un poco del polvo del que todos estamos hechos.`,
+            many
+              ? `The peoples of ${s.name} (${listOf(names.map(capName), 'and')}) live in every corner of the system. Their ark is already crossing the dark between the stars, carrying a little of the dust we are all made of.`
+              : `The ${capName(sp.name)} live in every corner of ${s.name}. Their ark is already crossing the dark between the stars, carrying a little of the dust we are all made of.`,
           ),
         ),
         h(
@@ -1312,7 +1344,10 @@ export class Game {
     this.projects = panel;
     const close = modal(this.ui, {
       title: tr('Grandes obras', 'Great works'),
-      lore: tr('Cada mundo aporta lo suyo: los gigantes, combustible; los helados, agua; los rocosos, metal; los mundos vivos, ciencia.', 'Each world contributes its own: giants give fuel, icy worlds water, rocky worlds metal, living worlds science.'),
+      lore: tr(
+        'Tú inspiras; los pueblos construyen. Cada mundo aporta lo suyo: los gigantes, combustible; los helados, agua; los rocosos, metal; los mundos vivos, ciencia.',
+        'You inspire; the peoples build. Each world contributes its own: giants give fuel, icy worlds water, rocky worlds metal, living worlds science.',
+      ),
       wide: true,
       cls: 'works-modal',
       body: [panel.el],
@@ -1341,10 +1376,10 @@ export class Game {
       worldXZ(w, byId, tmp);
       let f = '';
       if (w.life) f += '<span class="l">❦</span>';
-      const ri = rivalOf(w);
-      const rv = ri ? s.rivals?.[ri - 1] : undefined;
-      if (rv) f += `<span style="color:hsl(${Math.round(rv.hue * 360)} 70% 62%)">⌂</span>`;
-      else if (w.colony >= 1) f += '<span class="c">⌂</span>';
+      const pid = peopleOf(w);
+      const pp = pid && w.colony >= 1 ? s.peoples?.find((x) => x.id === pid) : undefined;
+      if (pp) f += `<span style="color:hsl(${Math.round(pp.hue * 360)} 70% 62%)">⌂</span>`;
+      else if (w.colony >= 1 || w.guest) f += '<span class="c">⌂</span>';
       if (w.invaded > 0.3) f += '<span class="a">⚠</span>';
       const r = worldRadius(w);
       const px = r / this.stage.pixelScale(tmp.x, 0, tmp.z);

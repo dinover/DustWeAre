@@ -63,7 +63,7 @@ export const PROJECTS: ProjectDef[] = [
     time: 45,
     name: { es: 'Escudo planetario', en: 'Planetary shield' },
     desc: { es: 'Láseres en órbita vigilan el cielo de cada colonia y pulverizan las rocas que se acercan.', en: 'Orbital lasers watch over every colony’s sky and shatter incoming rocks.' },
-    effect: { es: 'Los asteroides ya no alcanzan tus mundos habitados; resiste supernovas y superllamaradas.', en: 'Asteroids no longer reach your settled worlds; it withstands supernovae and superflares.' },
+    effect: { es: 'Los asteroides ya no alcanzan los mundos habitados; resiste supernovas y superllamaradas.', en: 'Asteroids no longer reach the settled worlds; it withstands supernovae and superflares.' },
   },
   {
     id: 'fleet',

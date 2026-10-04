@@ -112,7 +112,7 @@ export class ProjectsPanel {
       'armada',
       '⚔',
       tr('Lanzar la armada', 'Launch the armada'),
-      tr('Todas tus naves se reúnen, forman y saltan a la vez: contra los invasores, o hacia lo desconocido.', 'All your ships gather, form up and jump at once: against the invaders, or into the unknown.'),
+      tr('Naves de todos los pueblos se reúnen, forman y saltan a la vez: contra los invasores, o hacia lo desconocido.', 'Ships of every people gather, form up and jump at once: against the invaders, or into the unknown.'),
       tr('¡Convocar!', 'Muster!'),
       () => {
         this.on.armada();

@@ -128,6 +128,7 @@ export class Hud {
   private progBar = h('div', { class: 'vessel' }, h('i'));
   private row2 = h('div', { class: 'row2' });
   private settleBtn: HTMLButtonElement;
+  private subHtml = '';
   private energyVal = h('b');
   private energyBar = h('div', { class: 'vessel' }, h('i'));
   private speedBtns: HTMLButtonElement[] = [];
@@ -174,7 +175,7 @@ export class Hud {
     }), h('button', { class: 'btn small', title: tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
-    this.resEl.title = tr('Recursos de tu civilización', 'Your civilization’s resources');
+    this.resEl.title = tr('Recursos que reúnen los pueblos del sistema', 'Resources gathered by the peoples of the system');
     this.resEl.addEventListener('click', () => this.on.works());
     const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
     this.decisionsEl = h('div', { class: 'decisions' });
@@ -304,12 +305,14 @@ export class Hud {
     if (this.ageT <= 0) {
       this.ageT = 0.6;
       let ageTxt = fmtAge(s.age);
-      if (s.civStart != null && s.species) {
+      let ageTip = tr('Edad del sistema', 'Age of the system');
+      if (s.civStart != null && s.peoples?.length) {
         const years = Math.floor(((s.age - s.civStart) * 1e6) / 50) * 50;
-        ageTxt = tr(`Año ${int(years)} de los ${s.species.name}`, `Year ${int(years)} of the ${capName(s.species.name)}`);
+        ageTxt = tr(`Año ${int(years)}`, `Year ${int(years)}`);
+        ageTip = tr(`Años desde las primeras ciudades del sistema.<br>Edad del sistema: ${fmtAge(s.age)}`, `Years since the first cities of the system.<br>Age of the system: ${fmtAge(s.age)}`);
       }
-      const html = `<span class="phase-chip">${phase}</span><span class="age-txt">${ageTxt}</span>`;
-      if (this.sub.innerHTML !== html) this.sub.innerHTML = html;
+      const html = `<span class="phase-chip">${phase}</span><span class="age-txt" data-tip="${ageTip}">${ageTxt}</span>`;
+      if (this.subHtml !== html) this.sub.innerHTML = this.subHtml = html;
     }
     const e = Math.floor(s.energy);
     this.energyVal.textContent = `${e}`;
@@ -341,14 +344,15 @@ export class Hud {
       const reached = info.reached ?? 0;
       const total = info.total ?? 1;
       const ark = s.arkTimer > 0 && !s.won;
-      this.progLabel.innerHTML = `<span>${lifeTxt}</span><b>${ark ? tr('El arca se prepara', 'The ark is getting ready') : s.species ? tr(`${reached} de ${total} mundos habitados`, `${reached} of ${total} worlds settled`) : tr(`${info.living ?? 0} mundos con vida`, `${info.living ?? 0} living worlds`)}</b>`;
-      const v = ark ? Math.min(1, s.arkTimer / 60) : s.species ? reached / Math.max(1, total) : Math.min(1, (top + 1) / 6);
+      const peoples = !!s.peoples?.length;
+      this.progLabel.innerHTML = `<span>${lifeTxt}</span><b>${ark ? tr('El arca se prepara', 'The ark is getting ready') : peoples ? tr(`${reached} de ${total} mundos habitados`, `${reached} of ${total} worlds settled`) : tr(`${info.living ?? 0} mundos con vida`, `${info.living ?? 0} living worlds`)}</b>`;
+      const v = ark ? Math.min(1, s.arkTimer / 60) : peoples ? reached / Math.max(1, total) : Math.min(1, (top + 1) / 6);
       (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(v * 100)}%`);
       this.progBar.className = ark ? 'vessel gold' : 'vessel moss';
       this.row2.style.display = 'none';
       const late = info.late;
       if (late) {
-        // The late game: the era, the great work under way, and how far the species has spread.
+        // The late game: the era, the great work under way, and how far the peoples have spread.
         this.progLabel.innerHTML = `<span>${late.era}</span><b>${late.label}</b>`;
         (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(late.v * 100)}%`);
         this.progBar.className = 'vessel gold';

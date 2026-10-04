@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { omega, toWorld, type GameState, type Ship, type ShipKind, type World } from '../core/state';
 import { worldStats, isGiantStuff } from '../sim/worlds';
 import { isSettled } from '../sim/civ';
+import { peopleOf } from '../sim/peoples';
 import { PlanetMesh, baseLook, lookOfWorld, ringStyleOf, type Look } from './Planet';
 import { glowTexture } from './Stage';
 import { worldRadius, worldXZ } from './layout';
@@ -34,7 +35,7 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   ark: { hull: 'ark', size: 1.8, px: 22 },
 };
 
-/** Faction colours: yours (your species' hue), rivals (their hue), traders gold, refugees teal, invaders violet. */
+/** Faction colours: every people its own hue, traders gold, refugees teal, invaders violet. */
 export const FACTION = { trader: new THREE.Color(1, 0.8, 0.32), refugee: new THREE.Color(0.45, 0.95, 0.85) };
 
 const SHIP_VS = /* glsl */ `
@@ -304,10 +305,27 @@ export class SystemView {
     if (kind === 'trader') return out.copy(FACTION.trader);
     if (kind === 'refugee') return out.copy(FACTION.refugee);
     if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
-    const rival = sh.people ? s.rivals?.[sh.people - 1] : undefined;
-    if (rival) return out.setHSL(rival.hue, 0.75, 0.6);
     const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';
-    return out.setHSL(s.species?.hue ?? 0.35, cargo ? 0.5 : 0.75, cargo ? 0.55 : 0.58);
+    // Whose ship: its own mark, else the people of the world it left (or is heading to).
+    let pid = sh.people ?? 0;
+    if (!pid) {
+      const w = this.byId.get(sh.from) ?? this.byId.get(sh.to);
+      if (w) pid = peopleOf(w);
+    }
+    const hue = pid ? this.peopleHue(s, pid) : sh.from === -1 && s.legacySpecies ? s.legacySpecies.hue : -1;
+    if (hue < 0) return out.setHSL(0.11, 0.25, 0.75);
+    return out.setHSL(hue, cargo ? 0.6 : 0.85, cargo ? 0.52 : 0.6);
+  }
+
+  private peopleHue(s: GameState, id: number) {
+    const p = s.peoples?.find((x) => x.id === id);
+    return p ? p.hue : -1;
+  }
+
+  /** Colour of a people (pale gold for a mixed or unknown crew). */
+  private peopleColor(s: GameState, id: number | undefined, out: THREE.Color, sat = 0.85, l = 0.6) {
+    const hue = id ? this.peopleHue(s, id) : -1;
+    return hue < 0 ? out.setHSL(0.11, 0.3, 0.72) : out.setHSL(hue, sat, l);
   }
 
   update(s: GameState, dt: number, time: number) {
@@ -385,7 +403,6 @@ export class SystemView {
     this.shipXYZ.clear();
     this.hulls.begin();
     let n = 0;
-    const sp = s.species?.hue ?? 0.35;
     const civ = s.civ;
     for (const sh of s.ships) {
       if (n >= MAX_SHIPS) break;
@@ -434,8 +451,9 @@ export class SystemView {
       const fx = ar.x / len;
       const fz = ar.z / len;
       dir.set(fx, 0, fz);
-      hue.setHSL(sp, 0.75, 0.62);
       for (let i = 0; i < count && p < MAX_POINTS; i++, p++) {
+        // Every people sends its own ships: the formation shows them side by side.
+        this.peopleColor(s, ar.crew?.[i], hue, 0.8, 0.62);
         const row = Math.floor((i + 1) / 2);
         const side = i === 0 ? 0 : i % 2 ? 1 : -1;
         const back = row * 1.25;
@@ -456,7 +474,7 @@ export class SystemView {
       const fx = fl.x / len;
       const fz = fl.z / len;
       dir.set(fx, 0, fz);
-      hue.setHSL(sp, 0.7, 0.62);
+      this.peopleColor(s, fl.people, hue, 0.8, 0.62);
       for (let i = 0; i < fl.gathered && p < MAX_POINTS; i++, p++) {
         const row = Math.floor((i + 1) / 2);
         const side = i === 0 ? 0 : i % 2 ? 1 : -1;
@@ -469,8 +487,8 @@ export class SystemView {
     }
     // The armada over an enemy world: circling it while the battle rages.
     if (ar && ar.phase === 'battle') {
-      hue.setHSL(sp, 0.75, 0.62);
       for (let i = 0; i < ar.launched && p < MAX_POINTS; i++, p++) {
+        this.peopleColor(s, ar.crew?.[i], hue, 0.8, 0.62);
         const a = time * 0.9 + (i / ar.launched) * TAU;
         const r = 5 + (i % 3) * 1.2;
         v.set(ar.x + Math.cos(a) * r, 1 + Math.sin(a * 3) * 0.4, ar.z + Math.sin(a) * r);
@@ -483,9 +501,9 @@ export class SystemView {
     }
     // Defence fleet: guard ships circling every settled world.
     if (civ?.done.fleet) {
-      hue.setHSL(sp, 0.7, 0.6);
       for (const w of s.worlds) {
         if (!isSettled(w)) continue;
+        this.peopleColor(s, peopleOf(w), hue, 0.75, 0.6);
         const c = worldXZ(w, this.byId, this.tmp);
         const r = worldRadius(w) * 2.1 + 1;
         for (let j = 0; j < 3; j++) {

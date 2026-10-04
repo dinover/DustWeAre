@@ -1,13 +1,188 @@
 import { int, num, pick, tr } from '../i18n';
-import { habZone, massOf, snowLine, type GameState, type World } from '../core/state';
+import { habZone, massOf, snowLine, type GameState, type People, type World } from '../core/state';
 import type { WorldStats } from '../sim/worlds';
 import { STAGE_NAMES, STAGE_TIME } from '../sim/system';
 import { capName } from '../content/names';
 import { h, stone, clear } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
-import { RELATION_TEXT, rivalOf } from '../sim/peoples';
+import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
 
 const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
+const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
+/** Safe inside a double-quoted HTML attribute. */
+const attr = (t: string) => t.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
+// ------------------------------------------------------------------ peoples
+
+const peopleById = (s: GameState, id: number | undefined) => (id ? s.peoples?.find((p) => p.id === id) : undefined);
+const pName = (p: People) => tr(p.name, capName(p.name));
+const pTag = (p: People) => `<b style="color:${hsl(p.hue, 75, 66)}">${pName(p)}</b>`;
+
+/** Worlds a people lives on, and how far it has come. */
+function peopleInfo(s: GameState, p: People) {
+  const worlds = s.worlds.filter((w) => (w.life?.people === p.id && w.life.stage >= 2) || (w.owner === p.id && w.colony >= 1));
+  const home = s.worlds.find((w) => w.id === p.home);
+  const stage = home?.life?.people === p.id ? home.life.stage : p.arrived || p.parents ? 5 : 4;
+  return { worlds, stage, home };
+}
+
+/** Sentence for a relation between two peoples. */
+function relationSentence(state: keyof typeof RELATION_TEXT, a: People, b: People) {
+  const A = pName(a);
+  const B = pName(b);
+  switch (state) {
+    case 'war':
+      return tr(`Los ${A} y los ${B} están en guerra: sus naves se atacan entre los mundos.`, `The ${A} and the ${B} are at war: their ships strike each other between the worlds.`);
+    case 'tension':
+      return tr(`Los ${A} y los ${B} se miran con recelo. Una chispa más y podría estallar una guerra.`, `The ${A} and the ${B} eye each other warily. One more spark and a war could break out.`);
+    case 'alliance':
+      return tr(`Los ${A} y los ${B} son aliados: comparten rutas, ciencia y defensa, y con el tiempo pueden mezclarse en un pueblo nuevo.`, `The ${A} and the ${B} are allies: they share routes, science and defence, and in time they may blend into a new people.`);
+    default:
+      return tr(`Los ${A} y los ${B} viven en paz.`, `The ${A} and the ${B} live in peace.`);
+  }
+}
+
+// ------------------------------------------------------------------ habitability gauges
+
+type Band = 'ok' | 'meh' | 'bad';
+interface Gauge {
+  name: string;
+  value: string;
+  verdict: string;
+  band: Band;
+  /** Marker position 0..1 along the gauge. */
+  pos: number;
+  /** Zones along the gauge: [from, to, band] in 0..1. */
+  zones: [number, number, Band][];
+  lo: string;
+  hi: string;
+  tip: string;
+}
+
+const BAND_COL: Record<Band, string> = { ok: 'rgba(152,199,112,.75)', meh: 'rgba(229,182,90,.5)', bad: 'rgba(255,110,60,.38)' };
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+/** Zones from value thresholds on a (possibly logarithmic) scale. */
+function zonesOf(scale: (v: number) => number, cuts: number[], bands: Band[]): [number, number, Band][] {
+  const at = [0, ...cuts.map((c) => clamp01(scale(c))), 1];
+  return bands.map((b, i) => [at[i], at[i + 1], b] as [number, number, Band]);
+}
+
+function bandOf(f: number): Band {
+  return f >= 0.95 ? 'ok' : f >= 0.5 ? 'meh' : 'bad';
+}
+
+/** Every factor of habitability as a gauge: where it is, where it should be, and which way it is off. */
+function gauges(w: World, st: WorldStats): Gauge[] {
+  const out: Gauge[] = [];
+  const m = massOf(w);
+  // Temperature, in °C.
+  {
+    const c = st.T - 273;
+    const scale = (v: number) => (v + 120) / 280;
+    const verdict = c < -35 ? tr('demasiado frío', 'far too cold') : c < 0 ? tr('frío', 'cold') : c <= 39 ? tr('ideal', 'ideal') : c <= 77 ? tr('caluroso', 'hot') : tr('demasiado caliente', 'far too hot');
+    out.push({
+      name: factorName('temp'),
+      value: fmtTemp(st.T),
+      verdict,
+      band: bandOf(st.f.temp),
+      pos: clamp01(scale(c)),
+      zones: zonesOf(scale, [-35, 0, 39, 77], ['bad', 'meh', 'ok', 'meh', 'bad']),
+      lo: tr('frío', 'cold'),
+      hi: tr('calor', 'heat'),
+      tip: tr(
+        `Ideal entre <b>0 y 39 °C</b>. Por debajo de −35 °C o por encima de 77 °C la vida no prospera.<br>Ahora: <b>${fmtTemp(st.T)}</b>${c < 0 ? ' · le falta calor' : c > 39 ? ' · le sobra calor' : ''}.`,
+        `Ideal between <b>0 and 39 °C</b>. Below −35 °C or above 77 °C life cannot thrive.<br>Now: <b>${fmtTemp(st.T)}</b>${c < 0 ? ' · it needs warmth' : c > 39 ? ' · it is too warm' : ''}.`,
+      ),
+    });
+  }
+  if (!st.giant) {
+    // Water: how much of the surface is covered.
+    const o = st.ocean;
+    out.push({
+      name: factorName('water'),
+      value: pct(o),
+      verdict: o < 0.02 ? tr('seco', 'dry') : o < 0.2 ? tr('escasa', 'scarce') : o >= 0.85 ? tr('océano global', 'global ocean') : tr('suficiente', 'enough'),
+      band: bandOf(st.f.water),
+      pos: clamp01(o),
+      zones: zonesOf((v) => v, [0.02, 0.2], ['bad', 'meh', 'ok']),
+      lo: tr('seco', 'dry'),
+      hi: tr('océano', 'ocean'),
+      tip: tr(`Parte de la superficie cubierta de agua. Hace falta al menos un <b>20 %</b>.<br>Ahora: <b>${pct(o)}</b>.`, `Share of the surface covered by water. It needs at least <b>20%</b>.<br>Now: <b>${pct(o)}</b>.`),
+    });
+    // Atmosphere: air pressure, on a logarithmic scale.
+    const p = st.atm;
+    const scale = (v: number) => (Math.log10(Math.max(v, 1e-3)) + 2.5) / 4.8;
+    out.push({
+      name: factorName('atm'),
+      value: `${num(p, p < 10 ? 2 : 0)} atm`,
+      verdict: p < 0.08 ? tr('casi sin aire', 'almost airless') : p < 0.4 ? tr('tenue', 'thin') : p <= 4 ? tr('respirable', 'breathable') : p <= 14 ? tr('densa', 'thick') : tr('asfixiante', 'crushing'),
+      band: bandOf(st.f.atm),
+      pos: clamp01(scale(p)),
+      zones: zonesOf(scale, [0.08, 0.4, 4, 14], ['bad', 'meh', 'ok', 'meh', 'bad']),
+      lo: tr('tenue', 'thin'),
+      hi: tr('densa', 'thick'),
+      tip: tr(
+        `Presión del aire. Ideal entre <b>0,4 y 4 atm</b> (la Tierra tiene 1). Muy tenue no protege; muy densa asfixia y recalienta.<br>Ahora: <b>${num(p, 2)} atm</b>${p < 0.4 ? ' · le falta aire' : p > 4 ? ' · le sobra aire' : ''}.`,
+        `Air pressure. Ideal between <b>0.4 and 4 atm</b> (Earth has 1). Too thin gives no shelter; too thick stifles and overheats.<br>Now: <b>${num(p, 2)} atm</b>${p < 0.4 ? ' · it needs more air' : p > 4 ? ' · it has too much air' : ''}.`,
+      ),
+    });
+    // Organic molecules.
+    const g = st.organics;
+    out.push({
+      name: factorName('org'),
+      value: pct(g),
+      verdict: g < 0.04 ? tr('casi nulos', 'almost none') : g < 0.3 ? tr('escasos', 'scarce') : tr('suficientes', 'enough'),
+      band: bandOf(st.f.org),
+      pos: clamp01(g),
+      zones: zonesOf((v) => v, [0.04, 0.3], ['bad', 'meh', 'ok']),
+      lo: tr('nada', 'none'),
+      hi: tr('ricos', 'rich'),
+      tip: tr(`Carbono y moléculas orgánicas, los ladrillos de la vida. Hace falta al menos un <b>30 %</b>.<br>Ahora: <b>${pct(g)}</b>.`, `Carbon and organic molecules, the building blocks of life. It needs at least <b>30%</b>.<br>Now: <b>${pct(g)}</b>.`),
+    });
+    // Magnetic field.
+    const mg = w.mag;
+    out.push({
+      name: factorName('mag'),
+      value: pct(clamp01(mg)),
+      verdict: mg < 0.05 ? tr('casi nulo', 'almost none') : mg < 0.25 ? tr('débil', 'weak') : tr('protector', 'protective'),
+      band: bandOf(st.f.mag),
+      pos: clamp01(mg),
+      zones: zonesOf((v) => v, [0.25], ['meh', 'ok']),
+      lo: tr('nulo', 'none'),
+      hi: tr('fuerte', 'strong'),
+      tip: tr(`Escudo contra el viento estelar, que roba el aire. Basta con un <b>25 %</b>; nace de un núcleo de hierro.<br>Ahora: <b>${pct(clamp01(mg))}</b>.`, `A shield against the stellar wind, which strips the air. <b>25%</b> is enough; it comes from an iron core.<br>Now: <b>${pct(clamp01(mg))}</b>.`),
+    });
+  }
+  // Size: Earth masses, on a logarithmic scale.
+  {
+    const scale = (v: number) => (Math.log10(Math.max(v, 1e-3)) + 2.5) / 5.2;
+    const verdict = st.giant ? tr('gigante sin suelo', 'giant, no ground') : m < 0.03 ? tr('demasiado pequeño', 'far too small') : m < 0.1 ? tr('pequeño', 'small') : m <= 8 ? tr('adecuado', 'right') : m <= 14 ? tr('pesado', 'heavy') : tr('demasiado masivo', 'far too massive');
+    out.push({
+      name: factorName('mass'),
+      value: tr(`${num(m, m < 1 ? 2 : 1)} Tierras`, `${num(m, m < 1 ? 2 : 1)} Earths`),
+      verdict,
+      band: bandOf(st.f.mass),
+      pos: clamp01(scale(m)),
+      zones: zonesOf(scale, [0.03, 0.1, 8, 14], ['bad', 'meh', 'ok', 'meh', 'bad']),
+      lo: tr('pequeño', 'small'),
+      hi: tr('enorme', 'huge'),
+      tip: tr(
+        `Masa, en Tierras. Ideal entre <b>0,1 y 8</b>: más pequeño pierde el aire, más grande aplasta y se vuelve un gigante de gas.<br>Ahora: <b>${num(m, 2)}</b>.`,
+        `Mass, in Earths. Ideal between <b>0.1 and 8</b>: smaller loses its air, bigger crushes and turns into a gas giant.<br>Now: <b>${num(m, 2)}</b>.`,
+      ),
+    });
+  }
+  return out;
+}
+
+function gaugeHtml(g: Gauge) {
+  const grad = g.zones.map(([a, b, band]) => `${BAND_COL[band]} ${(a * 100).toFixed(1)}% ${(b * 100).toFixed(1)}%`).join(', ');
+  return `<div class="hab-row ${g.band}" data-tip="${attr(`<b>${g.name}</b><br>${g.tip}`)}">
+    <div class="hab-top"><span>${g.name}</span><span class="hv">${g.value} · <b>${g.verdict}</b></span></div>
+    <div class="hab-gauge"><small>${g.lo}</small><div class="gauge" style="background:linear-gradient(90deg, ${grad})"><i style="left:${(g.pos * 100).toFixed(1)}%"></i></div><small>${g.hi}</small></div>
+  </div>`;
+}
 
 const ROLE_RES: Record<Role, 'fuel' | 'water' | 'metal' | 'science'> = { fuel: 'fuel', water: 'water', metal: 'metal', science: 'science' };
 
@@ -45,7 +220,7 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 export function advice(w: World, st: WorldStats): { text: string; warn: boolean } {
   const m = massOf(w);
   if (st.giant)
-    return { text: tr('Un gigante no tiene suelo firme, pero sus lunas podrían albergar vida. Más adelante, una especie viajera podría construir ciudades en sus nubes.', 'A giant has no solid ground, but its moons could harbour life. Later on, a travelling species could build cities in its clouds.'), warn: false };
+    return { text: tr('Un gigante no tiene suelo firme, pero sus lunas podrían albergar vida. Más adelante, un pueblo viajero podría construir ciudades en sus nubes.', 'A giant has no solid ground, but its moons could harbour life. Later on, a travelling people could build cities in its clouds.'), warn: false };
   if (st.f.mass < 0.3 && m < 0.1)
     return { text: tr('Es demasiado pequeño para retener aire y agua por mucho tiempo. Puede servir de puerto para futuras colonias.', 'It is too small to hold on to air and water for long. It may serve as a harbour for future colonies.'), warn: true };
   let worst: keyof typeof st.f = 'temp';
@@ -100,6 +275,7 @@ export class Inspector {
   private body: HTMLElement;
   private extra: HTMLElement;
   private slider: HTMLInputElement | null = null;
+  private html = '';
   target: number | 'star' | null = null;
 
   constructor(
@@ -161,34 +337,25 @@ export class Inspector {
       .join('');
     const massTxt = m < 0.01 ? tr('menos de un centésimo de la Tierra', 'under a hundredth of Earth') : tr(`${num(m, m < 1 ? 2 : 1)} masas terrestres`, `${num(m, m < 1 ? 2 : 1)} Earth masses`);
     const H = Math.round(st.H * 100);
-    const fac = FACTOR_KEYS.map((k) => {
-      const v = st.f[k];
-      const cls = v >= 0.95 ? 'ok' : v >= 0.5 ? 'meh' : 'bad';
-      const mark = v >= 0.95 ? '✓' : v >= 0.5 ? '~' : '✕';
-      return `<span>${factorName(k)}</span><div class="vessel thin ${v >= 0.95 ? 'moss' : v >= 0.5 ? 'gold' : ''}"><i style="--v:${Math.round(v * 100)}%"></i></div><span class="${cls}">${mark}</span>`;
-    }).join('');
+    const fac = gauges(w, st).map(gaugeHtml).join('');
     const adv = advice(w, st);
     let html = `
       <section><h3>${tr('COMPOSICIÓN', 'COMPOSITION')}</h3>
         <div class="comp">${comp}</div><div class="legend">${legend}</div>
         <div class="stat"><span>${tr('Masa', 'Mass')}</span><span>${massTxt}</span></div>
       </section>
-      <section><h3>${tr('CLIMA', 'CLIMATE')}</h3>
-        <div class="stat"><span>${tr('Temperatura', 'Temperature')}</span><span>${fmtTemp(st.T)} · ${tempWord(st.T)}</span></div>
-        ${st.giant ? '' : `<div class="stat"><span>${tr('Presión del aire', 'Air pressure')}</span><span>${num(st.atm, st.atm < 10 ? 2 : 0)} atm</span></div>
-        <div class="stat"><span>${tr('Océanos', 'Oceans')}</span><span>${pct(st.ocean)}</span></div>`}
-      </section>
       <section><h3>${tr('HABITABILIDAD', 'HABITABILITY')}</h3>
-        <div class="hab-head"><div class="hab-ring" style="--p:${H}"><b>${H}%</b></div>
-        <div class="small muted">${st.H >= 0.62 ? tr('Puede albergar vida.', 'It can harbour life.') : st.H >= 0.3 ? tr('Casi… le falta poco.', 'Almost… it needs a little more.') : tr('Hostil para la vida tal como la conocemos.', 'Hostile to life as we know it.')}</div></div>
-        <div class="factors">${fac}</div>
+        <div class="hab-head"><div class="hab-ring" style="--p:${H}" data-tip="${attr(tr('Habitabilidad: todas las condiciones juntas. Basta con que una sea mala para que baje mucho. La vida aparece desde el 62 %.', 'Habitability: every condition together. A single bad one pulls it right down. Life appears from 62%.'))}"><b>${H}%</b></div>
+        <div class="small muted">${st.H >= 0.62 ? tr('Puede albergar vida.', 'It can harbour life.') : st.H >= 0.3 ? tr('Casi… le falta poco.', 'Almost… it needs a little more.') : tr('Hostil para la vida tal como la conocemos.', 'Hostile to life as we know it.')}<br><span class="hab-key"><i class="ok"></i>${tr('ideal', 'ideal')} <i class="meh"></i>${tr('justo', 'marginal')} <i class="bad"></i>${tr('hostil', 'hostile')}</span></div></div>
+        <div class="hab-rows">${fac}</div>
         <div class="advice ${adv.warn ? 'warn' : ''}">${adv.text}</div>
       </section>`;
     if (w.life) {
       const l = w.life;
       const stage = pick(STAGE_NAMES[l.stage]);
       const next = l.stage < STAGE_TIME.length ? `<div class="stat"><span>${tr('Hacia', 'Towards')} ${pick(STAGE_NAMES[Math.min(5, l.stage + 1)]).toLowerCase()}</span><span>${pct(l.progress)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(l.progress * 100)}%"></i></div>` : '';
-      const sp = l.stage >= 2 && l.origin && s.species ? ` · ${tr('los', 'the')} ${l.stage >= 2 ? (pick({ es: s.species.name, en: capName(s.species.name) })) : ''}` : '';
+      const lp = l.stage >= 2 ? peopleById(s, l.people) : undefined;
+      const sp = lp ? ` · ${tr('los', 'the')} ${pName(lp)}` : '';
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3>
         <div class="stat"><span>${tr('Etapa', 'Stage')}</span><span class="moss">${stage}${sp}</span></div>
         ${next}
@@ -198,15 +365,35 @@ export class Inspector {
     } else if (w.spark > 0.5) {
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round((w.spark / 30) * 100)}%"></i></div></section>`;
     }
-    const ri = rivalOf(w);
-    const rival = ri ? s.rivals?.[ri - 1] : undefined;
-    if (rival) {
-      const home = w.life?.people === ri;
-      const rel = RELATION_TEXT[rival.relation];
-      const moodTxt = rival.mood > 0.3 ? tr('Os aprecian.', 'They like you.') : rival.mood < -0.3 ? tr('Desconfían de vosotros.', 'They distrust you.') : tr('Os observan con cautela.', 'They watch you warily.');
+    const people = peopleById(s, peopleOf(w));
+    if (people) {
+      const info = peopleInfo(s, people);
+      const home = w.life?.people === people.id;
+      const origin = people.parents
+        ? (() => {
+            const [a, b] = people.parents!.map((id) => peopleById(s, id));
+            return a && b ? tr(`Nacidos de la mezcla de los ${pTag(a)} y los ${pTag(b)}.`, `Born of the blend of the ${pTag(a)} and the ${pTag(b)}.`) : '';
+          })()
+        : people.arrived
+          ? tr('Llegados desde otra estrella.', 'Arrived from another star.')
+          : info.home
+            ? tr(`Nacidos en ${info.home.name}.`, `Born on ${info.home.name}.`)
+            : '';
+      const where = info.worlds.map((x) => x.name).join(', ');
+      let rels = '';
+      for (const r of s.relations ?? []) {
+        if (r.a !== people.id && r.b !== people.id) continue;
+        const other = peopleById(s, r.a === people.id ? r.b : r.a);
+        if (!other || other.gone) continue;
+        const txt = !r.met ? tr('aún no conocen a', 'have not yet met') : r.state === 'war' ? tr('en guerra con', 'at war with') : r.state === 'tension' ? tr('en tensión con', 'tense with') : r.state === 'alliance' ? tr('aliados de', 'allied with') : tr('en paz con', 'at peace with');
+        const ic = r.met ? RELATION_ICON[r.state] : '?';
+        rels += `<div class="rel-line ${r.met ? r.state : ''}" data-tip="${attr(r.met ? relationSentence(r.state, people, other) : tr('Se encontrarán cuando ambos puedan cruzar el espacio.', 'They will meet once both can cross space.'))}"><span class="ic">${ic}</span>${txt} ${tr('los', 'the')} ${pTag(other)}</div>`;
+      }
       html += `<section><h3>${tr('PUEBLO', 'PEOPLE')}</h3>
-        <div class="people-row big"><i style="background:${hsl(rival.hue)}"></i><span>${home ? tr(`Hogar de los ${rival.name}`, `Home of the ${capName(rival.name)}`) : tr(`Colonia de los ${rival.name}`, `Colony of the ${capName(rival.name)}`)}</span><em class="rel ${rival.relation}">${tr(rel.es, rel.en)}</em></div>
-        <div class="small muted" style="margin-top:4px">${moodTxt} ${rival.relation === 'war' ? tr('Lanza la <b>armada</b> para terminar la guerra, o espera a que pidan la paz.', 'Launch the <b>armada</b> to end the war, or wait for them to ask for peace.') : rival.relation === 'alliance' ? tr('Comparten ciencia y defensa contigo.', 'They share science and defence with you.') : tr('Una llamarada sobre sus mundos los enfadaría.', 'A flare on their worlds would anger them.')}</div>
+        <div class="people-row big"><i style="background:${hsl(people.hue)};color:${hsl(people.hue)}"></i><span>${home ? tr(`Hogar de los ${pName(people)}`, `Home of the ${pName(people)}`) : tr(`Colonia de los ${pName(people)}`, `Colony of the ${pName(people)}`)}</span><em>${pick(STAGE_NAMES[info.stage])}</em></div>
+        <div class="small muted" style="margin-top:4px">${origin} ${tr(`Viven en ${where}.`, `They live on ${where}.`)}</div>
+        ${rels ? `<div class="rel-list">${rels}</div>` : ''}
+        <div class="small muted" style="margin-top:6px">${tr('Viven a su manera: tú solo observas. Cuando la tensión crece, puedes intervenir con la luz de la estrella.', 'They live their own way: you only watch. When tension grows, you may step in with the light of the star.')}</div>
       </section>`;
     }
     {
@@ -234,12 +421,14 @@ export class Inspector {
         <div class="advice warn">${tr('Una <b>llamarada</b> solar los expulsa, aunque también castiga un poco la atmósfera.', 'A solar <b>flare</b> drives them out, though it also batters the atmosphere a little.')}</div>
       </section>`;
     }
-    this.body.innerHTML = html;
+    // Only touch the DOM when something changed (keeps hover and tooltips steady).
+    if (html !== this.html) this.body.innerHTML = this.html = html;
   }
 
   showStar(s: GameState, energyRate: number) {
     const fresh = this.target !== 'star';
     this.target = 'star';
+    this.html = '';
     this.el.style.display = '';
     this.title.textContent = s.name;
     this.kind.textContent = s.phase === 'formation' ? tr('Estrella recién nacida', 'Newborn star') : tr('Estrella de tipo solar', 'Sun-like star');
@@ -294,7 +483,10 @@ export interface LedgerHandlers {
 /** List of every world in the system: the management view. */
 export class Ledger {
   el: HTMLElement;
-  private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; flags: HTMLElement; dot: HTMLElement; name: HTMLElement }>();
+  private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; flags: HTMLElement; dot: HTMLElement; name: HTMLElement; f: string }>();
+  // Last markup written, so the DOM (and any hover on it) is only touched when something changed.
+  private peoplesHtml = '';
+  private legendHtml = '';
   private list: HTMLElement;
   private head: HTMLElement;
   private order = '';
@@ -335,9 +527,14 @@ export class Ledger {
         const name = h('span');
         const bar = h('div', { class: 'vessel thin moss' }, h('i'));
         const flags = h('span', { class: 'flags' });
-        const row = h('div', { class: `row ${w.parent !== null ? 'moon' : ''}`, onclick: () => this.on.select(w.id) }, dot, name, bar, flags);
+        // On touch screens a tap on an icon explains it instead of selecting the world.
+        const pick = (e: Event) => {
+          if ((e as PointerEvent).pointerType === 'touch' && (e.target as Element).closest('[data-tip]')) return;
+          this.on.select(w.id);
+        };
+        const row = h('div', { class: `row ${w.parent !== null ? 'moon' : ''}`, onclick: pick }, dot, name, bar, flags);
         this.list.append(row);
-        this.rows.set(w.id, { row, bar, flags, dot, name });
+        this.rows.set(w.id, { row, bar, flags, dot, name, f: '' });
       }
     }
     const threatened = new Set(s.threats.map((t) => t.target));
@@ -348,38 +545,57 @@ export class Ledger {
       r.name.textContent = w.name;
       r.dot.style.background = kindDot(st.kind);
       if (w.parent !== null) r.dot.style.transform = 'scale(.75)';
-      (r.bar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(st.H * 100)}%`);
-      r.bar.title = tr(`Habitabilidad ${Math.round(st.H * 100)} %`, `Habitability ${Math.round(st.H * 100)}%`);
+      const hab = Math.round(st.H * 100);
+      (r.bar.firstChild as HTMLElement).style.setProperty('--v', `${hab}%`);
+      r.bar.dataset.tip = tr(`<b>Habitabilidad ${hab} %</b><br>Qué tan apto es para la vida. Desde el 62 % la vida puede aparecer sola.`, `<b>Habitability ${hab}%</b><br>How fit it is for life. From 62% life can appear on its own.`);
+      const flag = (cls: string, style: string, glyph: string, tip: string) => `<span class="${cls}"${style ? ` style="${style}"` : ''} data-tip="${attr(tip)}">${glyph}</span>`;
       let f = '';
-      if (w.life) f += '<span class="moss">❦</span>';
-      const ri = rivalOf(w);
-      const rival = ri ? s.rivals?.[ri - 1] : undefined;
-      if (rival) f += `<span style="color:${hsl(rival.hue)}" title="${rival.name}">⌂</span>`;
-      else if (isSettled(w)) f += `<span class="role-dot ${ROLE_RES[roleOf(w, st)]}">${RES_ICON[ROLE_RES[roleOf(w, st)]]}</span>`;
-      else if (w.colony >= 1) f += '<span class="gold">⌂</span>';
-      if (w.invaded > 0.3) f += '<span class="violet">⚠</span>';
-      if (threatened.has(w.id)) f += '<span class="ember">☄</span>';
-      if (r.flags.innerHTML !== f) r.flags.innerHTML = f;
+      if (w.life) f += flag('moss', '', '❦', tr(`<b>Vida</b>: ${pick(STAGE_NAMES[w.life.stage]).toLowerCase()}`, `<b>Life</b>: ${pick(STAGE_NAMES[w.life.stage]).toLowerCase()}`));
+      const pp = peopleById(s, peopleOf(w));
+      if (pp) {
+        const home = w.life?.people === pp.id;
+        f += flag('', `color:${hsl(pp.hue)}`, home ? '⌂' : '⌂', home ? tr(`<b>Hogar de los ${pName(pp)}</b>`, `<b>Home of the ${pName(pp)}</b>`) : tr(`<b>Colonia de los ${pName(pp)}</b>`, `<b>Colony of the ${pName(pp)}</b>`));
+      } else if (w.guest) f += flag('water', '', '⌂', tr(`<b>Refugiados</b>: los ${w.guest}, llegados de otra estrella`, `<b>Refugees</b>: the ${capName(w.guest)}, from another star`));
+      if (isSettled(w)) {
+        const res = ROLE_RES[roleOf(w, st)];
+        f += flag(`role-dot ${res}`, '', RES_ICON[res], tr(`Aporta <b>${resWord(res)}</b> a los pueblos del sistema`, `Gives <b>${resWord(res)}</b> to the peoples of the system`));
+      }
+      if (pp && (s.relations ?? []).some((x) => x.state === 'war' && (x.a === pp.id || x.b === pp.id))) f += flag('rel war', '', '⚔', tr(`Los ${pName(pp)} están en guerra`, `The ${pName(pp)} are at war`));
+      if (w.invaded > 0.3) f += flag('violet', '', '⚠', tr('<b>Ocupado</b> por invasores de otra estrella. Una llamarada los expulsa.', '<b>Occupied</b> by invaders from another star. A flare drives them out.'));
+      if (threatened.has(w.id)) f += flag('ember', '', '☄', tr('<b>Un asteroide</b> se dirige hacia aquí. Una llamarada puede desviarlo.', '<b>An asteroid</b> is heading here. A flare can deflect it.'));
+      if (r.f !== f) r.flags.innerHTML = r.f = f;
       r.row.classList.toggle('sel', selected === w.id);
     }
-    // The peoples of the system and how they get along with yours.
+    // The peoples of the system, all equal, and how they get along with each other.
     let ph = '';
-    if (s.species) {
-      ph += `<div class="people-row"><i style="background:${hsl(s.species.hue)}"></i><span>${tr('Los', 'The')} ${tr(s.species.name, capName(s.species.name))}</span><em>${tr('tu especie', 'your species')}</em></div>`;
-      for (const r of s.rivals ?? []) {
-        const rel = RELATION_TEXT[r.relation];
-        ph += `<div class="people-row"><i style="background:${hsl(r.hue)}"></i><span>${tr('Los', 'The')} ${tr(r.name, capName(r.name))}</span><em class="rel ${r.relation}">${tr(rel.es, rel.en)}</em></div>`;
+    const alive = (s.peoples ?? []).filter((p) => !p.gone);
+    if (alive.length) {
+      ph += `<div class="peoples-head" data-tip="${attr(tr('No eres ninguno de ellos: los observas a todos. Viven, se mezclan, comercian y guerrean por su cuenta; tú decides si intervienes.', 'You are none of them: you watch over them all. They live, blend, trade and fight on their own; you decide whether to step in.'))}">${tr('PUEBLOS', 'PEOPLES')} · ${alive.length}</div>`;
+      for (const p of alive) {
+        const info = peopleInfo(s, p);
+        const stageTxt = pick(STAGE_NAMES[info.stage]);
+        const tip = `<b>${tr('Los', 'The')} ${pName(p)}</b><br>${stageTxt} · ${tr(`${info.worlds.length} ${info.worlds.length === 1 ? 'mundo' : 'mundos'}`, `${info.worlds.length} ${info.worlds.length === 1 ? 'world' : 'worlds'}`)}: ${info.worlds.map((x) => x.name).join(', ')}`;
+        ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:${hsl(p.hue)};color:${hsl(p.hue)}"></i><span>${tr('Los', 'The')} ${pName(p)}</span><em>${info.worlds.length} ⌂</em></div>`;
       }
+      let chips = '';
+      for (const r of s.relations ?? []) {
+        const a = peopleById(s, r.a);
+        const b = peopleById(s, r.b);
+        if (!r.met || !a || !b || a.gone || b.gone) continue;
+        const rel = RELATION_TEXT[r.state];
+        chips += `<span class="rel-chip ${r.state}" data-tip="${attr(`<b>${tr(rel.es, rel.en)}</b><br>${relationSentence(r.state, a, b)}`)}"><i style="background:${hsl(a.hue)}"></i>${RELATION_ICON[r.state]}<i style="background:${hsl(b.hue)}"></i></span>`;
+      }
+      if (chips) ph += `<div class="rel-chips">${chips}</div>`;
     }
-    if (this.peoplesEl.innerHTML !== ph) this.peoplesEl.innerHTML = ph;
+    if (this.peoplesHtml !== ph) this.peoplesEl.innerHTML = this.peoplesHtml = ph;
     // What the ship colours mean.
     let lg = '';
-    if (s.species) {
-      lg += `<span><b style="color:${hsl(s.species.hue)}">➤</b> ${tr('tuyas', 'yours')}</span>`;
-      for (const r of s.rivals ?? []) lg += `<span><b style="color:${hsl(r.hue)}">➤</b> ${tr(r.name, capName(r.name))}</span>`;
-      lg += `<span><b style="color:#ffcc52">◆</b> ${tr('comercio', 'traders')}</span>`;
-      if (s.alienSpecies) lg += `<span><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr('invasores', 'invaders')}</span>`;
+    if (alive.length || s.ships.length) {
+      for (const p of alive) lg += `<span data-tip="${attr(tr(`Naves de los ${pName(p)}`, `Ships of the ${pName(p)}`))}"><b style="color:${hsl(p.hue, 85, 60)}">➤</b> ${pName(p)}</span>`;
+      lg += `<span data-tip="${attr(tr('Mercaderes de otras estrellas', 'Traders from other stars'))}"><b style="color:#ffcc52">◆</b> ${tr('comercio', 'traders')}</span>`;
+      if (s.ships.some((x) => x.kind === 'refugee')) lg += `<span data-tip="${attr(tr('Refugiados que buscan un mundo', 'Refugees looking for a world'))}"><b style="color:#73f2d9">●</b> ${tr('refugiados', 'refugees')}</span>`;
+      if (s.alienSpecies) lg += `<span data-tip="${attr(tr('Invasores de otra estrella', 'Invaders from another star'))}"><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr('invasores', 'invaders')}</span>`;
     }
-    if (this.legend.innerHTML !== lg) this.legend.innerHTML = lg;
+    if (this.legendHtml !== lg) this.legend.innerHTML = this.legendHtml = lg;
   }
 }

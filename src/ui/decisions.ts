@@ -2,6 +2,7 @@ import { int, tr } from '../i18n';
 import type { Decision, GameState, Resources } from '../core/state';
 import { capName } from '../content/names';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
+import { peopleOf } from '../sim/peoples';
 import type { DecisionView } from './Hud';
 import { resName } from './Projects';
 
@@ -16,7 +17,9 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
   const wn = w?.name ?? '';
   const spEs = d.species ?? '';
   const spEn = capName(d.species ?? '');
-  const mine = s.species?.name ?? '';
+  const nameOf = (id: number | undefined) => s.peoples?.find((p) => p.id === id)?.name ?? '';
+  const local = w ? nameOf(peopleOf(w)) : '';
+  const [pa, pb] = (d.pair ?? [0, 0]).map(nameOf);
   const base = { id: d.id, left: d.left, dur: d.dur };
   switch (d.kind) {
     case 'trade':
@@ -57,59 +60,43 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
         ...base,
         icon: '◬',
         title: tr(`Un artefacto en ${wn}`, `An artefact on ${wn}`),
-        body: tr(
-          `Bajo el suelo de ${wn}, los ${mine} encuentran una estructura que nadie de este sistema construyó.`,
-          `Beneath the ground of ${wn}, the ${capName(mine)} find a structure that no one in this system built.`,
-        ),
+        body: local
+          ? tr(
+              `Bajo el suelo de ${wn}, los ${local} encuentran una estructura que nadie de este sistema construyó.`,
+              `Beneath the ground of ${wn}, the ${capName(local)} find a structure that no one in this system built.`,
+            )
+          : tr(`Bajo el suelo de ${wn} aparece una estructura que nadie de este sistema construyó.`, `Beneath the ground of ${wn} lies a structure that no one in this system built.`),
         yes: tr('Estudiarlo · ✦ 40', 'Study it · ✦ 40'),
         yesOk: civ.canAfford({ science: 40 }),
         no: tr('Sellarlo', 'Seal it'),
       };
-    case 'incident': {
-      const r = s.rivals?.[(d.rival ?? 1) - 1];
-      const rn = r?.name ?? '';
+    // Quarrels between the peoples: the player may step in with the star's light, or let them be.
+    case 'tension':
       return {
         ...base,
-        icon: '⚠',
-        title: tr(`Incidente con los ${rn}`, `Incident with the ${capName(rn)}`),
+        icon: '⚡',
+        title: tr(`Tensión entre los ${pa} y los ${pb}`, `Tension between the ${capName(pa)} and the ${capName(pb)}`),
         body: tr(
-          `Una nave de los ${rn} y otra de los ${mine} chocan en una ruta disputada. Los ${rn} culpan a tus pilotos.`,
-          `A ${capName(rn)} ship and a ${capName(mine)} ship collide on a disputed route. The ${capName(rn)} blame your pilots.`,
+          `Las disputas crecen y los dos pueblos se miran con recelo. Una aurora sobre sus mundos les recordaría que comparten la misma estrella… o puedes dejar que lo resuelvan solos.`,
+          `The quarrels grow and the two peoples eye each other warily. An aurora over their worlds would remind them that they share the same star… or you can let them sort it out alone.`,
         ),
-        yes: tr('Calmar los ánimos · ✦ 30', 'Calm things down · ✦ 30'),
-        yesOk: true,
-        no: tr('Exigir disculpas', 'Demand an apology'),
+        yes: tr('Calmar los ánimos · ☀ 25', 'Calm things down · ☀ 25'),
+        yesOk: s.energy >= 25,
+        no: tr('No intervenir', 'Stay out of it'),
       };
-    }
-    case 'alliance': {
-      const r = s.rivals?.[(d.rival ?? 1) - 1];
-      const rn = r?.name ?? '';
+    case 'war':
       return {
         ...base,
-        icon: '⚭',
-        title: tr(`Los ${rn} proponen una alianza`, `The ${capName(rn)} propose an alliance`),
+        icon: '⚔',
+        title: tr(`Guerra entre los ${pa} y los ${pb}`, `War between the ${capName(pa)} and the ${capName(pb)}`),
         body: tr(
-          `Compartir ciencia, rutas comerciales y defensa contra los invasores. Sus naves lucharían a tu lado.`,
-          `Share science, trade routes and defence against invaders. Their ships would fight at your side.`,
+          `Sus flotas ya se atacan entre los mundos. La estrella podría brillar con furia entre ellos e imponer una tregua, aunque ninguno de los dos quedaría contento.`,
+          `Their fleets are already striking each other between the worlds. The star could blaze between them and force a truce, though neither side would be pleased.`,
         ),
-        yes: tr('Firmar la alianza', 'Sign the alliance'),
-        yesOk: true,
-        no: tr('Mejor no', 'Better not'),
+        yes: tr('Imponer una tregua · ☀ 40', 'Force a truce · ☀ 40'),
+        yesOk: s.energy >= 40,
+        no: tr('Que decidan las armas', 'Let the weapons decide'),
       };
-    }
-    case 'peace': {
-      const r = s.rivals?.[(d.rival ?? 1) - 1];
-      const rn = r?.name ?? '';
-      return {
-        ...base,
-        icon: '☮',
-        title: tr(`Los ${rn} piden la paz`, `The ${capName(rn)} ask for peace`),
-        body: tr(`Tras meses de batallas, sus embajadores esperan respuesta. La paz salvaría colonias de ambos lados.`, `After months of battles, their envoys await an answer. Peace would save colonies on both sides.`),
-        yes: tr('Firmar la paz', 'Sign the peace'),
-        yesOk: true,
-        no: tr('Seguir luchando', 'Keep fighting'),
-      };
-    }
     default:
       return {
         ...base,

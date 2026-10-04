@@ -64,11 +64,43 @@ export interface Life {
   health: number;
   /** True on the world where this species was born. */
   origin: boolean;
-  /** When this life became a people: 0 (or none) yours, 1+ a rival people (index + 1). */
+  /** The people this life became (people id), once it reached intelligence. */
   people?: number;
 }
 
-/** Another people born in the same system. */
+/** A people of the system. The player is none of them: they only watch, and sometimes intervene. */
+export interface People {
+  id: number;
+  name: string;
+  hue: number;
+  /** World where they were born (or first settled, if they came from elsewhere). */
+  home: number;
+  born: number;
+  /** The two peoples that mixed into this one. */
+  parents?: [number, number];
+  /** They came from another star (an ark, refugees) instead of evolving here. */
+  arrived?: boolean;
+  gone?: boolean;
+  nextShip: number;
+}
+
+/** How two peoples get along. */
+export interface Relation {
+  a: number;
+  b: number;
+  /** −1 hostile … +1 friendly. */
+  mood: number;
+  state: 'peace' | 'tension' | 'war' | 'alliance';
+  warT: number;
+  nextTalk: number;
+  nextSkirmish: number;
+  /** They have found each other (both can travel through space). */
+  met?: boolean;
+  /** A new people already came from these two. */
+  mixed?: boolean;
+}
+
+/** Legacy (saves before peoples were equals). */
 export interface Rival {
   name: string;
   hue: number;
@@ -113,7 +145,7 @@ export interface World extends Stuff {
   hot?: number;
   /** Its ring is made of impact debris (thin and grey). */
   debrisRing?: boolean;
-  /** Colony of a rival people (index + 1); none means yours. */
+  /** People living on this world as a colony (people id); none: unclaimed. */
   owner?: number;
 }
 
@@ -146,7 +178,7 @@ export interface Ship {
   hp?: number;
   /** Refugee species on board. */
   species?: string;
-  /** Which people of this system flies it: 0 (or none) yours, 1+ a rival people. */
+  /** The people flying it (people id). */
   people?: number;
 }
 
@@ -159,9 +191,11 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'incident' | 'alliance' | 'peace';
-  /** Rival people involved (index + 1). */
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace';
+  /** Legacy: rival people involved. */
   rival?: number;
+  /** The two peoples involved (tension and war). */
+  pair?: [number, number];
   /** Seconds left before it expires. */
   left: number;
   dur: number;
@@ -187,9 +221,9 @@ export interface CivState {
   building: { id: string; t: number; dur: number } | null;
   missions: Mission[];
   decisions: Decision[];
-  armada: { phase: 'rally' | 'hold' | 'away' | 'battle' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean; vsRival?: number } | null;
+  armada: { phase: 'rally' | 'hold' | 'away' | 'battle' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean; vsRival?: number; crew?: number[] } | null;
   /** A group of colonists gathering to leave for another star. */
-  flotilla?: { launched: number; gathered: number; x: number; z: number; star: string } | null;
+  flotilla?: { launched: number; gathered: number; x: number; z: number; star: string; people?: number } | null;
   nextFlotilla?: number;
   rogue: { t: number; dur: number; seed: number; ang: number; off: number; offered: boolean } | null;
   nextLate: number;
@@ -259,6 +293,9 @@ export interface GameState {
   /** System age when the first cities appeared (for the civilization calendar). */
   civStart?: number | null;
   civ?: CivState;
+  peoples?: People[];
+  relations?: Relation[];
+  /** Legacy. */
   rivals?: Rival[];
   /** Systems your species has already reached (new game+). */
   legacy: number;
