@@ -53,14 +53,16 @@ export interface CivHost {
   readonly topStage: number;
   readonly origin: World | null;
   readonly peoples: PeopleSim;
+  /** A people settles around another star (direction `ang` on the sky). */
+  foundStar(name: string, people: number, ang: number): void;
 }
 
 export type CivFx =
   | { kind: 'laser'; ship: number; world: number }
   | { kind: 'boom'; ship: number; big: boolean }
   | { kind: 'shieldHit'; world: number; threat: number }
-  | { kind: 'warpOut'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien'; people?: number }
-  | { kind: 'warpIn'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien'; people?: number }
+  | { kind: 'warpOut'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol'; people?: number }
+  | { kind: 'warpIn'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol'; people?: number }
   | { kind: 'supernova' }
   | { kind: 'superflare' }
   | { kind: 'built'; id: ProjectId; world: number }
@@ -87,6 +89,9 @@ export class CivSim {
 
   get civ() {
     return this.h.s.civ ?? null;
+  }
+  get state() {
+    return this.h.s;
   }
 
   /** Is the civilization old enough for great works? */
@@ -453,6 +458,7 @@ export class CivSim {
       civ.stats.colonies++;
       gain(civ.res, { science: 80 });
       const star = worldName(rng, new Set());
+      this.h.foundStar(star, this.h.peoples.leader()?.id ?? 0, rng.range(0, TAU));
       this.h.news('✶', `Los ${sn} fundan una colonia junto a la estrella ${star}. La vida de este sistema ya alcanza ${civ.stats.colonies + 1} estrellas.`, `The ${S} found a colony by the star ${star}. Life from this system now reaches ${civ.stats.colonies + 1} stars.`, 'good');
     } else if (roll < 0.92) {
       if (civ.building) civ.building.t = Math.min(civ.building.dur, civ.building.t + civ.building.dur * 0.5);
@@ -514,6 +520,7 @@ export class CivSim {
     this.h.fx({ kind: 'warpOut', x: f.x, z: f.z, dx: f.x / len, dz: f.z / len, count: f.launched, tint: 'own', people: f.people });
     civ.stats.colonies++;
     civ.flotilla = null;
+    this.h.foundStar(f.star, f.people ?? this.h.peoples.leader()?.id ?? 0, Math.atan2(f.z, f.x));
     const sn = this.h.peoples.get(f.people)?.name ?? this.leaderName();
     this.h.news('✶', `¡Salto! La flotilla de los ${sn} llega a ${f.star}. La vida de este sistema ya alcanza ${civ.stats.colonies + 1} estrellas.`, `Jump! The flotilla of the ${capName(sn)} reaches ${f.star}. Life from this system now reaches ${civ.stats.colonies + 1} stars.`, 'good');
   }
@@ -588,6 +595,10 @@ export class CivSim {
         const name = speciesName(this.h.rng);
         civ.allies.push(name);
         civ.stats.colonies += 2;
+        for (let k = 0; k < 2; k++) {
+          const crew = a.crew?.length ? this.h.rng.pick(a.crew) : 0;
+          this.h.foundStar(worldName(this.h.rng, new Set()), crew || (this.h.peoples.leader()?.id ?? 0), Math.atan2(a.z, a.x) + this.h.rng.range(-0.5, 0.5));
+        }
         gain(civ.res, { science: 220, fuel: 120 });
         this.h.news('⚔', `La armada regresa de un viaje de mil años: trae dos colonias nuevas y la amistad de los ${name}.`, `The armada returns from a thousand-year voyage: it brings two new colonies and the friendship of the ${capName(name)}.`, 'good');
       }

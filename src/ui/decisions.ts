@@ -3,6 +3,7 @@ import type { Decision, GameState, Resources } from '../core/state';
 import { capName } from '../content/names';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
+import { PATROL_COST } from '../sim/patrols';
 import type { DecisionView } from './Hud';
 import { resName } from './Projects';
 
@@ -70,6 +71,51 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
         yesOk: civ.canAfford({ science: 40 }),
         no: tr('Sellarlo', 'Seal it'),
       };
+    // A colony around another star asks for help.
+    case 'outpost': {
+      const st = s.stars?.find((x) => x.id === d.star);
+      const who = nameOf(st?.people);
+      const where = st?.name ?? '';
+      const kind = st?.trouble?.kind ?? 'pirates';
+      const al = s.alienSpecies?.name ?? '';
+      const p = s.patrol;
+      const icons = { pirates: '☠', natives: '⚑', invaders: '⚠', plague: '☣' };
+      const what = {
+        pirates: tr(`Piratas del vacío saquean la colonia ${who} de ${where}.`, `Void pirates are plundering the ${capName(who)} colony at ${where}.`),
+        natives: tr(`Los nativos de ${where} se alzan contra el dominio del sistema.`, `The natives of ${where} rise against the system’s rule.`),
+        invaders: tr(`Los ${al} asedian la colonia ${who} de ${where}.`, `The ${capName(al)} besiege the ${capName(who)} colony at ${where}.`),
+        plague: tr(`Una plaga diezma la colonia ${who} de ${where}.`, `A plague is ravaging the ${capName(who)} colony at ${where}.`),
+      }[kind];
+      const res = s.civ?.res;
+      const can = (c: Partial<Resources>) => !!res && RES_KEYS.every((k) => res[k] >= (c[k] ?? 0));
+      return {
+        ...base,
+        icon: icons[kind],
+        title: tr(`Socorro desde ${where}`, `A call for help from ${where}`),
+        body: p
+          ? `${what} ${p.phase === 'away' ? tr('Los Space Patrols están en otra estrella.', 'The Space Patrols are at another star.') : tr('¿Envías a los Space Patrols?', 'Will you send the Space Patrols?')}`
+          : `${what} ${tr('Aún no hay Space Patrols, pero una flotilla de socorro podría bastar.', 'There are no Space Patrols yet, but a relief flotilla might be enough.')}`,
+        yes: p ? tr('Enviar a los Space Patrols · ◍ 50', 'Send the Space Patrols · ◍ 50') : tr('Enviar socorro · ◍ 40', 'Send relief · ◍ 40'),
+        yesOk: p ? p.phase !== 'away' && p.phase !== 'rising' && can(PATROL_COST.help) : can(PATROL_COST.relief),
+        no: tr('Que resistan solos', 'Let them hold out alone'),
+      };
+    }
+    case 'annex': {
+      const st = s.stars?.find((x) => x.id === d.star);
+      const where = st?.name ?? '';
+      return {
+        ...base,
+        icon: '⚑',
+        title: tr(`¿Anexar ${where}?`, `Annex ${where}?`),
+        body: tr(
+          `Los Space Patrols controlan el sistema de ${where}. Como dominio, sus minas y refinerías pagarían tributo, mucho más que el comercio… pero el sistema se ganaría enemigos y más invasiones.`,
+          `The Space Patrols hold the system of ${where}. As a dominion, its mines and refineries would pay tribute, far more than trade… but the system would make enemies and draw more invasions.`,
+        ),
+        yes: tr('Anexarlo', 'Annex it'),
+        yesOk: true,
+        no: tr('Dejarlo libre: solo comercio', 'Leave it free: trade only'),
+      };
+    }
     // Quarrels between the peoples: the player may step in with the star's light, or let them be.
     case 'tension':
       return {

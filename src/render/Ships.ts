@@ -1,6 +1,95 @@
 import * as THREE from 'three';
 
-export type Hull = 'dart' | 'hauler' | 'tanker' | 'diamond' | 'claw' | 'mother' | 'orb' | 'ark';
+export type Hull = 'dart' | 'hauler' | 'tanker' | 'diamond' | 'claw' | 'mother' | 'orb' | 'ark' | 'barge' | 'pod' | 'gunship';
+
+/** Space Patrol livery: ultramarine plate, gold trim, a little bone and iron. */
+const BLUE: [number, number, number] = [0.16, 0.3, 0.78];
+const GOLD: [number, number, number] = [1, 0.78, 0.3];
+const IRON: [number, number, number] = [0.42, 0.44, 0.5];
+const BONE: [number, number, number] = [0.93, 0.88, 0.76];
+type Paint = [number, number, number];
+
+/** Space Patrol hulls are painted part by part (their colour is not the faction tint). */
+function paintedGeometry(h: Hull): { geo: THREE.BufferGeometry; paint: Paint[] } | null {
+  const parts: [THREE.BufferGeometry, Paint][] = [];
+  const box = (sx: number, sy: number, sz: number, x: number, y: number, z: number, p: Paint) => {
+    const g = new THREE.BoxGeometry(sx, sy, sz);
+    g.translate(x, y, z);
+    parts.push([g, p]);
+    return g;
+  };
+  const cone = (r: number, h2: number, seg: number, x: number, y: number, z: number, p: Paint, rotZ = 0) => {
+    const g = new THREE.ConeGeometry(r, h2, seg);
+    if (rotZ) g.rotateZ(rotZ);
+    g.translate(x, y, z);
+    parts.push([g, p]);
+  };
+  const tri = (v: number[], p: Paint) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    g.computeVertexNormals();
+    parts.push([g, p]);
+  };
+  if (h === 'barge') {
+    // A battle barge: a long armoured slab with a ram prow, a gothic cathedral of spires on its
+    // back, buttresses along its flanks, a bank of engines… and a two-headed eagle on the prow.
+    box(0.78, 0.13, 0.2, -0.05, 0, 0, BLUE);
+    box(0.62, 0.06, 0.26, -0.1, -0.07, 0, IRON);
+    // Ram prow, tapering forward.
+    const P = [0.56, -0.02, 0], a = [0.34, 0.065, 0.1], b = [0.34, 0.065, -0.1], c = [0.34, -0.08, 0.1], d = [0.34, -0.08, -0.1];
+    tri([...P, ...a, ...b, ...P, ...c, ...a, ...P, ...b, ...d, ...P, ...d, ...c], GOLD);
+    // Cathedral: nave, towers and spires, highest at the back.
+    box(0.36, 0.08, 0.1, -0.2, 0.1, 0, BLUE);
+    box(0.08, 0.16, 0.08, -0.3, 0.17, 0, BLUE);
+    cone(0.05, 0.16, 4, -0.3, 0.33, 0, GOLD);
+    for (const [x, hh] of [[-0.18, 0.1], [-0.06, 0.07], [-0.4, 0.08]] as [number, number][]) {
+      box(0.05, hh, 0.05, x, 0.14 + hh / 2, 0.045, BLUE);
+      box(0.05, hh, 0.05, x, 0.14 + hh / 2, -0.045, BLUE);
+      cone(0.03, 0.08, 4, x, 0.14 + hh + 0.04, 0.045, GOLD);
+      cone(0.03, 0.08, 4, x, 0.14 + hh + 0.04, -0.045, GOLD);
+    }
+    // Flying buttresses along both flanks.
+    for (const x of [-0.32, -0.16, 0, 0.16]) {
+      box(0.04, 0.1, 0.05, x, 0.02, 0.125, BLUE);
+      box(0.04, 0.1, 0.05, x, 0.02, -0.125, BLUE);
+    }
+    // Engines.
+    for (const z of [-0.07, 0, 0.07]) {
+      const e = new THREE.CylinderGeometry(0.035, 0.045, 0.1, 6);
+      e.rotateZ(Math.PI / 2);
+      e.translate(-0.48, 0, z);
+      parts.push([e, IRON]);
+    }
+    // The eagle: two swept golden wings and two heads, on the prow.
+    tri([0.36, 0.08, 0, 0.26, 0.09, 0.2, 0.2, 0.08, 0.02, 0.36, 0.08, 0, 0.2, 0.08, -0.02, 0.26, 0.09, -0.2], GOLD);
+    tri([0.36, 0.08, 0, 0.2, 0.08, 0.02, 0.26, 0.09, 0.2, 0.36, 0.08, 0, 0.26, 0.09, -0.2, 0.2, 0.08, -0.02], GOLD);
+    box(0.04, 0.04, 0.03, 0.39, 0.1, 0.03, BONE);
+    box(0.04, 0.04, 0.03, 0.39, 0.1, -0.03, BONE);
+  } else if (h === 'pod') {
+    // Drop pod: a squat armoured capsule falling nose first, petals folded, a gold tip.
+    const g = new THREE.CylinderGeometry(0.22, 0.3, 0.5, 6);
+    g.rotateZ(-Math.PI / 2);
+    parts.push([g, BLUE]);
+    cone(0.22, 0.3, 6, 0.4, 0, 0, GOLD, -Math.PI / 2);
+    for (const [y, z] of [[0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]]) box(0.36, 0.05 + Math.abs(y) * 0.1, 0.05 + Math.abs(z) * 0.1, -0.06, y * 0.8, z * 0.8, IRON);
+  } else if (h === 'gunship') {
+    // Gunship: a stubby armoured hull, swept wings with gold edges, a tall tail.
+    box(0.62, 0.16, 0.18, 0, 0, 0, BLUE);
+    box(0.16, 0.1, 0.14, 0.32, 0.03, 0, GOLD);
+    tri([0.1, 0, 0.09, -0.2, 0, 0.5, -0.24, 0, 0.09, 0.1, 0, -0.09, -0.24, 0, -0.09, -0.2, 0, -0.5], BLUE);
+    tri([0.1, 0, 0.09, -0.24, 0, 0.09, -0.2, 0, 0.5, 0.1, 0, -0.09, -0.2, 0, -0.5, -0.24, 0, -0.09], BLUE);
+    box(0.06, 0.03, 0.42, -0.2, 0.005, 0.28, GOLD);
+    box(0.06, 0.03, 0.42, -0.2, 0.005, -0.28, GOLD);
+    box(0.14, 0.24, 0.04, -0.26, 0.14, 0, BLUE);
+  } else return null;
+  const geo = mergeAll(parts.map(([g]) => g));
+  const paint: Paint[] = [];
+  for (const [g, p] of parts) {
+    const n = (g.index ? g.toNonIndexed() : g).attributes.position.count;
+    for (let i = 0; i < n; i++) paint.push(p);
+  }
+  return { geo, paint };
+}
 
 /** Builds a small flat-shaded hull pointing along +X (about one unit long). */
 function hullGeometry(h: Hull): THREE.BufferGeometry {
@@ -63,6 +152,8 @@ function hullGeometry(h: Hull): THREE.BufferGeometry {
       ring.translate(-0.25, 0, 0);
       return mergeAll([g, ring]);
     }
+    default:
+      return paintedGeometry(h)!.geo;
   }
 }
 
@@ -85,9 +176,9 @@ function mergeAll(geos: THREE.BufferGeometry[]) {
 }
 
 /** Two-tone shading baked into the hull: light deck, dark belly, a brighter nose. */
-function finish(geo: THREE.BufferGeometry) {
+function finish(geo: THREE.BufferGeometry, paint?: Paint[]) {
   const g = geo.index ? geo.toNonIndexed() : geo;
-  g.computeVertexNormals();
+  if (!paint) g.computeVertexNormals();
   const pos = g.attributes.position;
   const nor = g.attributes.normal;
   const col = new Float32Array(pos.count * 3);
@@ -97,13 +188,20 @@ function finish(geo: THREE.BufferGeometry) {
     const d = nor.getX(i) * L.x + nor.getY(i) * L.y + nor.getZ(i) * L.z;
     let c = 0.42 + 0.58 * Math.max(0, d);
     if (pos.getX(i) > 0.35) c *= 1.12;
-    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = Math.min(1, c);
+    const p = paint?.[i];
+    if (p) {
+      // Paint is picked in sRGB; vertex colours are linear.
+      const lin = (v: number) => Math.pow(Math.min(1, v * c * 1.1), 2.2);
+      col[i * 3] = lin(p[0]);
+      col[i * 3 + 1] = lin(p[1]);
+      col[i * 3 + 2] = lin(p[2]);
+    } else col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = Math.min(1, c);
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return g;
 }
 
-const CAP: Record<Hull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2 };
+const CAP: Record<Hull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2, barge: 1, pod: 30, gunship: 24 };
 
 /**
  * Every ship as a tiny 3D hull, batched per shape. Hulls keep a minimum size on screen, so a
@@ -128,8 +226,10 @@ export class ShipHulls {
   constructor() {
     for (const h of Object.keys(CAP) as Hull[]) {
       // Shading is baked into vertex colours: the faction colour always reads, whatever the light.
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
-      const mesh = new THREE.InstancedMesh(finish(hullGeometry(h)), mat, CAP[h]);
+      const painted = paintedGeometry(h);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, side: painted ? THREE.DoubleSide : THREE.FrontSide });
+      const geo = painted ? finish(painted.geo, painted.paint) : finish(hullGeometry(h));
+      const mesh = new THREE.InstancedMesh(geo, mat, CAP[h]);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.setColorAt(0, new THREE.Color(1, 1, 1));
       mesh.count = 0;

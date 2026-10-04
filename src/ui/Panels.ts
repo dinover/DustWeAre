@@ -418,7 +418,7 @@ export class Inspector {
       html += `<section><h3 class="violet">${tr('VISITANTES', 'VISITORS')}</h3>
         <div class="stat"><span>${tr(`Ocupado por los ${al}`, `Occupied by the ${al}`)}</span><span>${pct(w.invaded)}</span></div>
         <div class="vessel thin violet"><i style="--v:${Math.round(w.invaded * 100)}%"></i></div>
-        <div class="advice warn">${tr('Una <b>llamarada</b> solar los expulsa, aunque también castiga un poco la atmósfera.', 'A solar <b>flare</b> drives them out, though it also batters the atmosphere a little.')}</div>
+        <div class="advice warn">${tr('Una <b>llamarada</b> solar los expulsa, aunque también castiga un poco la atmósfera.', 'A solar <b>flare</b> drives them out, though it also batters the atmosphere a little.')} ${s.patrol ? tr('Los <b>Space Patrols</b> también vendrán a purgarlos.', 'The <b>Space Patrols</b> will also come to purge them.') : tr('Si llegan a dominar varios mundos, los pueblos fundarán los <b>Space Patrols</b>.', 'If they come to hold several worlds, the peoples will found the <b>Space Patrols</b>.')}</div>
       </section>`;
     }
     // Only touch the DOM when something changed (keeps hover and tooltips steady).
@@ -587,6 +587,25 @@ export class Ledger {
       }
       if (chips) ph += `<div class="rel-chips">${chips}</div>`;
     }
+    const pt = s.patrol;
+    if (pt) {
+      const busy = pt.phase === 'away' ? tr('lejos', 'away') : pt.phase === 'approach' || pt.phase === 'assault' ? (pt.goal === 'war' ? tr('pacificando', 'pacifying') : tr('purgando', 'purging')) : tr('en órbita', 'in orbit');
+      const tip = tr(
+        `<b>Space Patrols</b> · «${pt.barge.es}»<br>Guerreros acorazados de todos los pueblos. Purgan los mundos ocupados, no toleran guerras y saltan a otras estrellas cuando se les llama.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purgas · ☮ ${pt.wars} guerras terminadas`,
+        `<b>Space Patrols</b> · “${pt.barge.en}”<br>Armoured warriors of every people. They purge occupied worlds, tolerate no wars and jump to other stars when called.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purges · ☮ ${pt.wars} wars ended`,
+      );
+      ph += `<div class="people-row patrol" data-tip="${attr(tip)}"><i style="background:#6f9bff;color:#ffd27a"></i><span>Space Patrols</span><em>${busy}</em></div>`;
+    }
+    const stars = s.stars ?? [];
+    if (stars.length) {
+      const dom = stars.filter((x) => x.mode === 'dominion').length;
+      const trouble = stars.filter((x) => x.trouble).length;
+      const tip = tr(
+        `<b>Colonias lejanas</b>: ${stars.map((x) => x.name).join(', ')}.<br>${dom} ${dom === 1 ? 'dominio' : 'dominios'}. Gestiónalas en <b>Proyectos</b>.`,
+        `<b>Distant colonies</b>: ${stars.map((x) => x.name).join(', ')}.<br>${dom} ${dom === 1 ? 'dominion' : 'dominions'}. Manage them in <b>Projects</b>.`,
+      );
+      ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:#e8d2a0;color:#e8d2a0"></i><span>${tr('Otras estrellas', 'Other stars')}</span><em>${stars.length} ✦${dom ? ` · ${dom} ⚑` : ''}${trouble ? ` · <b class="ember">${trouble} ⚠</b>` : ''}</em></div>`;
+    }
     if (this.peoplesHtml !== ph) this.peoplesEl.innerHTML = this.peoplesHtml = ph;
     // What the ship colours mean.
     let lg = '';
@@ -595,6 +614,7 @@ export class Ledger {
       lg += `<span data-tip="${attr(tr('Mercaderes de otras estrellas', 'Traders from other stars'))}"><b style="color:#ffcc52">◆</b> ${tr('comercio', 'traders')}</span>`;
       if (s.ships.some((x) => x.kind === 'refugee')) lg += `<span data-tip="${attr(tr('Refugiados que buscan un mundo', 'Refugees looking for a world'))}"><b style="color:#73f2d9">●</b> ${tr('refugiados', 'refugees')}</span>`;
       if (s.alienSpecies) lg += `<span data-tip="${attr(tr('Invasores de otra estrella', 'Invaders from another star'))}"><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr('invasores', 'invaders')}</span>`;
+      if (s.patrol) lg += `<span data-tip="${attr(tr('Space Patrols: barcaza de batalla, cápsulas de desembarco y cañoneras, en azul y oro', 'Space Patrols: battle barge, drop pods and gunships, in blue and gold'))}"><b style="color:#6f9bff">⛨</b> Space Patrols</span>`;
     }
     if (this.legendHtml !== lg) this.legend.innerHTML = this.legendHtml = lg;
   }

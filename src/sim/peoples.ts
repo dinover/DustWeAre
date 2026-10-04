@@ -325,6 +325,26 @@ export class PeopleSim {
     } else this.h.news('☮', `Los ${a.name} y los ${b.name} firman la paz. Las naves vuelven a casa.`, `The ${capName(a.name)} and the ${capName(b.name)} sign a peace. The ships head home.`, 'good');
   }
 
+  /** The Space Patrols end a war their own way. Returns false when there was no war to end. */
+  enforcePeace(ia: number, ib: number) {
+    const a = this.get(ia);
+    const b = this.get(ib);
+    const r = this.relation(ia, ib);
+    if (!a || !b || !r || r.state !== 'war') return false;
+    r.state = 'peace';
+    r.warT = 0;
+    r.mood = -0.25;
+    this.h.s.ships = this.h.s.ships.filter((x) => !(x.kind === 'raider' && (x.people === a.id || x.people === b.id)));
+    this.h.fx({ kind: 'truce', a: a.id, b: b.id });
+    this.h.news(
+      '⛨',
+      `Los Space Patrols imponen la paz entre los ${a.name} y los ${b.name} a punta de bólter. Nadie se atreve a protestar… todavía.`,
+      `The Space Patrols impose peace between the ${capName(a.name)} and the ${capName(b.name)} at bolter-point. Nobody dares to complain… yet.`,
+      'warn',
+    );
+    return true;
+  }
+
   /** The player's answer to a request to step in. */
   decide(d: Decision, accept: boolean) {
     const s = this.h.s;

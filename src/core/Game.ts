@@ -35,6 +35,9 @@ import { sound } from '../audio';
 
 type Sel = number | 'star' | null;
 
+/** Space Patrol blue. */
+const PATROL = 0x6f9bff;
+
 interface Ptr {
   x: number;
   y: number;
@@ -446,6 +449,16 @@ export class Game {
     };
   }
 
+  /** Where the Space Patrols' battle barge is right now. */
+  private bargeGetter() {
+    const last = new THREE.Vector3();
+    return () => {
+      const p = this.s?.patrol;
+      if (p) last.set(p.x, p.y, p.z);
+      return last;
+    };
+  }
+
   private worldGetter(id: number) {
     const last = new THREE.Vector3();
     return () => {
@@ -497,10 +510,50 @@ export class Game {
       }
       case 'warpOut':
       case 'warpIn':
-        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : tone(f.people), f.kind === 'warpIn');
+        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : f.tint === 'patrol' ? PATROL : tone(f.people), f.kind === 'warpIn');
         sound.warp();
-        if (f.count > 6) this.stage.shake(0.6);
+        if (f.count > 6 || f.tint === 'patrol') this.stage.shake(f.tint === 'patrol' ? 0.35 : 0.6);
         return;
+      case 'lance': {
+        // The battle barge's lance: a short, blinding beam.
+        const from = this.bargeGetter();
+        const to = f.ship !== undefined ? this.shipGetter(f.ship) : f.world !== undefined ? this.worldGetter(f.world) : null;
+        if (!to) return;
+        this.fx.beam(from, to, 0xfff1c8, 0.5, 0.5);
+        if (f.world !== undefined) {
+          const p = to();
+          setTimeout(() => this.fx.flash(p.x, 0.2, p.z, 0xffd28a, 3.5, 0.6), 160);
+        }
+        sound.laser();
+        return;
+      }
+      case 'podLand': {
+        const w = s.worlds.find((x) => x.id === f.world);
+        const p = this.systemView.posOf(f.world);
+        if (!w || !p) return;
+        const r = worldRadius(w);
+        const a = Math.random() * Math.PI * 2;
+        const x = p.x + Math.cos(a) * r * 0.6;
+        const z = p.z + Math.sin(a) * r * 0.6;
+        this.fx.boom(x, 0.3, z, false, f.pod ? 0xffb060 : 0x9fc0ff);
+        if (f.pod) this.fx.ring(p.x, p.z, 0xffc890, r * 1.6 + 1, 0.8, 0, true);
+        sound.thud(f.pod ? 0.5 : 0.25);
+        return;
+      }
+      case 'deploy': {
+        const p = this.systemView.posOf(f.world) ?? new THREE.Vector3();
+        this.fx.ring(p.x, p.z, PATROL, 18, 2.6);
+        this.fx.ring(p.x, p.z, 0xffd28a, 10, 2);
+        this.fx.flash(p.x, 0, p.z, 0xcfe0ff, 14, 1.8);
+        sound.chime('good');
+        this.hint('s.patrol', '⛨', () =>
+          tr(
+            'Los <b>Space Patrols</b> han nacido: su barcaza de batalla purga los mundos ocupados con cápsulas de desembarco y no tolera guerras entre pueblos. Cuando una colonia en otra estrella pida ayuda, podrás enviarlos; también pueden <b>conquistar</b> estrellas desde <b>Proyectos</b>: los dominios pagan más que el comercio, pero atraen enemigos.',
+            'The <b>Space Patrols</b> are born: their battle barge purges occupied worlds with drop pods and does not tolerate wars between peoples. When a colony around another star asks for help, you can send them; they can also <b>conquer</b> stars from <b>Projects</b>: dominions pay more than trade, but they attract enemies.',
+          ),
+        );
+        return;
+      }
       case 'supernova':
         this.stage.skyFlash = 1;
         {
@@ -1257,8 +1310,15 @@ export class Game {
         if (civ && sim.civ.spacefaring)
           this.hint('s.works', '⚒', () =>
             tr(
-              'Tu civilización ya puede emprender <b>grandes obras</b>. Abre <b>Proyectos</b> (tecla P): cada tipo de mundo colonizado aporta un recurso distinto.',
-              'Your civilization can now take on <b>great works</b>. Open <b>Projects</b> (P key): each kind of settled world contributes a different resource.',
+              'Los pueblos ya pueden emprender <b>grandes obras</b>. Abre <b>Proyectos</b> (tecla P): cada tipo de mundo colonizado aporta un recurso distinto.',
+              'The peoples can now take on <b>great works</b>. Open <b>Projects</b> (P key): each kind of settled world contributes a different resource.',
+            ),
+          );
+        if (s.stars?.length)
+          this.hint('s.stars', '✦', () =>
+            tr(
+              'Un pueblo ya vive junto a <b>otra estrella</b>: la verás en el borde del mapa. Las colonias lejanas comercian y envían caravanas; si tienen problemas, pedirán ayuda. En <b>Proyectos → Más allá del sistema</b> puedes defenderlas o conquistarlas.',
+              'A people now lives around <b>another star</b>: you will see it at the edge of the map. Distant colonies trade and send caravans; if they get into trouble, they will ask for help. In <b>Projects → Beyond the system</b> you can defend or conquer them.',
             ),
           );
         if (this.projects) {
@@ -1339,8 +1399,16 @@ export class Game {
         if (sim.civ.startResearch()) sound.chime('good');
         panel.refresh();
       },
+      send: (id, conquer) => {
+        if (sim.patrols.send(id, conquer)) sound.warp();
+        panel.refresh();
+      },
+      release: (id) => {
+        if (sim.patrols.release(id)) sound.chime('good');
+        panel.refresh();
+      },
       close: () => {},
-    });
+    }, sim.patrols);
     this.projects = panel;
     const close = modal(this.ui, {
       title: tr('Grandes obras', 'Great works'),
@@ -1385,6 +1453,17 @@ export class Game {
       const px = r / this.stage.pixelScale(tmp.x, 0, tmp.z);
       this.labels.put(`w${w.id}`, `wlabel ${moon ? 'moon' : ''} ${sel ? 'sel' : ''}`, `${w.name}${f ? `<span class="f">${f}</span>` : ''}`, tmp.x, 0, tmp.z, px + 6);
     }
+    // Colonies around other stars, on the sky in the direction their ships come and go.
+    for (const st of s.stars ?? []) {
+      const pp = s.peoples?.find((x) => x.id === st.people);
+      const col = pp ? `hsl(${Math.round(pp.hue * 360)} 70% 68%)` : '#e8d2a0';
+      const mark = st.mode === 'dominion' ? '⚑' : '✦';
+      const html = `<i style="color:${col}">${mark}</i>${st.name}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}`;
+      this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+    }
+    // The Space Patrols' battle barge.
+    const pt = s.patrol;
+    if (pt && pt.phase !== 'away') this.labels.put('barge', 'barge-label', `⛨ ${tr(pt.barge.es, pt.barge.en)}`, pt.x, pt.y, pt.z, 26);
   }
 }
 

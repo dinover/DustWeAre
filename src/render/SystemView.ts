@@ -8,6 +8,7 @@ import { glowTexture } from './Stage';
 import { worldRadius, worldXZ } from './layout';
 import { Rng, TAU, easeInOut } from '../util';
 import { ShipHulls, type Hull } from './Ships';
+import { BARGE_Y } from '../sim/patrols';
 
 const MAX_SHIPS = 96;
 /** Ships plus armada formation slots plus patrols. */
@@ -17,7 +18,7 @@ const MAX_SATS = 220;
 const DYSON = 900;
 
 /** Engine glow size per kind. */
-const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2 };
+const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8 };
 /** Hull shape, true size (world units) and smallest on-screen size (pixels) per kind. */
 const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   colony: { hull: 'dart', size: 0.5, px: 9 },
@@ -33,7 +34,11 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   alien: { hull: 'claw', size: 0.6, px: 11 },
   mother: { hull: 'mother', size: 2.2, px: 24 },
   ark: { hull: 'ark', size: 1.8, px: 22 },
+  pod: { hull: 'pod', size: 0.42, px: 10 },
+  gunship: { hull: 'gunship', size: 0.6, px: 12 },
 };
+/** Space Patrol engines burn blue-white. */
+const PATROL_GLOW = new THREE.Color(0.75, 0.85, 1);
 
 /** Faction colours: every people its own hue, traders gold, refugees teal, invaders violet. */
 export const FACTION = { trader: new THREE.Color(1, 0.8, 0.32), refugee: new THREE.Color(0.45, 0.95, 0.85) };
@@ -247,6 +252,24 @@ export class SystemView {
       out.set(this.tmp.x + Math.cos(ang) * kk * 180, kk * 60, this.tmp.z + Math.sin(ang) * kk * 180);
       return out;
     }
+    // Space Patrol drop pods and gunships leave the battle barge, high above the plane.
+    if (sh.from === -7) {
+      const to = this.byId.get(sh.to);
+      if (!to) return out.set(0, -999, 0);
+      worldXZ(to, this.byId, this.tmp2);
+      const kk = Math.min(1, Math.max(0, k));
+      const pod = sh.kind === 'pod';
+      const e = pod ? kk * kk : easeInOut(kk);
+      const sx = sh.sx ?? 0;
+      const sz = sh.sz ?? 0;
+      const y0 = pod ? BARGE_Y * 0.6 : BARGE_Y * 0.55;
+      const bow = pod ? 0 : Math.sin(Math.PI * e) * 2.2 * (sh.id % 2 ? 1 : -1);
+      const dx = this.tmp2.x - sx;
+      const dz = this.tmp2.z - sz;
+      const len = Math.hypot(dx, dz) || 1;
+      out.set(sx + dx * e - (dz / len) * bow, y0 * (1 - e) + (pod ? 0 : Math.sin(Math.PI * e) * 1.2), sz + dz * e + (dx / len) * bow);
+      return out;
+    }
     // Start point.
     const from = sh.from >= 0 ? this.byId.get(sh.from) : null;
     if (from) worldXZ(from, this.byId, this.tmp);
@@ -305,6 +328,7 @@ export class SystemView {
     if (kind === 'trader') return out.copy(FACTION.trader);
     if (kind === 'refugee') return out.copy(FACTION.refugee);
     if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
+    if (kind === 'pod' || kind === 'gunship') return out.copy(PATROL_GLOW);
     const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';
     // Whose ship: its own mark, else the people of the world it left (or is heading to).
     let pid = sh.people ?? 0;
@@ -512,6 +536,34 @@ export class SystemView {
           dir.set(-Math.sin(a), 0, Math.cos(a));
           this.hulls.add('dart', v, dir, hue, 0.35, 6, cam);
         }
+      }
+    }
+    // The Space Patrols' battle barge on its high orbit, two gunships flying escort.
+    const pt = s.patrol;
+    if (pt && pt.phase !== 'away') {
+      v.set(pt.x, pt.y, pt.z);
+      if (pt.phase === 'orbit' || pt.phase === 'rising') dir.set(-Math.sin(pt.ang), 0, Math.cos(pt.ang));
+      else if (pt.phase === 'assault' && pt.target !== undefined && this.byId.get(pt.target)) {
+        const c = worldXZ(this.byId.get(pt.target)!, this.byId, this.tmp);
+        dir.set(c.x - pt.x, 0, c.z - pt.z);
+      } else dir.set(pt.x - pt.sx, 0, pt.z - pt.sz);
+      if (dir.lengthSq() < 1e-6) dir.set(-Math.sin(pt.ang), 0, Math.cos(pt.ang));
+      dir.normalize();
+      hue.setRGB(1, 1, 1);
+      this.hulls.add('barge', v, dir, hue, 3.4, 46, cam);
+      const scale = Math.max(3.4, 46 * this.hulls.pxScale * cam.distanceTo(v));
+      if (p < MAX_POINTS) {
+        this.shipPos.set([v.x - dir.x * scale * 0.55, v.y, v.z - dir.z * scale * 0.55], p * 3);
+        this.shipCol.set([PATROL_GLOW.r * 1.4, PATROL_GLOW.g * 1.4, PATROL_GLOW.b * 1.6], p * 3);
+        this.shipSize[p] = 2.2;
+        p++;
+      }
+      for (let j = 0; j < 2; j++) {
+        const a = time * 0.8 + j * Math.PI;
+        const r = scale * 0.75;
+        q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
+        const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
+        this.hulls.add('gunship', q, d2, hue, 0.5, 9, cam);
       }
     }
     this.hulls.end();

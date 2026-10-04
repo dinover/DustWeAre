@@ -3,6 +3,7 @@ import { Rng, clamp, smoothstep } from '../util';
 import { worldStats, colonizable, isGiantStuff } from './worlds';
 import { CivSim, type CivFx } from './civ';
 import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from './peoples';
+import { PatrolSim, type PatrolFx } from './patrols';
 import { capName, moonName, speciesName } from '../content/names';
 import { FACTS } from '../content/facts';
 
@@ -24,6 +25,7 @@ export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate
 export type Fx =
   | CivFx
   | PeopleFx
+  | PatrolFx
   | { kind: 'flare'; world: number }
   | { kind: 'flareShip'; x: number; z: number }
   | { kind: 'impact'; world: number }
@@ -40,6 +42,7 @@ export class SystemSim {
   rng: Rng;
   civ: CivSim;
   peoples: PeopleSim;
+  patrols: PatrolSim;
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
@@ -50,10 +53,15 @@ export class SystemSim {
     migratePeoples(s);
     this.civ = new CivSim(this);
     this.peoples = new PeopleSim(this);
+    this.patrols = new PatrolSim(this);
   }
 
-  fx(f: CivFx | PeopleFx) {
+  fx(f: CivFx | PeopleFx | PatrolFx) {
     this.onFx(f);
+  }
+
+  foundStar(name: string, people: number, ang: number) {
+    this.patrols.found(name, people, ang);
   }
 
   /** A choice made by the player on one of the pending decisions. */
@@ -64,6 +72,9 @@ export class SystemSim {
     if (d.kind === 'tension' || d.kind === 'war') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.peoples.decide(d, accept);
+    } else if (d.kind === 'outpost' || d.kind === 'annex') {
+      civ.decisions.splice(civ.decisions.indexOf(d), 1);
+      this.patrols.decide(d, accept);
     } else this.civ.decide(id, accept);
   }
 
@@ -119,6 +130,7 @@ export class SystemSim {
     this.updateCivilization(dt);
     this.peoples.update(dt);
     this.civ.update(dt);
+    this.patrols.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);
     this.updateInvasion(dt);
@@ -284,6 +296,7 @@ export class SystemSim {
         continue;
       }
       if (this.peoples.arrive(sh)) continue;
+      if (this.patrols.arrive(sh)) continue;
       if (this.civ.arrive(sh)) continue;
       const w = this.world(sh.to);
       if (!w) continue;
@@ -418,10 +431,12 @@ export class SystemSim {
       this.news('⚠', `Desde el otro lado de la galaxia llega una nueva amenaza: los ${s.alienSpecies.name}.`, `A new threat arrives from the far side of the galaxy: the ${capName(s.alienSpecies.name)}.`, 'alien');
       return;
     }
+    // Conquered stars make enemies: waves come sooner and bigger.
+    const dominions = this.patrols.dominions();
     if (inv.signal && s.time >= inv.next) {
       inv.waves++;
-      inv.next = s.time + this.rng.range(240, 360);
-      const n = 1 + Math.min(5, inv.waves);
+      inv.next = s.time + this.rng.range(240, 360) / (1 + 0.3 * dominions);
+      const n = 1 + Math.min(5, inv.waves) + Math.min(4, dominions);
       const targets = s.worlds.filter((w) => colonizable(w) && w.invaded < 0.9);
       targets.sort((a, b) => b.colony + (b.life ? 1 : 0) - (a.colony + (a.life ? 1 : 0)));
       const from = -1 - ((this.rng.next() * 1000) | 0);
@@ -438,19 +453,22 @@ export class SystemSim {
         this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${capName(al)} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
       } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${capName(al)} enter your system. They are looking for worlds to settle.`, 'alien');
     }
-    // The peoples fight back on their own, slowly; a flare or the defence fleet is much faster.
+    // The peoples fight back on their own, slowly; a flare, the defence fleet or the Space Patrols are much faster.
+    const held = s.worlds.filter((w) => w.invaded >= 0.6).length;
     for (const w of s.worlds) {
       if (w.invaded <= 0) continue;
       const p = this.peoples.get(peopleOf(w));
       if (p && this.peoples.stage(p) >= 4) w.invaded = Math.max(0, w.invaded - dt * 0.0016);
+      // Under a long occupation, the natives suffer.
+      if (w.life && w.invaded >= 0.6 && held >= 2) w.life.health -= dt * 0.0012;
     }
-    // Settled visitors spread to nearby worlds.
+    // Settled visitors spread to nearby worlds — faster the more they hold.
     for (const w of s.worlds) {
       if (w.invaded < 0.6 || s.won) continue;
       let t = this.alienTimers.get(w.id) ?? this.rng.range(20, 35);
       t -= dt;
       if (t <= 0) {
-        t = this.rng.range(28, 40);
+        t = this.rng.range(28, 40) / (held >= 3 ? 1.5 : 1);
         const tg = this.pickTarget(w, true);
         if (tg) this.launch(w.id, tg.id, true);
       }

@@ -149,7 +149,22 @@ export interface World extends Stuff {
   owner?: number;
 }
 
-export type ShipKind = 'colony' | 'freight' | 'tanker' | 'miner' | 'trader' | 'refugee' | 'expedition' | 'flotilla' | 'armada' | 'raider' | 'alien' | 'mother' | 'ark';
+export type ShipKind =
+  | 'colony'
+  | 'freight'
+  | 'tanker'
+  | 'miner'
+  | 'trader'
+  | 'refugee'
+  | 'expedition'
+  | 'flotilla'
+  | 'armada'
+  | 'raider'
+  | 'alien'
+  | 'mother'
+  | 'ark'
+  | 'pod'
+  | 'gunship';
 
 export interface Ship {
   id: number;
@@ -180,6 +195,8 @@ export interface Ship {
   species?: string;
   /** The people flying it (people id). */
   people?: number;
+  /** Distant star it comes from or goes to (OuterStar id). */
+  star?: number;
 }
 
 export interface Resources {
@@ -191,7 +208,9 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex';
+  /** Distant star involved (outpost and annex). */
+  star?: number;
   /** Legacy: rival people involved. */
   rival?: number;
   /** The two peoples involved (tension and war). */
@@ -235,6 +254,57 @@ export interface CivState {
   tech?: number;
   research?: { t: number; dur: number } | null;
   stats: { expeditions: number; battles: number; trades: number; colonies: number; armadas: number };
+}
+
+/** A colony of one of the system's peoples around another star. */
+export interface OuterStar {
+  id: number;
+  name: string;
+  /** People that settled it (0: a mix of peoples). */
+  people: number;
+  /** trade: a free colony that only trades · dominion: conquered by the Space Patrols. */
+  mode: 'trade' | 'dominion';
+  /** Direction on the sky (radians): where ships to and from it warp. */
+  ang: number;
+  founded: number;
+  /** 0..1 how well it is doing; troubles wear it down. */
+  health: number;
+  trouble?: { kind: 'pirates' | 'natives' | 'invaders' | 'plague'; t: number; dur: number } | null;
+  /** The Space Patrols are on their way or fighting there. */
+  strike?: { conquer: boolean } | null;
+}
+
+/** The Space Patrols: armoured warriors the peoples raise when invaders become a real threat. */
+export interface PatrolState {
+  barge: { es: string; en: string };
+  born: number;
+  /** rising from its shipyard · orbit · approach (to a target) · assault · return · away (at another star). */
+  phase: 'rising' | 'orbit' | 'approach' | 'assault' | 'return' | 'away';
+  t: number;
+  /** Battle barge position (world units), kept by the simulation for the view. */
+  x: number;
+  y: number;
+  z: number;
+  /** Where the current move started. */
+  sx: number;
+  sy: number;
+  sz: number;
+  /** Parking angle on its high orbit. */
+  ang: number;
+  /** World being assaulted, and why. */
+  target?: number;
+  goal?: 'purge' | 'war';
+  /** Peoples at war it came to stop. */
+  pair?: [number, number];
+  /** Distant star it jumped to. */
+  star?: number;
+  podsLeft?: number;
+  next: number;
+  lanceT: number;
+  kills: number;
+  purges: number;
+  wars: number;
+  strikes: number;
 }
 
 export interface Threat {
@@ -293,6 +363,9 @@ export interface GameState {
   /** System age when the first cities appeared (for the civilization calendar). */
   civStart?: number | null;
   civ?: CivState;
+  /** Colonies around other stars. */
+  stars?: OuterStar[];
+  patrol?: PatrolState | null;
   peoples?: People[];
   relations?: Relation[];
   /** Legacy. */
