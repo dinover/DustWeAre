@@ -8,10 +8,12 @@ export const R_MIN = 0.32;
 export const R_MAX = 14;
 /** How much the map compresses distance: lower squeezes the outer system more. */
 export const SCALE_EXP = 0.62;
+/** World units per AU at 1 AU: a roomy map, so neighbouring worlds don't crowd each other. */
+export const SCALE_K = 16;
 /** Orbit radius (AU) → world units. */
-export const toWorld = (au: number) => 14 * Math.pow(au, SCALE_EXP);
+export const toWorld = (au: number) => SCALE_K * Math.pow(au, SCALE_EXP);
 /** World units → orbit radius (AU). */
-export const toAU = (w: number) => Math.pow(Math.max(0, w) / 14, 1 / SCALE_EXP);
+export const toAU = (w: number) => Math.pow(Math.max(0, w) / SCALE_K, 1 / SCALE_EXP);
 /** Angular speed (rad/s at game speed 1). Gentler than Kepler so inner orbits stay readable. */
 export const omega = (au: number) => 0.5 * Math.pow(Math.max(au, 0.05), -0.75);
 
@@ -21,11 +23,11 @@ export const snowLine = (L: number) => 2.7 * Math.sqrt(L);
  * Sunlight fades with distance more gently than in reality (a^-0.3 instead of a^-0.5): it gives a
  * roomier habitable zone, so several worlds can live in it without being packed together.
  */
-export const T_EXP = 0.3;
+export const T_EXP = 0.27;
 /** Habitable zone (liquid water on a world with an Earth-like atmosphere). */
 export const habZone = (L: number): [number, number] => {
   const k = Math.pow(L, 0.25 / T_EXP);
-  return [0.6 * k, 1.6 * k];
+  return [0.6 * k, 1.8 * k];
 };
 /** Disk midplane temperature (K). */
 export const diskTemp = (au: number, L: number) => (280 * Math.pow(L, 0.25)) / Math.sqrt(au);
@@ -98,6 +100,8 @@ export interface Relation {
   met?: boolean;
   /** A new people already came from these two. */
   mixed?: boolean;
+  /** The player was asked to stop this war and chose not to. */
+  ignored?: boolean;
 }
 
 /** Legacy (saves before peoples were equals). */
@@ -208,7 +212,7 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea';
   /** Distant star involved (outpost and annex). */
   star?: number;
   /** Legacy: rival people involved. */
@@ -315,12 +319,32 @@ export interface Threat {
   angle: number;
 }
 
+/** What a piece of news points at, for the camera. */
+export type NewsFocus = { world: number } | { pair: [number, number] } | { ship: number } | { star: number } | { barge: true } | { x: number; z: number };
+
 export interface NewsItem {
   age: number;
   icon: string;
   es: string;
   en: string;
-  kind: 'info' | 'good' | 'warn' | 'life' | 'alien' | 'fact';
+  kind: 'info' | 'good' | 'warn' | 'life' | 'alien' | 'fact' | 'voice';
+  /** Where it happened (clicking the news takes the camera there). */
+  focus?: NewsFocus;
+}
+
+/** A pair of worlds on a collision course. */
+export interface Encounter {
+  id: number;
+  a: number;
+  b: number;
+  t: number;
+  dur: number;
+  /** Orbits when it began, and what they should be now (a player's migration breaks it). */
+  a0: number;
+  b0: number;
+  ea: number;
+  eb: number;
+  emergency?: boolean;
 }
 
 export interface Species {
@@ -365,6 +389,14 @@ export interface GameState {
   /** System age when the first cities appeared (for the civilization calendar). */
   civStart?: number | null;
   civ?: CivState;
+  /** Worlds on a collision course. */
+  encounters?: Encounter[];
+  /** Harm caused by the player's own choices (fades slowly). */
+  harm?: number;
+  /** Real seconds of play (the peoples' voices come only after an hour). */
+  playTime?: number;
+  /** Earliest time for the next plea to the star. */
+  pleaAt?: number;
   /** Colonies around other stars. */
   stars?: OuterStar[];
   patrol?: PatrolState | null;

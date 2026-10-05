@@ -40,6 +40,7 @@ export const ICONS = {
   volcano: '<svg viewBox="0 0 32 32"><path d="M3 28h26l-8.5-13h-9z"/><path d="M11.5 15c1.3 1.3 2.7 1.3 4.5 0s3.2-1.3 4.5 0"/><path d="M14 10c-1-2 0-4 2-5M18 11c1.5-1.5 1.5-3.5 0-5.5M16 12V4"/></svg>',
   comets: '<svg viewBox="0 0 32 32"><circle cx="22" cy="22" r="4"/><path d="M19 19 5 5M18 22 6 12M22 18 12 6"/><circle cx="22" cy="22" r="1.2" fill="currentColor"/></svg>',
   migrate: '<svg viewBox="0 0 32 32"><circle cx="5" cy="16" r="3"/><path d="M5 16m9 0a9 9 0 0 1-2.6 6.4M5 16m9 0a9 9 0 0 0-2.6-6.4" opacity=".55"/><path d="M5 16m17 0a17 17 0 0 1-5 12M5 16m17 0a17 17 0 0 0-5-12"/><circle cx="22" cy="16" r="2.2" fill="currentColor"/><path d="m24.5 12.5 3 3.5-3 3.5"/></svg>',
+  chronicle: '<svg viewBox="0 0 32 32"><path d="M8 5h15a3 3 0 0 1 3 3v17a2 2 0 0 1-2 2H11a3 3 0 0 1-3-3z"/><path d="M8 5a3 3 0 0 0-3 3v2h3"/><path d="M12 11h10M12 15h10M12 19h7"/></svg>',
   works: '<svg viewBox="0 0 32 32"><path d="M16 3 23 28H9z"/><path d="M12.5 18h7M14 12h4"/><path d="M4 28h24"/><path d="M16 3v-1M6 8l2 1.5M26 8l-2 1.5"/></svg>',
   star: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="6"/><path d="M16 3v4M16 25v4M3 16h4M25 16h4M6.8 6.8l2.8 2.8M22.4 22.4l2.8 2.8M6.8 25.2l2.8-2.8M22.4 9.6l2.8-2.8"/></svg>',
   emblem:

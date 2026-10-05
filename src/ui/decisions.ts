@@ -100,6 +100,27 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
         no: tr('Que resistan solos', 'Let them hold out alone'),
       };
     }
+    // After a long, cruel war, the peoples pray to the star.
+    case 'plea': {
+      const wars = (s.relations ?? []).filter((r) => r.state === 'war').length;
+      const dom = (s.stars ?? []).filter((x) => x.mode === 'dominion').length;
+      return {
+        ...base,
+        icon: '❝',
+        title: tr('Una plegaria a la estrella', 'A prayer to the star'),
+        body: wars
+          ? tr(
+              `En todos los mundos de ${s.name}, a la misma hora, los pueblos rezan a la misma estrella. No saben si alguien escucha. Solo piden una cosa: que terminen las guerras.`,
+              `On every world of ${s.name}, at the same hour, the peoples pray to the same star. They do not know whether anyone is listening. They ask for one thing only: that the wars end.`,
+            )
+          : dom
+            ? tr(`Desde los dominios llega una súplica que nadie se atreve a firmar: que los dejen volver a ser libres.`, `From the dominions comes a plea no one dares to sign: to be allowed to be free again.`)
+            : tr(`Los pueblos tienen miedo de su propia estrella. Rezan para que su luz vuelva a ser mansa.`, `The peoples fear their own star. They pray for its light to be gentle again.`),
+        yes: wars ? tr('Concederles la paz · ☀ 60', 'Grant them peace · ☀ 60') : dom ? tr('Liberar los dominios', 'Free the dominions') : tr('Escucharlos', 'Listen to them'),
+        yesOk: wars ? s.energy >= 60 : true,
+        no: tr('Seguir mirando', 'Keep watching'),
+      };
+    }
     case 'annex': {
       const st = s.stars?.find((x) => x.id === d.star);
       const where = st?.name ?? '';

@@ -1,9 +1,11 @@
-import { massOf, omega, toWorld, type GameState, type NewsItem, type Ship, type World } from '../core/state';
+import { massOf, omega, toWorld, type GameState, type NewsFocus, type NewsItem, type Ship, type World } from '../core/state';
 import { Rng, clamp, smoothstep } from '../util';
 import { worldStats, colonizable, isGiantStuff } from './worlds';
 import { CivSim, type CivFx } from './civ';
 import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from './peoples';
 import { PatrolSim, type PatrolFx } from './patrols';
+import { OrbitSim, type OrbitFx } from './orbits';
+import { VoicesSim, addHarm } from './voices';
 import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
 import { FACTS } from '../content/facts';
 
@@ -26,6 +28,7 @@ export type Fx =
   | CivFx
   | PeopleFx
   | PatrolFx
+  | OrbitFx
   | { kind: 'flare'; world: number }
   | { kind: 'flareShip'; x: number; z: number }
   | { kind: 'impact'; world: number }
@@ -43,6 +46,8 @@ export class SystemSim {
   civ: CivSim;
   peoples: PeopleSim;
   patrols: PatrolSim;
+  orbits: OrbitSim;
+  voices: VoicesSim;
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
@@ -54,9 +59,11 @@ export class SystemSim {
     this.civ = new CivSim(this);
     this.peoples = new PeopleSim(this);
     this.patrols = new PatrolSim(this);
+    this.orbits = new OrbitSim(this);
+    this.voices = new VoicesSim(this);
   }
 
-  fx(f: CivFx | PeopleFx | PatrolFx) {
+  fx(f: CivFx | PeopleFx | PatrolFx | OrbitFx) {
     this.onFx(f);
   }
 
@@ -75,6 +82,9 @@ export class SystemSim {
     } else if (d.kind === 'outpost' || d.kind === 'annex') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.patrols.decide(d, accept);
+    } else if (d.kind === 'plea') {
+      civ.decisions.splice(civ.decisions.indexOf(d), 1);
+      this.voices.decide(d, accept);
     } else this.civ.decide(id, accept);
   }
 
@@ -94,11 +104,57 @@ export class SystemSim {
     return this.s.nextId++;
   }
 
-  news(icon: string, es: string, en: string, kind: NewsItem['kind'] = 'info') {
+  news(icon: string, es: string, en: string, kind: NewsItem['kind'] = 'info', focus?: NewsFocus) {
     const item: NewsItem = { age: this.s.age, icon, es, en, kind };
+    const f = focus ?? this.guessFocus(es);
+    if (f) item.focus = f;
     this.s.news.push(item);
-    if (this.s.news.length > 80) this.s.news.shift();
+    if (this.s.news.length > 240) this.s.news.shift();
     this.onNews(item);
+  }
+
+  /** Where a piece of news happened, read from its text: a world, a distant star, the barge, the invaders, a people. */
+  guessFocus(text: string): NewsFocus | undefined {
+    const s = this.s;
+    const has = (name: string) => {
+      if (!name) return false;
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|[^\\p{L}])${esc}($|[^\\p{L}])`, 'u').test(text);
+    };
+    for (const w of [...s.worlds].sort((a, b) => b.name.length - a.name.length)) if (has(w.name)) return { world: w.id };
+    for (const st of s.stars ?? []) if (has(st.name)) return { star: st.id };
+    if (s.patrol && s.patrol.phase !== 'away' && /Space Patrols|«/.test(text)) return { barge: true };
+    if (s.alienSpecies && has(s.alienSpecies.name)) {
+      const sh = s.ships.find((x) => x.kind === 'mother') ?? s.ships.find((x) => x.alien);
+      if (sh) return { ship: sh.id };
+    }
+    for (const p of this.peoples.alive()) {
+      if (!has(p.name)) continue;
+      const h = this.peoples.home(p) ?? this.peoples.worldsOf(p)[0];
+      if (h) return { world: h.id };
+    }
+    return undefined;
+  }
+
+  /** A world disappears (swallowed in a collision): nothing may keep pointing at it. */
+  removeWorld(id: number) {
+    const s = this.s;
+    s.worlds = s.worlds.filter((w) => w.id !== id);
+    s.ships = s.ships.filter((x) => x.from !== id && x.to !== id);
+    s.threats = s.threats.filter((t) => t.target !== id);
+    if (s.civ) s.civ.decisions = s.civ.decisions.filter((d) => d.world !== id);
+    if (s.patrol?.target === id) {
+      s.patrol.target = undefined;
+      s.patrol.goal = undefined;
+      if (s.patrol.phase === 'approach' || s.patrol.phase === 'assault') {
+        s.patrol.phase = 'return';
+        s.patrol.t = 0;
+        s.patrol.sx = s.patrol.x;
+        s.patrol.sy = s.patrol.y;
+        s.patrol.sz = s.patrol.z;
+      }
+    }
+    s.encounters = (s.encounters ?? []).filter((e) => e.a !== id && e.b !== id);
   }
 
   /** Highest life stage reached anywhere (−1: lifeless). */
@@ -127,10 +183,12 @@ export class SystemSim {
       if (w.hot) w.hot = Math.max(0, w.hot - dt);
     }
     this.updateWorlds(dt);
+    this.orbits.update(dt);
     this.updateCivilization(dt);
     this.peoples.update(dt);
     this.civ.update(dt);
     this.patrols.update(dt);
+    this.voices.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);
     this.updateInvasion(dt);
@@ -275,7 +333,7 @@ export class SystemSim {
     return best;
   }
 
-  private launch(from: number, to: number, alien: boolean, dur?: number, people?: number) {
+  launch(from: number, to: number, alien: boolean, dur?: number, people?: number) {
     const s = this.s;
     const a = from >= 0 ? this.world(from) : null;
     const b = this.world(to);
@@ -546,6 +604,11 @@ export class SystemSim {
     s.energy -= COST.flare;
     this.onFx({ kind: 'flare', world: w.id });
     const had = w.invaded;
+    // Burning a world where people live (not to drive invaders out) is a cruelty they remember.
+    if (had < 0.3 && !s.threats.some((t) => t.target === w.id)) {
+      if (peopleOf(w)) addHarm(s, 4);
+      else if (w.life) addHarm(s, 1);
+    }
     w.invaded = Math.max(0, w.invaded - 0.75);
     if (!isGiantStuff(w)) w.atm = Math.max(0, w.atm - 0.05 * (1 - w.mag));
     if (w.life) w.life.health -= 0.12;
@@ -568,6 +631,7 @@ export class SystemSim {
     const m = massOf(w);
     if (isGiantStuff(w) || m < 0.03 || w.volcanoCd > 0 || !this.canAfford(COST.volcano)) return false;
     this.s.energy -= COST.volcano;
+    if (w.life && w.life.stage >= 3) addHarm(this.s, 1);
     w.volcanoCd = 25;
     w.atm += 0.25 * smoothstep(0.03, 1, m) + 0.04;
     w.organics = clamp(w.organics + 0.03);

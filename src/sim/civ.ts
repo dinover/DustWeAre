@@ -7,6 +7,7 @@ import { FLAVOR } from '../content/flavor';
 import { capName, speciesName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { PeopleSim, PeopleFx } from './peoples';
+import { addHarm } from './voices';
 
 export type Role = 'fuel' | 'water' | 'science' | 'metal';
 export const RES_KEYS: (keyof Resources)[] = ['metal', 'fuel', 'water', 'science'];
@@ -682,6 +683,7 @@ export class CivSim {
     } else if (d.kind === 'refugees') {
       const w = d.world !== undefined ? this.h.world(d.world) : null;
       const name = d.species ?? speciesName(rng);
+      addHarm(s, accept && w ? -1.5 : 1);
       if (accept && w) {
         const a = rng.range(0, TAU);
         s.ships.push({ id: this.h.nid(), from: -5, to: w.id, t: 0, dur: 14, alien: false, kind: 'refugee', sx: Math.cos(a) * 110, sz: Math.sin(a) * 110, species: name });

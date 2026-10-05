@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { R_MAX, R_MIN, SCALE_EXP, toWorld } from '../core/state';
+import { R_MAX, R_MIN, SCALE_EXP, SCALE_K, toWorld } from '../core/state';
 import { TOOL_RADIUS, type Formation, type Tool } from '../sim/formation';
 import { NOISE } from './glsl';
 import { glowTexture } from './Stage';
@@ -98,7 +98,7 @@ export class DiskView {
         ${NOISE}
         void main() {
           float rw = length(vW.xz);
-          float rau = pow(rw / 14.0, 1.0 / ${SCALE_EXP.toFixed(3)});
+          float rau = pow(rw / ${SCALE_K.toFixed(1)}, 1.0 / ${SCALE_EXP.toFixed(3)});
           float ang = atan(vW.z, vW.x);
           float prof = smoothstep(5.0, 8.5, rw) * smoothstep(90.0, 60.0, rw);
           float spin = ang - uTime * 0.18 * pow(max(rau, 0.1), -0.75);

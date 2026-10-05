@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { onLangChange, tr, num } from '../i18n';
 import { Rng, clamp, randomSeed } from '../util';
-import { massOf, solidsOf, toWorld, habZone, type Body, type GameState, type Settings, type World } from './state';
+import { massOf, solidsOf, toWorld, habZone, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
 import { SystemSim, COST, type Fx } from '../sim/system';
@@ -15,7 +15,7 @@ import { BodiesView } from '../render/BodiesView';
 import { SystemView } from '../render/SystemView';
 import { lookOfWorld } from '../render/Planet';
 import { worldRadius, worldXZ } from '../render/layout';
-import { Hud, type Action } from '../ui/Hud';
+import { Hud, type Action, type DecisionView } from '../ui/Hud';
 import { Inspector, Ledger, kindDot } from '../ui/Panels';
 import { Labels } from '../ui/Labels';
 import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
@@ -24,6 +24,7 @@ import { h } from '../ui/dom';
 import { fmtAge, kindName, listOf } from '../ui/text';
 import { capName, worldName } from '../content/names';
 import { renameDialog } from '../ui/Rename';
+import { spaceOrbits } from '../sim/orbits';
 import { playComets } from '../minigames/Comets';
 import { ProjectsPanel } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
@@ -71,6 +72,10 @@ export class Game {
   private ui: HTMLElement;
   private selected: Sel = null;
   private follow: Sel = null;
+  /** Something other than a world the camera keeps in view: ships, the barge, two worlds about to collide. */
+  private followFn: (() => THREE.Vector3) | null = null;
+  /** Collision alerts the player closed. */
+  private dismissed = new Set<number>();
   private targeting: Action | null = null;
   private hold = 0;
   private time = 0;
@@ -107,11 +112,16 @@ export class Game {
       speed: (v) => this.setSpeed(v),
       menu: () => this.pauseMenu(),
       settle: () => this.confirmSettle(),
-      chronicle: () => this.s && chronicle(this.ui, this.s, this.hud),
+      chronicle: () => this.openChronicle(),
+      news: (n) => {
+        if (!this.focusNews(n)) this.openChronicle();
+      },
       cancelTarget: () => this.setTargeting(null),
       works: () => this.openProjects(),
       decide: (id, accept) => {
         sound.click();
+        // Negative ids are collision alerts (not choices for the peoples).
+        if (id < 0) return this.encounterChoice(-id, accept);
         this.sim?.decide(id, accept);
       },
       renameSystem: () => this.rename('star'),
@@ -154,7 +164,7 @@ export class Game {
     this.demo = Formation.create(Math.round(this.particles * 0.7), rng, () => ids.n++);
     for (let i = 0; i < 40; i++) this.demo.update(0.25);
     this.attachDisk(this.demo);
-    this.stage.goal.dist = 178;
+    this.stage.goal.dist = 196;
     this.stage.goal.pitch = 0.62;
     this.stage.drift = 0.03;
     this.stage.goal.target.set(0, 0, 0);
@@ -260,7 +270,7 @@ export class Game {
     }
     this.mode = 'play';
     this.stage.drift = 0;
-    this.stage.goal.dist = 158;
+    this.stage.goal.dist = 175;
     this.stage.goal.pitch = 0.98;
     this.stage.goal.target.set(0, 0, 0);
     this.hud.setVisible(true);
@@ -306,12 +316,13 @@ export class Game {
     f.pointerUp();
     const rng = new Rng(s.seed ^ 0xa11ce);
     const bodies = [...f.bodies].sort((a, b) => a.r - b.r);
-    // Last collisions: bodies sharing an orbit end up merging.
+    // Last collisions: bodies sharing practically the same orbit merge. Close neighbours are left
+    // for later: they either drift into stable orbits or meet in a collision.
     for (let i = 0; i < bodies.length - 1; ) {
       const a = bodies[i];
       const b = bodies[i + 1];
       const gap = toWorld(b.r) - toWorld(a.r);
-      if (gap < 1.4 + 0.6 * (bodyRadius(a) + bodyRadius(b))) {
+      if (gap < 0.5 + 0.25 * (bodyRadius(a) + bodyRadius(b))) {
         const big = massOf(a) >= massOf(b) ? a : b;
         const small = big === a ? b : a;
         big.metal += small.metal;
@@ -341,6 +352,7 @@ export class Game {
       keep.push({ id: s.nextId++, r: 1.2, th: 0, target: null, moons: [], seed: 7, born: 0, metal: 0.1, rock: 0.25, water: 0.02, gas: 0, org: 0.01 });
     }
     s.worlds = makeWorlds(keep, rng, () => s.nextId++);
+    spaceOrbits(s.worlds);
     s.belts = belts;
     s.bodies = [];
     s.disk = null;
@@ -491,15 +503,17 @@ export class Game {
   private news(icon: string, es: string, en: string, kind: GameState['news'][number]['kind'] = 'info') {
     const s = this.s;
     if (!s) return;
-    const item = { age: s.age, icon, es, en, kind };
+    const item: NewsItem = { age: s.age, icon, es, en, kind };
+    const f = this.sim?.guessFocus(es);
+    if (f) item.focus = f;
     s.news.push(item);
-    if (s.news.length > 80) s.news.shift();
+    if (s.news.length > 240) s.news.shift();
     this.onNews(item);
   }
 
   private onNews(n: GameState['news'][number]) {
     this.hud.pushNews(n, fmtAge(n.age));
-    sound.chime(n.kind);
+    sound.chime(n.kind === 'voice' ? 'life' : n.kind);
     if (n.kind === 'alien')
       this.hint('s.alien', '⚠', () => tr('Llegan visitantes de otra estrella. Pulsa <b>Llamarada</b> y elige sus naves o los mundos que ocupan.', 'Visitors from another star are arriving. Press <b>Flare</b> and pick their ships or the worlds they occupy.'));
   }
@@ -519,6 +533,108 @@ export class Game {
       if (v) last.copy(v);
       return last;
     };
+  }
+
+  private openChronicle() {
+    if (!this.s) return;
+    sound.click();
+    chronicle(this.ui, this.s, this.hud, (n) => this.focusNews(n));
+  }
+
+  /** Takes the camera to where a piece of news happened. Returns false when there is nothing to see any more. */
+  private focusNews(n: NewsItem) {
+    const s = this.s;
+    const f = n.focus;
+    if (!s || !f || !this.sim) return false;
+    sound.click();
+    if ('world' in f) {
+      if (!s.worlds.some((w) => w.id === f.world)) return false;
+      this.select(f.world);
+      this.focus(f.world);
+      return true;
+    }
+    if ('pair' in f) return this.watchPair(f.pair[0], f.pair[1]);
+    if ('ship' in f) {
+      if (!s.ships.some((x) => x.id === f.ship)) return false;
+      this.select(null);
+      this.followFn = this.shipGetter(f.ship);
+      this.stage.goal.dist = 24;
+      return true;
+    }
+    if ('star' in f) {
+      const st = s.stars?.find((x) => x.id === f.star);
+      if (!st) return false;
+      this.select(null);
+      const v = new THREE.Vector3(Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+      this.followFn = () => v;
+      this.stage.goal.dist = 70;
+      return true;
+    }
+    if ('barge' in f) {
+      if (!s.patrol || s.patrol.phase === 'away') return false;
+      this.select(null);
+      this.followFn = this.bargeGetter();
+      this.stage.goal.dist = 18;
+      return true;
+    }
+    const v = new THREE.Vector3(f.x, 0, f.z);
+    this.select(null);
+    this.followFn = () => v;
+    this.stage.goal.dist = 40;
+    return true;
+  }
+
+  /**
+   * Two worlds about to collide: the camera stays with the heavier one (it barely moves; the
+   * other comes to it), and after the impact, with what is left.
+   */
+  private watchPair(a: number, b: number) {
+    const s = this.s;
+    if (!s) return false;
+    const A = s.worlds.find((w) => w.id === a);
+    const B = s.worlds.find((w) => w.id === b);
+    const big = A && B ? (massOf(A) >= massOf(B) ? A : B) : (A ?? B);
+    if (!big) return false;
+    // Just the camera: no panel over the show.
+    this.select(null);
+    this.focus(big.id);
+    this.stage.goal.dist = clamp(worldRadius(big) * 12 + 22, 30, 70);
+    return true;
+  }
+
+  private encounterChoice(id: number, watch: boolean) {
+    this.dismissed.add(id);
+    const e = this.s?.encounters?.find((x) => x.id === id);
+    if (watch && e) this.watchPair(e.a, e.b);
+  }
+
+  /** A card for the next collision on the way (one at a time): how long is left, and a button to watch. */
+  private encounterViews(): DecisionView[] {
+    const s = this.s;
+    if (!s?.encounters?.length) return [];
+    const out: DecisionView[] = [];
+    const next = [...s.encounters].filter((e) => !this.dismissed.has(e.id)).sort((x, y) => x.dur - x.t - (y.dur - y.t));
+    for (const e of next.slice(0, 1)) {
+      if (this.dismissed.has(e.id)) continue;
+      const A = s.worlds.find((w) => w.id === e.a);
+      const B = s.worlds.find((w) => w.id === e.b);
+      if (!A || !B) continue;
+      out.push({
+        id: -e.id,
+        icon: '☄',
+        title: tr('¡Colisión inminente!', 'Collision ahead!'),
+        body: tr(
+          `<b>${A.name}</b> y <b>${B.name}</b> se atraen y van a chocar.${e.emergency ? ' Sus pueblos han declarado el estado de emergencia y evacúan.' : ''} <i>Migrar uno de los dos aún podría evitarlo.</i>`,
+          `<b>${A.name}</b> and <b>${B.name}</b> are pulling at each other and will collide.${e.emergency ? ' Their peoples have declared a state of emergency and are evacuating.' : ''} <i>Migrating one of them could still avert it.</i>`,
+        ),
+        yes: tr('Ver el choque', 'Watch it'),
+        yesOk: true,
+        no: tr('Cerrar', 'Close'),
+        left: Math.max(0, e.dur - e.t),
+        dur: e.dur,
+      });
+    }
+    return out;
   }
 
   /** Where the Space Patrols' battle barge is right now. */
@@ -610,6 +726,24 @@ export class Game {
         this.fx.boom(x, 0.3, z, false, f.pod ? 0xffb060 : 0x9fc0ff);
         if (f.pod) this.fx.ring(p.x, p.z, 0xffc890, r * 1.6 + 1, 0.8, 0, true);
         sound.thud(f.pod ? 0.5 : 0.25);
+        return;
+      }
+      case 'collision': {
+        // Two worlds become one: a blinding flash, shock rings, and the whole sky shakes.
+        const r = 4;
+        this.fx.flash(f.x, 0, f.z, 0xfff0d0, f.big ? 26 : 16, 2.2);
+        this.fx.flash(f.x, 0, f.z, 0xff7a35, f.big ? 18 : 11, 3.5);
+        this.fx.ring(f.x, f.z, 0xffb070, r * 4, 2.4);
+        setTimeout(() => this.fx.ring(f.x, f.z, 0xff6a2a, r * 7, 3.2), 250);
+        setTimeout(() => this.fx.ring(f.x, f.z, 0xffd28a, r * 10, 4, 0, true), 600);
+        for (let i = 0; i < 6; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * 3;
+          setTimeout(() => this.fx.boom(f.x + Math.cos(a) * d, (Math.random() - 0.5) * 2, f.z + Math.sin(a) * d, i < 2, 0xffa060), 120 * i);
+        }
+        this.stage.shake(f.big ? 1.6 : 1);
+        sound.thud(1.6);
+        sound.whoosh();
         return;
       }
       case 'deploy': {
@@ -878,6 +1012,7 @@ export class Game {
     if (sel === null) {
       this.inspector.hide();
       this.follow = null;
+      this.followFn = null;
       this.stage.goal.target.set(0, 0, 0);
     }
     this.panelT = 0;
@@ -885,6 +1020,7 @@ export class Game {
 
   focus(id: Sel) {
     this.follow = id;
+    this.followFn = null;
     if (id === 'star' || id === null) {
       this.stage.goal.target.set(0, 0, 0);
       return;
@@ -942,6 +1078,7 @@ export class Game {
       else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate'] as Action[])[n - 1]);
     }
     if (e.key === 'p' || e.key === 'P') this.openProjects();
+    if (e.key === 'c' || e.key === 'C') this.openChronicle();
     if (e.key === '+' || e.key === '=') this.stage.zoom(0.85);
     if (e.key === '-') this.stage.zoom(1.18);
   }
@@ -1290,6 +1427,8 @@ export class Game {
   private update(dt: number) {
     const s = this.s;
     const speed = this.mode === 'play' && !this.hold && !anyModal() ? this.settings.speed : this.mode === 'title' ? 1 : 0;
+    // Real time spent playing (the peoples' voices wait for a long game).
+    if (s && this.mode === 'play' && speed > 0) s.playTime = (s.playTime ?? 0) + dt;
     const L = s ? s.L * s.dial : 1;
     // Simulation.
     if (this.mode === 'title' && this.demo) {
@@ -1330,7 +1469,10 @@ export class Game {
     }
 
     // Camera.
-    if (this.follow !== null && this.follow !== 'star' && s) {
+    if (this.followFn) {
+      const v = this.followFn();
+      this.stage.goal.target.set(v.x, v.y, v.z);
+    } else if (this.follow !== null && this.follow !== 'star' && s) {
       const w = s.worlds.find((x) => x.id === this.follow);
       if (w) {
         const p = this.systemView.pos(w);
@@ -1384,7 +1526,7 @@ export class Game {
           dt,
         );
         const civ = s.civ;
-        this.hud.showDecisions(civ ? civ.decisions.map((d) => decisionView(d, s, sim.civ)) : []);
+        this.hud.showDecisions([...this.encounterViews(), ...(civ ? civ.decisions.map((d) => decisionView(d, s, sim.civ)) : [])]);
         if (civ?.decisions.length) this.hint('s.decision', '⚖', () => tr('Llegan visitantes y te piden algo. Decide antes de que se acabe el tiempo; si no, se marchan.', 'Visitors arrive and ask you something. Decide before time runs out; otherwise they leave.'));
         if (civ && sim.civ.spacefaring)
           this.hint('s.works', '⚒', () =>

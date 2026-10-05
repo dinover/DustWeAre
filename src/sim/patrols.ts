@@ -5,6 +5,7 @@ import { capName, worldName, invaderName, invaderNames } from '../content/names'
 import type { Bi } from '../i18n';
 import type { CivFx, CivSim } from './civ';
 import { peopleOf, type PeopleFx, type PeopleSim } from './peoples';
+import { addHarm } from './voices';
 
 /** Height of the battle barge's high orbit above the plane of the system. */
 export const BARGE_Y = 6;
@@ -425,6 +426,7 @@ export class PatrolSim {
     const p = this.patrol;
     if (!st || !p || !s.civ || this.strikeLock(st, conquer)) return false;
     pay(s.civ.res, conquer ? PATROL_COST.conquer : PATROL_COST.help);
+    addHarm(s, conquer ? 6 : -1);
     st.strike = { conquer };
     p.star = st.id;
     p.target = undefined;
@@ -445,6 +447,7 @@ export class PatrolSim {
     const st = this.star(id);
     if (!st || st.mode !== 'dominion') return false;
     st.mode = 'trade';
+    addHarm(this.h.s, -5);
     const who = this.h.peoples.get(st.people)?.name ?? '';
     this.h.news('⚖', `${st.name} vuelve a ser libre. ${who ? `Los colonos ${who}` : 'Sus colonos'} seguirán comerciando, y el sistema se gana menos enemigos.`, `${st.name} is free again. ${who ? `The ${capName(who)} settlers` : 'Its settlers'} will keep trading, and the system makes fewer enemies.`, 'info');
     return true;
@@ -522,12 +525,14 @@ export class PatrolSim {
     if (!st || !s.civ) return;
     const who = this.h.peoples.get(st.people)?.name;
     if (d.kind === 'annex') {
+      addHarm(s, accept ? 4 : -2);
       if (accept) this.annex(st);
       else this.h.news('⚖', `Los Space Patrols dejan ${st.name} en manos de sus colonos. Seguirá siendo libre y comerciando.`, `The Space Patrols leave ${st.name} to its settlers. It will stay free and keep trading.`, 'info');
       return;
     }
     if (!st.trouble) return;
     if (!accept) {
+      addHarm(s, 2);
       this.h.news('✶', `Los colonos de ${st.name} tendrán que arreglárselas solos.`, `The settlers of ${st.name} will have to fend for themselves.`, 'info');
       return;
     }

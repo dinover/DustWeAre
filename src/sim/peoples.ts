@@ -4,6 +4,7 @@ import { colonizable } from './worlds';
 import { capName, speciesName } from '../content/names';
 import { worldXZ } from '../render/layout';
 import type { CivFx } from './civ';
+import { addHarm } from './voices';
 
 /** What the peoples simulation needs from the system. */
 export interface PeopleHost {
@@ -317,6 +318,7 @@ export class PeopleSim {
   private peace(r: Relation, a: People, b: People, imposed: boolean) {
     r.state = 'peace';
     r.warT = 0;
+    r.ignored = false;
     r.mood = imposed ? -0.15 : 0.05;
     this.h.s.ships = this.h.s.ships.filter((x) => !(x.kind === 'raider' && (x.people === a.id || x.people === b.id)));
     if (imposed) {
@@ -333,6 +335,7 @@ export class PeopleSim {
     if (!a || !b || !r || r.state !== 'war') return false;
     r.state = 'peace';
     r.warT = 0;
+    r.ignored = false;
     r.mood = -0.25;
     this.h.s.ships = this.h.s.ships.filter((x) => !(x.kind === 'raider' && (x.people === a.id || x.people === b.id)));
     this.h.fx({ kind: 'truce', a: a.id, b: b.id });
@@ -345,6 +348,19 @@ export class PeopleSim {
     return true;
   }
 
+  /** Every war ends at once: the star's light forces a truce on all of them. */
+  truceAll() {
+    let n = 0;
+    for (const r of this.wars()) {
+      const a = this.get(r.a);
+      const b = this.get(r.b);
+      if (!a || !b) continue;
+      this.peace(r, a, b, true);
+      n++;
+    }
+    return n;
+  }
+
   /** The player's answer to a request to step in. */
   decide(d: Decision, accept: boolean) {
     const s = this.h.s;
@@ -352,6 +368,14 @@ export class PeopleSim {
     const a = this.get(ia);
     const b = this.get(ib);
     const r = a && b ? this.relation(a.id, b.id) : undefined;
+    if (r && !accept) {
+      // Choosing to let a war run its course weighs on the player.
+      if (d.kind === 'war') {
+        r.ignored = true;
+        addHarm(s, 5);
+      } else addHarm(s, 1.5);
+    }
+    if (r && accept) addHarm(s, d.kind === 'war' ? -5 : -2);
     if (!a || !b || !r || !accept) return;
     if (d.kind === 'tension' && s.energy >= 25) {
       s.energy -= 25;

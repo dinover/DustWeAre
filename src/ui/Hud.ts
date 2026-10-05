@@ -95,6 +95,8 @@ export interface HudHandlers {
   cancelTarget(): void;
   works(): void;
   decide(id: number, accept: boolean): void;
+  /** A piece of news was clicked: take the camera there. */
+  news(n: NewsItem): void;
   renameSystem(): void;
 }
 
@@ -256,6 +258,21 @@ export class Hud {
       this.worksEl = works;
       this.toolbar.append(works);
     }
+    // The chronicle: every event so far, and where it happened.
+    const chron = h(
+      'div',
+      { class: 'tool chron', 'data-tool': 'chronicle', role: 'button', tabindex: '0' },
+      h('span', { class: 'key' }, 'C'),
+      h('span', { html: ICONS.chronicle, style: 'display:contents' }),
+      h('span', { class: 't' }, tr('Crónica', 'Chronicle')),
+    );
+    chron.addEventListener('click', () => this.on.chronicle());
+    chron.addEventListener('pointerenter', (e) => {
+      if ((e as PointerEvent).pointerType === 'mouse') this.showTip(tr('<b>Crónica</b> · Todo lo que ha pasado. Toca un suceso para ir a verlo.', '<b>Chronicle</b> · Everything that has happened. Tap an event to go and see it.'));
+    });
+    chron.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
+    if (mode === 'formation') this.toolbar.append(h('div', { class: 'divider' }));
+    this.toolbar.append(chron);
     this.refreshLanguage();
   }
 
@@ -395,16 +412,18 @@ export class Hud {
   // ------------------------------------------------------------------ news
   pushNews(n: NewsItem, ageText: string) {
     const el = this.newsItem(n, ageText);
-    el.addEventListener('click', () => this.on.chronicle());
+    el.addEventListener('click', () => this.on.news(n));
     this.newsEl.prepend(el);
     while (this.newsEl.children.length > 3) this.newsEl.lastElementChild?.remove();
-    const life = n.kind === 'fact' ? 14000 : 11000;
+    const life = n.kind === 'fact' || n.kind === 'voice' ? 16000 : 11000;
     setTimeout(() => el.classList.add('fade'), life);
     setTimeout(() => el.remove(), life + 1300);
   }
 
   newsItem(n: NewsItem, ageText: string) {
-    return stone(`news-item ${n.kind}`, h('span', { class: 'ic' }, n.icon), h('div', null, h('span', { class: 'age' }, ageText), pick(n)));
+    const el = stone(`news-item ${n.kind}${n.focus ? ' has-focus' : ''}`, h('span', { class: 'ic' }, n.icon), h('div', null, h('span', { class: 'age' }, ageText), pick(n)));
+    if (n.focus) el.append(h('span', { class: 'go', title: tr('Ir a verlo', 'Go and see') }, '◎'));
+    return el;
   }
 
   clearNews() {
