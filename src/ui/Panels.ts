@@ -11,6 +11,8 @@ const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l
 const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
 /** Safe inside a double-quoted HTML attribute. */
 const attr = (t: string) => t.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+/** A tooltip attribute for panel markup. */
+const tipAttr = (es: string, en: string) => ` data-tip="${attr(tr(es, en))}"`;
 
 // ------------------------------------------------------------------ peoples
 
@@ -288,7 +290,7 @@ export class Inspector {
       'button',
       {
         class: 'rename-btn',
-        title: tr('Ponerle nombre', 'Give it a name'),
+        'data-tip': tr('Ponerle nombre', 'Give it a name'),
         onclick: () => {
           if (this.target !== null) this.on.rename(this.target);
         },
@@ -300,7 +302,7 @@ export class Inspector {
     this.extra = h('div');
     this.el = stone(
       'inspector veined',
-      h('button', { class: 'btn icon small x ghost', title: tr('Cerrar', 'Close'), onclick: () => this.on.close() }, '✕'),
+      h('button', { class: 'btn icon small x ghost', 'data-tip': tr('Cerrar', 'Close'), onclick: () => this.on.close() }, '✕'),
       h('div', { class: 'title-line' }, this.title, rename),
       this.kind,
       this.body,
@@ -353,8 +355,8 @@ export class Inspector {
     const adv = advice(w, st);
     let html = `
       <section><h3>${tr('COMPOSICIÓN', 'COMPOSITION')}</h3>
-        <div class="comp">${comp}</div><div class="legend">${legend}</div>
-        <div class="stat"><span>${tr('Masa', 'Mass')}</span><span>${massTxt}</span></div>
+        <div class="comp"${tipAttr('<b>Composición</b><br>De qué está hecho: metal, roca, agua y hielo, gas y orgánicos. Los cometas y los choques la cambian.', '<b>Composition</b><br>What it is made of: metal, rock, water and ice, gas and organics. Comets and collisions change it.')}>${comp}</div><div class="legend">${legend}</div>
+        <div class="stat"${tipAttr('<b>Masa</b><br>En masas terrestres. Entre 0,1 y 8 retiene aire y agua; mucho más y se vuelve un gigante.', '<b>Mass</b><br>In Earth masses. Between 0.1 and 8 it holds on to air and water; much more and it becomes a giant.')}><span>${tr('Masa', 'Mass')}</span><span>${massTxt}</span></div>
       </section>
       <section><h3>${tr('HABITABILIDAD', 'HABITABILITY')}</h3>
         <div class="hab-head"><div class="hab-ring" style="--p:${H}" data-tip="${attr(tr('Habitabilidad: todas las condiciones juntas. Basta con que una sea mala para que baje mucho. La vida aparece desde el 62 %.', 'Habitability: every condition together. A single bad one pulls it right down. Life appears from 62%.'))}"><b>${H}%</b></div>
@@ -365,13 +367,13 @@ export class Inspector {
     if (w.life) {
       const l = w.life;
       const stage = pick(STAGE_NAMES[l.stage]);
-      const next = l.stage < STAGE_TIME.length ? `<div class="stat"><span>${tr('Hacia', 'Towards')} ${pick(STAGE_NAMES[Math.min(5, l.stage + 1)]).toLowerCase()}</span><span>${pct(l.progress)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(l.progress * 100)}%"></i></div>` : '';
+      const next = l.stage < STAGE_TIME.length ? `<div class="stat"${tipAttr('<b>Evolución</b><br>Cuánto le falta para la siguiente etapa. Avanza sola mientras el mundo siga habitable y la vida sana.', '<b>Evolution</b><br>How far it is from the next stage. It moves on by itself while the world stays habitable and life healthy.')}><span>${tr('Hacia', 'Towards')} ${pick(STAGE_NAMES[Math.min(5, l.stage + 1)]).toLowerCase()}</span><span>${pct(l.progress)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(l.progress * 100)}%"></i></div>` : '';
       const lp = l.stage >= 2 ? peopleById(s, l.people) : undefined;
       const sp = lp ? ` · ${tr('los', 'the')} ${pName(lp)}` : '';
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3>
-        <div class="stat"><span>${tr('Etapa', 'Stage')}</span><span class="moss">${stage}${sp}</span></div>
+        <div class="stat"${tipAttr('<b>Etapa de la vida</b><br>Microbios → vida compleja → inteligencia → civilización → era espacial → era interplanetaria.', '<b>Stage of life</b><br>Microbes → complex life → intelligence → civilization → space age → interplanetary age.')}><span>${tr('Etapa', 'Stage')}</span><span class="moss">${stage}${sp}</span></div>
         ${next}
-        <div class="stat" style="margin-top:6px"><span>${tr('Salud', 'Health')}</span><span>${pct(Math.max(0, l.health))}</span></div>
+        <div class="stat" style="margin-top:6px"${tipAttr('<b>Salud de la vida</b><br>Si llega a cero, se extingue. La bajan los impactos, las llamaradas, los climas extremos y las guerras; se recupera con el tiempo.', '<b>Health of life</b><br>If it reaches zero, it dies out. Impacts, flares, extreme climates and wars lower it; it recovers over time.')}><span>${tr('Salud', 'Health')}</span><span>${pct(Math.max(0, l.health))}</span></div>
         <div class="vessel thin ${l.health > 0.5 ? 'moss' : ''}"><i style="--v:${Math.round(Math.max(0, l.health) * 100)}%"></i></div>
       </section>`;
     } else if (w.spark > 0.5) {
@@ -413,22 +415,22 @@ export class Inspector {
       const settled = isSettled(w);
       const jewel = role === 'science' && parent && parent.gas / Math.max(1e-6, massOf(parent)) > 0.3;
       html += `<section><h3>${settled ? tr('APORTA', 'CONTRIBUTES') : tr('SI SE COLONIZA, APORTARÁ', 'IF SETTLED, IT WILL GIVE')}</h3>
-        <div class="role ${ROLE_RES[role]}"><span class="ri">${RES_ICON[ROLE_RES[role]]}</span><span>${roleText(role)}</span></div>
+        <div class="role ${ROLE_RES[role]}"${tipAttr('<b>Recurso</b><br>Lo que este mundo aporta a los pueblos del sistema cuando alguien vive en él. Con ellos se pagan las grandes obras.', '<b>Resource</b><br>What this world gives the peoples of the system once someone lives on it. They pay for the great works.')}><span class="ri">${RES_ICON[ROLE_RES[role]]}</span><span>${roleText(role)}</span></div>
         ${jewel ? `<div class="small gold" style="margin-top:4px">${tr('Luna viva de un gigante: su ciencia vale el doble.', 'Living moon of a giant: its science is worth double.')}</div>` : ''}
         ${w.guest ? `<div class="small water" style="margin-top:4px">${tr(`Hogar de los ${w.guest}, refugiados de otra estrella.`, `Home of the ${capName(w.guest)}, refugees from another star.`)}</div>` : ''}
       </section>`;
     }
     if (w.colony > 0 || w.terra > 0 || w.sats > 0) {
       html += `<section><h3>${tr('CIVILIZACIÓN', 'CIVILIZATION')}</h3>
-        ${w.colony > 0 ? `<div class="stat"><span>${w.colony >= 1 ? tr('Colonia establecida', 'Colony established') : tr('Colonos en camino', 'Settlers arriving')}</span><span>${pct(Math.min(1, w.colony))}</span></div><div class="vessel thin gold"><i style="--v:${Math.round(Math.min(1, w.colony) * 100)}%"></i></div>` : ''}
-        ${w.terra > 0 ? `<div class="stat" style="margin-top:6px"><span>${tr('Terraformación', 'Terraforming')}</span><span>${pct(w.terra)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(w.terra * 100)}%"></i></div>` : ''}
-        ${w.sats > 0 ? `<div class="stat" style="margin-top:6px"><span>${tr('Satélites en órbita', 'Satellites in orbit')}</span><span>${w.sats}</span></div>` : ''}
+        ${w.colony > 0 ? `<div class="stat"${tipAttr('<b>Colonia</b><br>Llega con naves colonas; cada nave suma una parte hasta establecerla. Las incursiones y los invasores la desgastan.', '<b>Colony</b><br>It arrives on colony ships; each ship adds a share until it is established. Raids and invaders wear it down.')}><span>${w.colony >= 1 ? tr('Colonia establecida', 'Colony established') : tr('Colonos en camino', 'Settlers arriving')}</span><span>${pct(Math.min(1, w.colony))}</span></div><div class="vessel thin gold"><i style="--v:${Math.round(Math.min(1, w.colony) * 100)}%"></i></div>` : ''}
+        ${w.terra > 0 ? `<div class="stat" style="margin-top:6px"${tipAttr('<b>Terraformación</b><br>Los colonos vuelven el mundo templado y con agua, poco a poco. Gasta agua de los mundos helados.', '<b>Terraforming</b><br>The settlers slowly make the world mild and wet. It uses water from the icy worlds.')}><span>${tr('Terraformación', 'Terraforming')}</span><span>${pct(w.terra)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(w.terra * 100)}%"></i></div>` : ''}
+        ${w.sats > 0 ? `<div class="stat" style="margin-top:6px"${tipAttr('<b>Satélites</b><br>Los lanza la era espacial. Las superllamaradas y las supernovas los derriban.', '<b>Satellites</b><br>Launched in the space age. Superflares and supernovae knock them out.')}><span>${tr('Satélites en órbita', 'Satellites in orbit')}</span><span>${w.sats}</span></div>` : ''}
       </section>`;
     }
     if (w.invaded > 0.02) {
       const al = pick(((n) => ({ es: n[0], en: n[1] }))(invaderNames(s.alienSpecies)));
       html += `<section><h3 class="violet">${tr('VISITANTES', 'VISITORS')}</h3>
-        <div class="stat"><span>${tr(`Ocupado por los ${al}`, `Occupied by the ${al}`)}</span><span>${pct(w.invaded)}</span></div>
+        <div class="stat"${tipAttr('<b>Ocupación</b><br>Cuánto del mundo controlan los invasores. Desde el 60 % se extienden a otros mundos.', '<b>Occupation</b><br>How much of the world the invaders control. From 60% on they spread to other worlds.')}><span>${tr(`Ocupado por los ${al}`, `Occupied by the ${al}`)}</span><span>${pct(w.invaded)}</span></div>
         <div class="vessel thin violet"><i style="--v:${Math.round(w.invaded * 100)}%"></i></div>
         <div class="advice warn">${tr('Una <b>llamarada</b> solar los expulsa, aunque también castiga un poco la atmósfera.', 'A solar <b>flare</b> drives them out, though it also batters the atmosphere a little.')} ${s.patrol ? tr('Los <b>Space Patrols</b> también vendrán a purgarlos.', 'The <b>Space Patrols</b> will also come to purge them.') : tr('Si llegan a dominar varios mundos, los pueblos fundarán los <b>Space Patrols</b>.', 'If they come to hold several worlds, the peoples will found the <b>Space Patrols</b>.')}</div>
       </section>`;
@@ -498,6 +500,7 @@ export class Ledger {
   private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; flags: HTMLElement; dot: HTMLElement; name: HTMLElement; f: string }>();
   // Last markup written, so the DOM (and any hover on it) is only touched when something changed.
   private peoplesHtml = '';
+  private headHtml = '';
   private legendHtml = '';
   private list: HTMLElement;
   private head: HTMLElement;
@@ -529,7 +532,11 @@ export class Ledger {
       for (const m of ws.filter((x) => x.parent === p.id).sort((a, b) => a.a - b.a)) ordered.push(m);
     }
     const key = ordered.map((w) => w.id).join(',');
-    this.head.innerHTML = `<span>${tr('MUNDOS', 'WORLDS')} · ${planets.length}</span><span class="muted">${this.el.classList.contains('collapsed') ? '▸' : '▾'}</span>`;
+    const head = `<span>${tr('MUNDOS', 'WORLDS')} · ${planets.length}</span><span class="muted">${this.el.classList.contains('collapsed') ? '▸' : '▾'}</span>`;
+    if (head !== this.headHtml) {
+      this.head.innerHTML = this.headHtml = head;
+      this.head.dataset.tip = tr('<b>Mundos del sistema</b><br>Toca un mundo para ver su ficha. Toca aquí para plegar o desplegar la lista.', '<b>Worlds of the system</b><br>Tap a world to see its card. Tap here to fold or unfold the list.');
+    }
     if (key !== this.order) {
       this.order = key;
       clear(this.list);
@@ -541,7 +548,7 @@ export class Ledger {
         const flags = h('span', { class: 'flags' });
         // On touch screens a tap on an icon explains it instead of selecting the world.
         const pick = (e: Event) => {
-          if ((e as PointerEvent).pointerType === 'touch' && (e.target as Element).closest('[data-tip]')) return;
+          if ((e as PointerEvent).pointerType === 'touch' && (e.target as Element).closest('.flags [data-tip], .vessel[data-tip]')) return;
           this.on.select(w.id);
         };
         const row = h('div', { class: `row ${w.parent !== null ? 'moon' : ''}`, onclick: pick }, dot, name, bar, flags);
@@ -556,6 +563,17 @@ export class Ledger {
       if (!st) continue;
       r.name.textContent = w.name;
       r.dot.style.background = kindDot(st.kind);
+      {
+        // A summary on the name and the dot: what it is, where, how livable, who lives there.
+        const pp = peopleById(s, peopleOf(w));
+        const parent = w.parent !== null ? ws.find((x) => x.id === w.parent) : undefined;
+        const where = parent ? tr(`Luna de ${parent.name}`, `Moon of ${parent.name}`) : tr(`${num(w.a, 2)} UA de la estrella`, `${num(w.a, 2)} AU from the star`);
+        const life = w.life ? `${tr('Vida', 'Life')}: ${pick(STAGE_NAMES[w.life.stage]).toLowerCase()}` : tr('Sin vida', 'No life');
+        const who = pp ? ` · ${w.life?.people === pp.id ? tr('hogar de', 'home of') : tr('colonia de', 'colony of')} ${tr('los', 'the')} ${pName(pp)}` : '';
+        const tip = `<b>${w.name}</b> · ${kindName(st.kind)}<br>${where} · ${tr('habitabilidad', 'habitability')} ${Math.round(st.H * 100)} %<br>${life}${who}`;
+        // On the whole row (the icons and the bar keep their own, more precise tooltips).
+        if (r.row.dataset.tip !== tip) r.row.dataset.tip = tip;
+      }
       if (w.parent !== null) r.dot.style.transform = 'scale(.75)';
       const hab = Math.round(st.H * 100);
       (r.bar.firstChild as HTMLElement).style.setProperty('--v', `${hab}%`);

@@ -11,7 +11,7 @@ export const resName = (k: keyof Resources) =>
 /** Cost chips: each resource with its icon, red when there is not enough. */
 export function costChips(cost: Partial<Resources>, have: Resources | null) {
   return RES_KEYS.filter((k) => cost[k])
-    .map((k) => `<span class="cost-chip ${k} ${have && have[k] < (cost[k] ?? 0) ? 'short' : ''}" title="${resName(k)}">${RES_ICON[k]} ${int(cost[k] ?? 0)}</span>`)
+    .map((k) => `<span class="cost-chip ${k} ${have && have[k] < (cost[k] ?? 0) ? 'short' : ''}" data-tip="${resName(k)}">${RES_ICON[k]} ${int(cost[k] ?? 0)}</span>`)
     .join('');
 }
 
@@ -198,7 +198,7 @@ export class ProjectsPanel {
       if (st.mode === 'trade' && p) btns += btn('conquer', '', `${tr('Conquistar', 'Conquer')} ${costChips(PATROL_COST.conquer, res)}`, conqLock ? pick(conqLock) : tr('Los Space Patrols someten el sistema: pasará a ser un dominio.', 'The Space Patrols bring the system to heel: it will become a dominion.'), !!conqLock);
       if (st.mode === 'dominion') btns += btn('release', '', tr('Liberar', 'Set free'), tr('Devolverle la libertad: solo comerciará, y el sistema se ganará menos enemigos.', 'Give it back its freedom: it will only trade, and the system will make fewer enemies.'), false);
       html += `<div class="star-row ${st.mode}${st.trouble ? ' trouble' : ''}">
-        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" title="${tr('Ponerle nombre', 'Give it a name')}">✎</button><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
+        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" data-tip="${tr('Ponerle nombre', 'Give it a name')}">✎</button><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
         <div class="small"><span class="muted">${who}</span> · ${trouble}</div>
         <div class="vessel thin ${st.health > 0.5 ? 'moss' : 'gold'}" data-tip="${tr(`Estado de la colonia: ${Math.round(st.health * 100)} %`, `Colony condition: ${Math.round(st.health * 100)}%`)}"><i style="--v:${Math.round(st.health * 100)}%"></i></div>
         <div class="sr-inc small">${income} <em class="muted">/s</em></div>

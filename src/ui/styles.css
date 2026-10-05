@@ -574,8 +574,10 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .ledger .vessel { cursor: help; }
 
 /* the one tooltip */
+#ui > .tip-pop, .tip-pop { pointer-events: none !important; }
 .tip-pop { position: fixed; left: 0; top: 0; z-index: 60; max-width: 260px; padding: 7px 10px 8px; font-size: 12.5px; line-height: 1.4; color: var(--sand); background: rgba(18, 14, 11, .97); border: 1px solid rgba(220, 187, 122, .3); border-radius: 6px 9px 7px 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 230, 190, .06); pointer-events: none; opacity: 0; transition: opacity .12s ease; letter-spacing: normal; text-align: left; white-space: normal; }
-.tip-pop.on { opacity: 1; }
+.tip-pop:not(.on) { visibility: hidden; transition: opacity .12s ease, visibility 0s .12s; }
+.tip-pop.on { opacity: 1; visibility: visible; }
 .tip-pop b { color: #f4dcae; }
 .ledger .row > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -636,3 +638,5 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .chron .news-item.has-focus { cursor: pointer; }
 .news-item.voice { font-style: italic; background: linear-gradient(160deg, rgba(255, 236, 196, .08), rgba(0, 0, 0, .25)); }
 .news-item.voice .ic { color: #fff1c8; text-shadow: 0 0 10px rgba(255, 230, 170, .9); }
+.inspector [data-tip], .ledger h3[data-tip] { cursor: help; }
+.ledger .row [data-tip] { cursor: pointer; }

@@ -162,7 +162,7 @@ export class Hud {
       'button',
       {
         class: 'rename-btn',
-        title: tr('Ponerle nombre al sistema', 'Name the system'),
+        'data-tip': tr('Ponerle nombre al sistema', 'Name the system'),
         onclick: (e: Event) => {
           e.stopPropagation();
           this.on.renameSystem();
@@ -172,7 +172,7 @@ export class Hud {
     );
     const tablet = stone('tablet', h('div', { class: 'name-line' }, this.name, rename), this.sub, h('div', { class: 'seam bottom' }));
     tablet.style.cursor = 'pointer';
-    tablet.title = tr('Ver la estrella', 'View the star');
+    tablet.dataset.tip = tr('<b>El sistema</b><br>Toca para ver la estrella y ajustar su brillo. ✎ para ponerle nombre.', '<b>The system</b><br>Tap to see the star and adjust its brightness. ✎ to name it.');
     tablet.addEventListener('click', () => this.on.star());
     const prog = stone('progress-slab', this.progLabel, this.progBar, this.row2, this.settleBtn);
     const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar);
@@ -187,10 +187,10 @@ export class Hud {
       b.dataset.v = String(v);
       this.speedBtns.push(b);
       return b;
-    }), h('button', { class: 'btn small', title: tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
+    }), h('button', { class: 'btn small', 'data-tip': tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
-    this.resEl.title = tr('Recursos que reúnen los pueblos del sistema', 'Resources gathered by the peoples of the system');
+    this.resEl.dataset.tip = tr('<b>Recursos</b><br>Lo que reúnen los pueblos del sistema. Toca para abrir Proyectos.', '<b>Resources</b><br>What the peoples of the system gather. Tap to open Projects.');
     this.resEl.addEventListener('click', () => this.on.works());
     const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
     this.decisionsEl = h('div', { class: 'decisions' });
@@ -347,7 +347,7 @@ export class Hud {
     const e = Math.floor(s.energy);
     this.energyVal.textContent = `${e}`;
     (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${(s.energy / (info.energyCap ?? 100)) * 100}%`);
-    this.energyBar.title = tr(`+${num(info.energyRate, 1)} por segundo`, `+${num(info.energyRate, 1)} per second`);
+    this.energyBar.dataset.tip = tr(`<b>Luz estelar</b><br>Se recarga sola: +${num(info.energyRate, 1)} por segundo. La gastan tus acciones.`, `<b>Starlight</b><br>It refills on its own: +${num(info.energyRate, 1)} per second. Your actions spend it.`);
     if (s.phase === 'formation') {
       const p = info.progress ?? 0;
       this.progLabel.innerHTML = `<span>${tr('Polvo convertido en mundos', 'Dust turned into worlds')}</span><b>${Math.round(p * 100)} %</b>`;
@@ -395,7 +395,7 @@ export class Hud {
     this.resEl.style.display = late ? '' : 'none';
     this.root.parentElement?.classList.toggle('late', !!late);
     if (late) {
-      const html = RES_KEYS.map((k) => `<span class="res ${k}" title="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('');
+      const html = RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('');
       if (this.resEl.innerHTML !== html) this.resEl.innerHTML = html;
     }
     if (this.worksEl) {
@@ -422,7 +422,7 @@ export class Hud {
 
   newsItem(n: NewsItem, ageText: string) {
     const el = stone(`news-item ${n.kind}${n.focus ? ' has-focus' : ''}`, h('span', { class: 'ic' }, n.icon), h('div', null, h('span', { class: 'age' }, ageText), pick(n)));
-    if (n.focus) el.append(h('span', { class: 'go', title: tr('Ir a verlo', 'Go and see') }, '◎'));
+    if (n.focus) el.append(h('span', { class: 'go', 'data-tip': tr('Ir a verlo', 'Go and see') }, '◎'));
     return el;
   }
 
