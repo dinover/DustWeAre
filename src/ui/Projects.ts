@@ -3,6 +3,8 @@ import type { Resources } from '../core/state';
 import { ERA_NAMES, MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectDef, type ProjectId } from '../content/projects';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
 import { PATROL_COST, STAR_INCOME, type PatrolSim } from '../sim/patrols';
+import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, lanceSpeed, nextAt, podsPerWave, shieldStop, threatOf, upgradeCost, type DefenceId } from '../sim/threat';
+import { clamp } from '../util';
 import { h, stone, clear } from './dom';
 
 export const resName = (k: keyof Resources) =>
@@ -34,10 +36,12 @@ export class ProjectsPanel {
   private closeFn: () => void = () => {};
   private beyond = h('div', { class: 'beyond' });
   private beyondHtml = '';
+  private defences = h('div', { class: 'defences' });
+  private defHtml = '';
 
   constructor(
     private civ: CivSim,
-    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void },
+    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; upgrade(id: DefenceId): void },
     private patrols?: PatrolSim,
   ) {
     this.el = h('div', { class: 'projects' });
@@ -51,6 +55,12 @@ export class ProjectsPanel {
   private build() {
     clear(this.el);
     this.el.append(this.res);
+    // The threat and the defences that answer it.
+    this.el.append(h('h3', { class: 'proj-era' }, tr('Amenaza y defensas', 'Threat and defences')), this.defences);
+    this.defences.addEventListener('click', (e) => {
+      const b = (e.target as Element).closest('button[data-def]') as HTMLButtonElement | null;
+      if (b && !b.disabled) this.on.upgrade(b.dataset.def as DefenceId);
+    });
     for (const era of [1, 2, 3] as const) {
       const grid = h('div', { class: 'proj-grid' });
       this.el.append(h('h3', { class: 'proj-era' }, pick(ERA_NAMES[era])), grid);
@@ -134,6 +144,68 @@ export class ProjectsPanel {
       else this.on.send(id, b.dataset.act === 'conquer');
     });
     this.refresh();
+  }
+
+  /** The threat level, and one card per defence with its level and what the next one costs. */
+  private defencesView() {
+    const s = this.civ.state;
+    const civ = s.civ;
+    if (!civ) return '';
+    const L = threatOf(s);
+    const power = s.threat?.power ?? 0;
+    const prev = nextAt(L - 1);
+    const v = L >= MAX_LEVEL ? 1 : clamp((power - prev) / (nextAt(L) - prev));
+    let html = `<div class="threat-banner"><span class="tb-ico">⚠</span><div class="tb-text"><b>${tr(`Amenaza: nivel ${L}`, `Threat: level ${L}`)}</b><div class="small muted">${tr(
+      'Crece con el poder del sistema: mundos habitados, grandes obras, tecnologías y colonias lejanas (los dominios cuentan más). Cuanto más alta, antes llegan las invasiones, con más naves y naves nodriza más duras, y más problemas tienen las colonias lejanas.',
+      'It grows with the power of the system: settled worlds, great works, technologies and distant colonies (dominions count more). The higher it is, the sooner invasions come, with more ships and tougher motherships, and the more trouble the distant colonies get into.',
+    )}</div><div class="vessel thin ember" data-tip="${L >= MAX_LEVEL ? tr('Nivel máximo', 'Maximum level') : tr(`Poder ${Math.floor(power)} · el nivel ${L + 1} llega con ${nextAt(L)}`, `Power ${Math.floor(power)} · level ${L + 1} arrives at ${nextAt(L)}`)}"><i style="--v:${Math.round(v * 100)}%"></i></div></div></div><div class="proj-grid def-grid">`;
+    const P = defLevel(s, 'patrol');
+    const info: Record<DefenceId, { icon: string; name: string; effect: (n: number) => string }> = {
+      fleet: {
+        icon: '⟁',
+        name: tr('Flota de defensa', 'Defence fleet'),
+        effect: (n) => tr(`Intercepta cerca del ${Math.round(fleetCatch(n, L) * 100)} % de las naves invasoras antes de que lleguen.`, `Intercepts about ${Math.round(fleetCatch(n, L) * 100)}% of invading ships before they arrive.`),
+      },
+      shield: {
+        icon: '⛨',
+        name: tr('Escudos planetarios', 'Planetary shields'),
+        effect: (n) => tr(`Detienen el ${Math.round(shieldStop(n, L) * 100)} % de los asteroides y frenan a los invasores que bajan a mundos habitados.`, `Stop ${Math.round(shieldStop(n, L) * 100)}% of asteroids and slow down invaders landing on settled worlds.`),
+      },
+      patrol: {
+        icon: '⛨',
+        name: 'Space Patrols',
+        effect: (n) => {
+          const pods = podsPerWave(n);
+          return tr(
+            `${n} ${n === 1 ? 'compañía' : 'compañías'}: ${pods} cápsulas por oleada, la lanza dispara ×${lanceSpeed(n).toFixed(1).replace('.', ',')}${n >= 3 ? ' y una compañía queda de guardia cuando la barcaza salta a otra estrella' : ''}. Más compañías ganan más batallas lejanas.`,
+            `${n} ${n === 1 ? 'company' : 'companies'}: ${pods} drop pods per wave, the lance fires ×${lanceSpeed(n).toFixed(1)}${n >= 3 ? ' and one company stays on guard when the barge jumps to another star' : ''}. More companies win more distant battles.`,
+          );
+        },
+      },
+    };
+    for (const id of DEFENCES) {
+      const d = info[id];
+      const n = defLevel(s, id);
+      const lock = this.civ.defenceLock(id);
+      const state = !n ? 'none' : n >= L ? 'even' : n === L - 1 ? 'near' : 'behind';
+      let pips = '';
+      for (let i = 1; i <= MAX_LEVEL; i++) pips += `<i class="${i <= n ? 'on' : i <= L ? 'need' : ''}"></i>`;
+      const cost = n && n < MAX_LEVEL ? costChips(upgradeCost(id, n), civ.res) : '';
+      const label = !n ? tr('Mejorar', 'Upgrade') : n >= MAX_LEVEL ? tr('Nivel máximo', 'Maximum level') : tr(`Mejorar → nivel ${n + 1}`, `Upgrade → level ${n + 1}`);
+      const status = !n
+        ? tr('No existe todavía.', 'It does not exist yet.')
+        : n >= L
+          ? tr('A la altura de la amenaza.', 'A match for the threat.')
+          : tr(`Por debajo de la amenaza (${n} de ${L}).`, `Below the threat (${n} of ${L}).`);
+      html += `<div class="proj def ${state}"><div class="proj-head"><span class="proj-ico${id === 'patrol' ? ' pt' : ''}">${d.icon}</span><b>${d.name}</b><span class="def-lvl">${n ? tr(`Nivel ${n}`, `Level ${n}`) : '—'}</span></div>
+        <div class="pips" data-tip="${tr(`Nivel ${n} de ${MAX_LEVEL} · amenaza ${L}`, `Level ${n} of ${MAX_LEVEL} · threat ${L}`)}">${pips}</div>
+        <div class="small ${n ? 'gold' : 'muted'}">${n ? d.effect(n) : pick(lock ?? { es: '', en: '' })}</div>
+        <div class="small def-status">${status}</div>
+        ${n && n < MAX_LEVEL ? `<div class="costs">${cost}</div>` : ''}
+        ${n && lock && n < MAX_LEVEL ? `<div class="note small">${pick(lock)}</div>` : ''}
+        ${id === 'patrol' && !P ? '' : `<button class="btn small primary" data-def="${id}"${lock ? ' disabled' : ''}>${label}</button>`}</div>`;
+    }
+    return html + '</div>';
   }
 
   /** The Space Patrols' card and one row per distant colony. */
@@ -252,6 +324,8 @@ export class ProjectsPanel {
       const html = costChips(MISSION_COST[m.kind], civ.res);
       if (m.cost.innerHTML !== html) m.cost.innerHTML = html;
     }
+    const dh = this.defencesView();
+    if (dh !== this.defHtml) this.defences.innerHTML = this.defHtml = dh;
     const bh = this.beyondView();
     if (bh !== this.beyondHtml) this.beyond.innerHTML = this.beyondHtml = bh;
   }

@@ -1,11 +1,12 @@
 import type { Decision, GameState, OuterStar, PatrolState, Resources, Ship, World } from '../core/state';
-import { Rng, TAU, easeInOut } from '../util';
+import { Rng, TAU, clamp, easeInOut } from '../util';
 import { worldRadius, worldXZ } from '../render/layout';
 import { capName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { CivFx, CivSim } from './civ';
 import { peopleOf, type PeopleFx, type PeopleSim } from './peoples';
 import { addHarm } from './voices';
+import { defLevel, lanceSpeed, podsPerWave, threatOf } from './threat';
 
 /** Height of the battle barge's high orbit above the plane of the system. */
 export const BARGE_Y = 6;
@@ -231,9 +232,19 @@ export class PatrolSim {
     }
   }
 
-  /** The barge's lance: invaders in flight first, then raiders of peoples at war. */
+  /** Companies of Space Patrols (the patrol defence level). */
+  companies() {
+    return defLevel(this.h.s, 'patrol');
+  }
+
+  /**
+   * The barge's lance: invaders in flight first, then raiders of peoples at war. More companies
+   * fire more often, and from three companies on one stays home on guard while the barge is away.
+   */
   private lance(p: PatrolState, dt: number) {
-    if (p.phase === 'away' || p.phase === 'rising') return;
+    const P = this.companies();
+    const away = p.phase === 'away';
+    if (p.phase === 'rising' || (away && P < 3)) return;
     p.lanceT -= dt;
     if (p.lanceT > 0) return;
     const s = this.h.s;
@@ -249,10 +260,15 @@ export class PatrolSim {
       p.lanceT = 1;
       return;
     }
-    p.lanceT = rng.range(2.4, 4.2);
+    p.lanceT = (rng.range(2.4, 4.2) / lanceSpeed(P)) * (away ? 2 : 1);
     tgt.doom = 0.5;
     this.marked.set(tgt.id, 0.5);
-    this.h.fx({ kind: 'lance', ship: tgt.id });
+    if (!away) this.h.fx({ kind: 'lance', ship: tgt.id });
+    else {
+      // The company left on guard fires from the ground.
+      const guards = this.h.civ.settled();
+      if (guards.length) this.h.fx({ kind: 'laser', ship: tgt.id, world: rng.pick(guards).id });
+    }
   }
 
   private hits(p: PatrolState, dt: number) {
@@ -343,18 +359,19 @@ export class PatrolSim {
     }
   }
 
-  /** Drop pods in three waves, gunships with the first, the lance on the ground. */
+  /** Drop pods in three waves, gunships with the first, the lance on the ground: more of them with every company. */
   private assault(p: PatrolState) {
     const w = p.target !== undefined ? this.h.world(p.target) : undefined;
     if (!w) return this.phase(p, 'return');
     const waves = p.podsLeft ?? 0;
+    const P = this.companies();
     if (waves > 0 && p.t >= (3 - waves) * 2.2 + 0.4) {
       p.podsLeft = waves - 1;
-      this.launch(p, w, 'pod', 0);
-      this.launch(p, w, 'pod', -0.35);
+      const pods = podsPerWave(P);
+      for (let i = 0; i < pods; i++) this.launch(p, w, 'pod', -i * 0.35);
       if (waves === 3) {
-        this.launch(p, w, 'gunship', -0.2);
-        this.launch(p, w, 'gunship', -0.6);
+        const guns = Math.min(4, 2 + Math.floor((P - 1) / 3));
+        for (let i = 0; i < guns; i++) this.launch(p, w, 'gunship', -0.2 - i * 0.4);
       }
       this.h.fx({ kind: 'lance', world: w.id });
     }
@@ -473,7 +490,8 @@ export class PatrolSim {
     const conquer = !!st.strike?.conquer;
     st.strike = null;
     const kind = st.trouble?.kind;
-    const win = rng.next() < (kind === 'invaders' ? 0.75 : 0.9);
+    // More companies win more often; a threat that has outgrown them makes every fight harder.
+    const win = rng.next() < clamp((kind === 'invaders' ? 0.75 : 0.9) + 0.06 * (this.companies() - threatOf(this.h.s)), 0.3, 0.97);
     if (!win) {
       st.health = Math.max(0.15, st.health - 0.2);
       if (st.trouble) st.trouble.dur += 40;
@@ -564,14 +582,14 @@ export class PatrolSim {
         continue;
       }
       st.trouble.t += dt;
-      if (!st.strike) st.health = Math.max(0, st.health - dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008));
+      if (!st.strike) st.health = Math.max(0, st.health - dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008) * (1 + 0.08 * (threatOf(s) - 1)));
       if (st.trouble.t >= st.trouble.dur && !st.strike) this.troubleEnds(st);
     }
     if (!this.stars.length) return;
     if (!this.nextTrouble) this.nextTrouble = s.time + rng.range(50, 90);
     if (s.time < this.nextTrouble) return;
     const dom = this.dominions();
-    this.nextTrouble = s.time + rng.range(110, 170) / (1 + 0.12 * this.stars.length + 0.3 * dom);
+    this.nextTrouble = s.time + rng.range(110, 170) / (1 + 0.12 * this.stars.length + 0.3 * dom + 0.1 * (threatOf(s) - 1));
     const calm = this.stars.filter((x) => !x.trouble && !x.strike);
     if (!calm.length) return;
     let total = 0;

@@ -32,6 +32,7 @@ import { installTips } from '../ui/Tip';
 import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
+import { DEFENCES, defLevel, threatOf } from '../sim/threat';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
 
@@ -1535,6 +1536,13 @@ export class Game {
               'The peoples can now take on <b>great works</b>. Open <b>Projects</b> (P key): each kind of settled world contributes a different resource.',
             ),
           );
+        if ((s.threat?.level ?? 1) >= 2)
+          this.hint('s.danger', '⚠', () =>
+            tr(
+              'Tu sistema se hace fuerte, y eso se ve desde lejos: la <b>amenaza</b> (⚠ arriba a la derecha) sube con tus mundos, obras, tecnologías y colonias. Las invasiones llegarán antes y con más naves. Mejora la <b>flota</b>, los <b>escudos</b> y los <b>Space Patrols</b> en <b>Proyectos</b> para no quedarte atrás.',
+              'Your system grows strong, and that can be seen from afar: the <b>threat</b> (⚠ top right) rises with your worlds, works, technologies and colonies. Invasions will come sooner and with more ships. Raise the <b>fleet</b>, the <b>shields</b> and the <b>Space Patrols</b> in <b>Projects</b> to keep up.',
+            ),
+          );
         if (s.stars?.length)
           this.hint('s.stars', '✦', () =>
             tr(
@@ -1586,8 +1594,13 @@ export class Game {
     const era = civ.done.warp ? (done.some((p) => p.era === 3) ? 3 : 2) : done.length ? 1 : 0;
     const b = civ.building;
     const def = b ? PROJECTS.find((p) => p.id === b.id) : null;
-    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost));
+    const L = threatOf(s);
+    const lv = { fleet: defLevel(s, 'fleet'), shield: defLevel(s, 'shield'), patrol: defLevel(s, 'patrol') };
+    // A defence behind the threat that can be raised right now also lights the Projects button.
+    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id));
     return {
+      threat: L,
+      def: lv,
       era: tr(ERA_NAMES[era].es, ERA_NAMES[era].en),
       label: def && b ? tr(`Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %`, `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%`) : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
       v: b ? b.t / b.dur : done.length / PROJECTS.length,
@@ -1629,6 +1642,10 @@ export class Game {
         panel.refresh();
       },
       rename: (id) => this.rename({ star: id }),
+      upgrade: (id) => {
+        if (sim.civ.upgrade(id)) sound.chime('good');
+        panel.refresh();
+      },
       close: () => {},
     }, sim.patrols);
     this.projects = panel;
@@ -1685,7 +1702,7 @@ export class Game {
     }
     // The Space Patrols' battle barge.
     const pt = s.patrol;
-    if (pt && pt.phase !== 'away') this.labels.put('barge', 'barge-label', `⛨ ${tr(pt.barge.es, pt.barge.en)}`, pt.x, pt.y, pt.z, 26);
+    if (pt && pt.phase !== 'away') this.labels.put('barge', 'barge-label', `⛨ ${tr(pt.barge.es, pt.barge.en)}`, pt.x, pt.y, pt.z, 36);
   }
 }
 

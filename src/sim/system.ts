@@ -6,6 +6,7 @@ import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from 
 import { PatrolSim, type PatrolFx } from './patrols';
 import { OrbitSim, type OrbitFx } from './orbits';
 import { VoicesSim, addHarm } from './voices';
+import { defLevel, shieldSlow, threatOf } from './threat';
 import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
 import { FACTS } from '../content/facts';
 
@@ -379,9 +380,12 @@ export class SystemSim {
     for (const th of [...s.threats]) {
       th.t += dt;
       const target = this.world(th.target);
-      if (target && th.t / th.dur > 0.8 && this.civ.shieldStops(target, th.id)) {
-        s.threats.splice(s.threats.indexOf(th), 1);
-        continue;
+      if (target && !th.tried && th.t / th.dur > 0.8) {
+        th.tried = true;
+        if (this.civ.shieldStops(target, th.id)) {
+          s.threats.splice(s.threats.indexOf(th), 1);
+          continue;
+        }
       }
       if (th.t < th.dur) continue;
       s.threats.splice(s.threats.indexOf(th), 1);
@@ -454,7 +458,7 @@ export class SystemSim {
   private wildImpacts(dt: number) {
     this.wildT -= dt;
     if (this.wildT > 0) return;
-    this.wildT = this.rng.range(110, 190);
+    this.wildT = this.rng.range(110, 190) / (1 + 0.08 * (threatOf(this.s) - 1));
     const s = this.s;
     const pool = s.worlds.filter((w) => colonizable(w));
     if (!pool.length) return;
@@ -489,12 +493,13 @@ export class SystemSim {
       this.news('⚠', `Desde el otro lado de la galaxia llega una nueva amenaza: los ${invaderNames(s.alienSpecies)[0]}.`, `A new threat arrives from the far side of the galaxy: the ${invaderNames(s.alienSpecies)[1]}.`, 'alien');
       return;
     }
-    // Conquered stars make enemies: waves come sooner and bigger.
+    // Conquered stars make enemies, and a strong system is seen from afar: waves come sooner and bigger.
     const dominions = this.patrols.dominions();
+    const L = threatOf(s);
     if (inv.signal && s.time >= inv.next) {
       inv.waves++;
-      inv.next = s.time + this.rng.range(240, 360) / (1 + 0.3 * dominions);
-      const n = 1 + Math.min(5, inv.waves) + Math.min(4, dominions);
+      inv.next = s.time + this.rng.range(240, 360) / (1 + 0.3 * dominions + 0.12 * (L - 1));
+      const n = 1 + Math.min(5, inv.waves) + Math.min(4, dominions) + Math.floor((L - 1) * 0.6);
       const targets = s.worlds.filter((w) => colonizable(w) && w.invaded < 0.9);
       targets.sort((a, b) => b.colony + (b.life ? 1 : 0) - (a.colony + (a.life ? 1 : 0)));
       const from = -1 - ((this.rng.next() * 1000) | 0);
@@ -503,12 +508,16 @@ export class SystemSim {
         s.ships.push({ id: this.nid(), from, to: tg.id, t: -i * 0.8, dur: this.rng.range(18, 26), alien: true, kind: 'alien' });
       }
       const [al, AL] = invaderNames(s.alienSpecies);
-      // From the third wave on, a mothership leads them, dropping out of warp.
-      if (inv.waves >= 3 && targets.length) {
-        s.ships.push({ id: this.nid(), from, to: targets[0].id, t: -2, dur: 34, alien: true, kind: 'mother', hp: 3 });
+      // From the third wave on, a mothership leads them, dropping out of warp — sooner, tougher
+      // and in pairs when the threat is high.
+      const mothers = inv.waves >= (L >= 7 ? 1 : L >= 4 ? 2 : 3) && targets.length ? (L >= 7 ? 2 : 1) : 0;
+      if (mothers) {
+        for (let m = 0; m < mothers; m++)
+          s.ships.push({ id: this.nid(), from, to: targets[m % targets.length].id, t: -2 - m * 3, dur: 34, alien: true, kind: 'mother', hp: 3 + Math.floor((L - 1) / 2) });
         const a = (Math.abs(from) * 2.399) % (Math.PI * 2);
-        this.onFx({ kind: 'warpIn', x: Math.cos(a) * 110, z: Math.sin(a) * 110, dx: -Math.cos(a), dz: -Math.sin(a), count: n + 1, tint: 'alien' });
-        this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${AL} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
+        this.onFx({ kind: 'warpIn', x: Math.cos(a) * 110, z: Math.sin(a) * 110, dx: -Math.cos(a), dz: -Math.sin(a), count: n + mothers, tint: 'alien' });
+        if (mothers > 1) this.news('⚠', `¡Dos naves nodriza de los ${al} salen de la curvatura, escoltadas por ${n} naves!`, `Two ${AL} motherships drop out of warp, escorted by ${n} ships!`, 'alien');
+        else this.news('⚠', `¡Una nave nodriza de los ${al} sale de la curvatura, escoltada por ${n} naves!`, `A ${AL} mothership drops out of warp, escorted by ${n} ships!`, 'alien');
       } else this.news('⚠', `Naves de los ${al} entran en tu sistema. Buscan mundos donde quedarse.`, `Ships of the ${AL} enter your system. They are looking for worlds to settle.`, 'alien');
     }
     // The peoples fight back on their own, slowly; a flare, the defence fleet or the Space Patrols are much faster.
@@ -536,8 +545,13 @@ export class SystemSim {
   }
 
   private alienArrives(w: World, mother = false) {
+    const s = this.s;
     const before = w.invaded;
-    w.invaded = Math.min(1, w.invaded + (mother ? 0.85 : 0.4));
+    // Bolder invaders when the threat is high; shields slow them down over settled worlds.
+    const L = threatOf(s);
+    const S = this.civ.settled().includes(w) ? defLevel(s, 'shield') : 0;
+    const k = (1 + 0.06 * (L - 1)) * (S ? shieldSlow(S, L) : 1);
+    w.invaded = Math.min(1, w.invaded + (mother ? 0.85 : 0.4) * k);
     const [al, AL] = invaderNames(this.s.alienSpecies);
     if (before < 0.5 && w.invaded >= 0.5)
       this.news('⚠', `Los ${al} se asientan en ${w.name}. Una llamarada solar podría expulsarlos.`, `The ${AL} settle on ${w.name}. A solar flare could drive them out.`, 'alien');

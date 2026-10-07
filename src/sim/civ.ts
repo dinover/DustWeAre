@@ -8,6 +8,7 @@ import { capName, speciesName, worldName, invaderName, invaderNames } from '../c
 import type { Bi } from '../i18n';
 import type { PeopleSim, PeopleFx } from './peoples';
 import { addHarm } from './voices';
+import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, levelFor, powerOf, shieldStop, threatOf, upgradeCost, type DefenceId } from './threat';
 
 export type Role = 'fuel' | 'water' | 'science' | 'metal';
 export const RES_KEYS: (keyof Resources)[] = ['metal', 'fuel', 'water', 'science'];
@@ -135,6 +136,7 @@ export class CivSim {
       else return;
     }
     const civ = s.civ!;
+    this.threat();
     this.produce(civ, dt);
     this.build(civ, dt);
     this.researching(civ, dt);
@@ -147,6 +149,62 @@ export class CivSim {
     this.rogue(civ, dt);
     this.events(civ, dt);
     this.flavor(civ);
+  }
+
+  // ------------------------------------------------------------------ threat & defences
+  /** The system's power sets how dangerous the galaxy becomes for it. */
+  private threat() {
+    const s = this.h.s;
+    const power = powerOf(s, this.settled().length);
+    const t = (s.threat ??= { level: levelFor(power), power });
+    t.power = power;
+    const want = levelFor(power);
+    // It rises at once, and only falls back once the power has clearly shrunk.
+    if (want > t.level) {
+      t.level = want;
+      const behind = DEFENCES.some((id) => defLevel(s, id) > 0 && defLevel(s, id) < want);
+      this.h.news(
+        '⚠',
+        `Tu sistema brilla cada vez más y se ve desde lejos: la amenaza sube a nivel ${want}. Las invasiones llegarán antes y con más naves.${behind ? ' Conviene reforzar las defensas en Proyectos.' : ''}`,
+        `Your system shines ever brighter and can be seen from afar: the threat rises to level ${want}. Invasions will come sooner and with more ships.${behind ? ' Your defences should be raised in Projects.' : ''}`,
+        'alien',
+      );
+    } else if (levelFor(power + 3) < t.level) t.level = levelFor(power + 3);
+  }
+
+  /** Why a defence cannot be raised right now (null: it can). */
+  defenceLock(id: DefenceId): Bi | null {
+    const civ = this.civ;
+    const s = this.h.s;
+    if (!civ) return { es: 'Primero, una civilización.', en: 'First, a civilization.' };
+    const lvl = defLevel(s, id);
+    if (!lvl)
+      return id === 'fleet'
+        ? { es: 'Necesita la gran obra «Flota de defensa».', en: 'Needs the great work “Defence fleet”.' }
+        : id === 'shield'
+          ? { es: 'Necesita la gran obra «Escudo planetario».', en: 'Needs the great work “Planetary shield”.' }
+          : { es: 'Aún no existen: los pueblos los fundan cuando los invasores dominan varios mundos.', en: 'They do not exist yet: the peoples found them when invaders hold several worlds.' };
+    if (lvl >= MAX_LEVEL) return { es: 'Nivel máximo.', en: 'Maximum level.' };
+    if (!has(civ.res, upgradeCost(id, lvl))) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
+    return null;
+  }
+
+  /** Raises a defence one level. */
+  upgrade(id: DefenceId) {
+    const civ = this.civ;
+    const s = this.h.s;
+    if (!civ || this.defenceLock(id)) return false;
+    const lvl = defLevel(s, id);
+    pay(civ.res, upgradeCost(id, lvl));
+    const n = lvl + 1;
+    (civ.def ??= {})[id] = n;
+    const lines: Record<DefenceId, Bi> = {
+      fleet: { es: `La flota de defensa crece hasta el nivel ${n}: más guardianes vigilan cada mundo habitado.`, en: `The defence fleet grows to level ${n}: more guardians watch over every settled world.` },
+      shield: { es: `Los escudos planetarios se refuerzan hasta el nivel ${n}.`, en: `The planetary shields are reinforced to level ${n}.` },
+      patrol: { es: `Una nueva compañía jura ante la estrella: los Space Patrols ya son ${n} compañías.`, en: `A new company takes its oath before the star: the Space Patrols now number ${n} companies.` },
+    };
+    this.h.news(id === 'fleet' ? '⟁' : '⛨', lines[id].es, lines[id].en, 'good');
+    return true;
   }
 
   // ------------------------------------------------------------------ economy
@@ -445,7 +503,8 @@ export class CivSim {
     const rng = this.h.rng;
     const sn = this.leaderName();
     const S = capName(sn);
-    const roll = rng.next();
+    // The stronger the system, the likelier someone follows the expedition home.
+    const roll = rng.next() < 0.03 * (threatOf(this.h.s) - 1) ? 1 : rng.next();
     if (roll < 0.3) {
       const g = { metal: rng.int(60, 120), fuel: rng.int(40, 90), science: rng.int(40, 90) };
       gain(civ.res, g);
@@ -587,7 +646,7 @@ export class CivSim {
       if (a.vsAliens && s.alienSpecies) {
         civ.peace = true;
         civ.stats.battles += 12;
-        s.invasion.next = s.time + 1500;
+        s.invasion.next = s.time + 1500 / (1 + 0.12 * (threatOf(s) - 1));
         s.ships = s.ships.filter((x) => !x.alien);
         for (const w of s.worlds) w.invaded *= 0.15;
         gain(civ.res, { science: 180, metal: 120 });
@@ -616,10 +675,15 @@ export class CivSim {
   // ------------------------------------------------------------------ defence
   private defend(civ: CivState, dt: number) {
     const s = this.h.s;
-    if (!civ.done.fleet) return;
+    const F = defLevel(s, 'fleet');
+    if (!F) return;
     // Every settled world, whatever its people, shoots at intruders.
     const guards = this.settled();
     if (!guards.length) return;
+    // A fleet that keeps up with the threat catches nearly every intruder on its way in; one left
+    // behind lets more and more of them through.
+    const L = threatOf(s);
+    const rate = -Math.log(1 - fleetCatch(F, L)) / 13;
     for (const sh of [...s.ships]) {
       if (!sh.alien) continue;
       if (sh.doom !== undefined) {
@@ -641,19 +705,25 @@ export class CivSim {
         continue;
       }
       const k = sh.t / sh.dur;
-      if (k > 0.3 && k < 0.92 && this.h.rng.next() < dt * 0.7) {
+      if (k > 0.3 && k < 0.92 && this.h.rng.next() < dt * rate) {
         sh.doom = 1.1;
         const shooter = this.h.rng.pick(guards);
         this.h.fx({ kind: 'laser', ship: sh.id, world: shooter.id });
       }
     }
-    for (const w of s.worlds) if (w.invaded > 0) w.invaded = Math.max(0, w.invaded - dt * 0.004);
+    for (const w of s.worlds) if (w.invaded > 0) w.invaded = Math.max(0, w.invaded - dt * 0.004 * clamp(1 - 0.12 * (L - F), 0.3, 1.3));
   }
 
   /** Called by the system when an asteroid is about to hit: shields stop it. */
   shieldStops(w: World, threatId: number) {
-    const civ = this.civ;
-    if (!civ?.done.shield || !isSettled(w)) return false;
+    const s = this.h.s;
+    const S = defLevel(s, 'shield');
+    if (!S || !isSettled(w)) return false;
+    // Shields behind the threat no longer catch every rock.
+    if (this.h.rng.next() > shieldStop(S, threatOf(s))) {
+      this.h.news('⛨', `El escudo de ${w.name} no da abasto: una roca lo atraviesa.`, `The shield of ${w.name} cannot cope: a rock gets through.`, 'warn');
+      return false;
+    }
     if (threatId >= 0) this.h.fx({ kind: 'shieldHit', world: w.id, threat: threatId });
     this.h.news('⛨', `El escudo de ${w.name} pulveriza un asteroide antes de que toque la atmósfera.`, `The shield of ${w.name} shatters an asteroid before it touches the atmosphere.`, 'good');
     return true;

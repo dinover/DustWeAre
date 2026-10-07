@@ -120,6 +120,9 @@ export interface LateInfo {
   res: Resources;
   rates: Resources;
   canBuild: boolean;
+  /** Threat level, and the level of each defence (0: not there yet). */
+  threat: number;
+  def: Record<'fleet' | 'shield' | 'patrol', number>;
 }
 
 /** Heads-up display: name tablet, progress, starlight, speed, tools, news and hints. */
@@ -395,7 +398,19 @@ export class Hud {
     this.resEl.style.display = late ? '' : 'none';
     this.root.parentElement?.classList.toggle('late', !!late);
     if (late) {
-      const html = RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('');
+      const L = late.threat;
+      const d = late.def;
+      const built = [d.fleet, d.shield, d.patrol].filter((n) => n > 0);
+      const worst = built.length ? Math.min(...built) : 0;
+      const state = !built.length ? (L >= 3 ? 'warn' : 'ok') : worst >= L ? 'ok' : worst === L - 1 ? 'warn' : 'bad';
+      const lv = (n: number) => (n ? String(n) : '—');
+      const tip = tr(
+        `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
+        `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
+      );
+      const html =
+        RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('') +
+        `<span class="res threat ${state}" data-tip="${tip.replace(/"/g, '&quot;')}"><i>⚠</i>${L}</span>`;
       if (this.resEl.innerHTML !== html) this.resEl.innerHTML = html;
     }
     if (this.worksEl) {

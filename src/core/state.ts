@@ -257,6 +257,8 @@ export interface CivState {
   /** Technologies researched beyond the great works. */
   tech?: number;
   research?: { t: number; dur: number } | null;
+  /** Defence levels bought on top of the great works (fleet, shields) and the Space Patrols. */
+  def?: Partial<Record<'fleet' | 'shield' | 'patrol', number>>;
   stats: { expeditions: number; battles: number; trades: number; colonies: number; armadas: number };
 }
 
@@ -317,6 +319,8 @@ export interface Threat {
   t: number;
   dur: number;
   angle: number;
+  /** The shields already tried to stop it. */
+  tried?: boolean;
 }
 
 /** What a piece of news points at, for the camera. */
@@ -400,6 +404,8 @@ export interface GameState {
   /** Colonies around other stars. */
   stars?: OuterStar[];
   patrol?: PatrolState | null;
+  /** How dangerous the galaxy has become for this system (1–10): it grows with the system's power. */
+  threat?: { level: number; power: number };
   peoples?: People[];
   relations?: Relation[];
   /** Legacy. */

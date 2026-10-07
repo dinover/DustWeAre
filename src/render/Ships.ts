@@ -14,10 +14,10 @@ const MODELS: Record<ModelHull, { cap: number; fallback: ProcHull }> = {
   spitfire: { cap: 120, fallback: 'dart' },
   zenith: { cap: 120, fallback: 'dart' },
   challenger: { cap: 80, fallback: 'dart' },
-  bob: { cap: 60, fallback: 'hauler' },
+  bob: { cap: 140, fallback: 'hauler' },
   dispatcher: { cap: 30, fallback: 'diamond' },
   executioner: { cap: 40, fallback: 'gunship' },
-  imperial: { cap: 80, fallback: 'hauler' },
+  imperial: { cap: 2, fallback: 'barge' },
   insurgent: { cap: 50, fallback: 'tanker' },
   omen: { cap: 70, fallback: 'claw' },
   pancake: { cap: 8, fallback: 'mother' },
@@ -332,6 +332,11 @@ export class ShipHulls {
         },
       );
     }
+  }
+
+  /** Has this hull's model (or its stand-in) been loaded? */
+  has(h: Hull) {
+    return this.meshes.has(h);
   }
 
   begin() {

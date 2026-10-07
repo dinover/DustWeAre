@@ -26,7 +26,7 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   flotilla: { hull: 'challenger', size: 0.62, px: 15 },
   armada: { hull: 'striker', size: 0.7, px: 16 },
   raider: { hull: 'striker', size: 0.62, px: 15 },
-  freight: { hull: 'imperial', size: 0.6, px: 13 },
+  freight: { hull: 'bob', size: 0.55, px: 12 },
   miner: { hull: 'bob', size: 0.42, px: 10 },
   tanker: { hull: 'insurgent', size: 0.6, px: 13 },
   trader: { hull: 'dispatcher', size: 0.85, px: 16 },
@@ -37,6 +37,9 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   pod: { hull: 'pod', size: 0.42, px: 10 },
   gunship: { hull: 'executioner', size: 0.65, px: 14 },
 };
+/** The battle barge: true size and smallest size on screen. */
+const BARGE_SIZE = 4.6;
+const BARGE_PX = 62;
 /** Each people's shipyards favour one warship design. */
 const WARSHIPS: Hull[] = ['striker', 'spitfire', 'zenith'];
 const hullOf = (kind: ShipKind, people?: number): Hull => (kind === 'armada' || kind === 'raider' ? WARSHIPS[(people ?? 0) % WARSHIPS.length] : HULL_OF[kind].hull);
@@ -546,7 +549,8 @@ export class SystemView {
         }
       }
     }
-    // The Space Patrols' battle barge on its high orbit, two gunships flying escort.
+    // The Space Patrols' battle barge on its high orbit (the biggest hull of the pack, in their
+    // ultramarine), its gunships flying escort: one more for every company.
     const pt = s.patrol;
     if (pt && pt.phase !== 'away') {
       v.set(pt.x, pt.y, pt.z);
@@ -557,18 +561,21 @@ export class SystemView {
       } else dir.set(pt.x - pt.sx, 0, pt.z - pt.sz);
       if (dir.lengthSq() < 1e-6) dir.set(-Math.sin(pt.ang), 0, Math.cos(pt.ang));
       dir.normalize();
-      hue.setRGB(1, 1, 1);
-      this.hulls.add('barge', v, dir, hue, 3.4, 46, cam);
-      const scale = Math.max(3.4, 46 * this.hulls.pxScale * cam.distanceTo(v));
+      const model = this.hulls.has('imperial');
+      if (model) hue.copy(PATROL_ACCENT);
+      else hue.setRGB(1, 1, 1);
+      this.hulls.add(model ? 'imperial' : 'barge', v, dir, hue, BARGE_SIZE, BARGE_PX, cam);
+      const scale = Math.max(BARGE_SIZE, BARGE_PX * this.hulls.pxScale * cam.distanceTo(v));
       if (p < MAX_POINTS) {
         this.shipPos.set([v.x - dir.x * scale * 0.55, v.y, v.z - dir.z * scale * 0.55], p * 3);
         this.shipCol.set([PATROL_GLOW.r * 1.4, PATROL_GLOW.g * 1.4, PATROL_GLOW.b * 1.6], p * 3);
         this.shipSize[p] = 2.2;
         p++;
       }
-      for (let j = 0; j < 2; j++) {
-        const a = time * 0.8 + j * Math.PI;
-        const r = scale * 0.75;
+      const escorts = Math.min(6, 1 + Math.max(1, s.civ?.def?.patrol ?? 1));
+      for (let j = 0; j < escorts; j++) {
+        const a = time * 0.8 + (j * TAU) / escorts;
+        const r = scale * (0.72 + 0.08 * (j % 2));
         q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
         const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
         this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 11, cam);
