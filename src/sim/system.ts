@@ -6,6 +6,7 @@ import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from 
 import { PatrolSim, type PatrolFx } from './patrols';
 import { OrbitSim, type OrbitFx } from './orbits';
 import { VoicesSim, addHarm } from './voices';
+import { WingsSim } from './wings';
 import { defLevel, shieldSlow, threatOf } from './threat';
 import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
 import { FACTS } from '../content/facts';
@@ -47,6 +48,7 @@ export class SystemSim {
   civ: CivSim;
   peoples: PeopleSim;
   patrols: PatrolSim;
+  wings: WingsSim;
   orbits: OrbitSim;
   voices: VoicesSim;
   private shipTimers = new Map<number, number>();
@@ -60,6 +62,7 @@ export class SystemSim {
     this.civ = new CivSim(this);
     this.peoples = new PeopleSim(this);
     this.patrols = new PatrolSim(this);
+    this.wings = new WingsSim(this);
     this.orbits = new OrbitSim(this);
     this.voices = new VoicesSim(this);
   }
@@ -73,7 +76,7 @@ export class SystemSim {
   }
 
   /** A choice made by the player on one of the pending decisions. */
-  decide(id: number, accept: boolean) {
+  decide(id: number, accept: boolean, choice?: number) {
     const civ = this.s.civ;
     const d = civ?.decisions.find((x) => x.id === id);
     if (!civ || !d) return;
@@ -82,7 +85,7 @@ export class SystemSim {
       this.peoples.decide(d, accept);
     } else if (d.kind === 'outpost' || d.kind === 'annex') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
-      this.patrols.decide(d, accept);
+      this.patrols.decide(d, accept, choice);
     } else if (d.kind === 'plea') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.voices.decide(d, accept);
@@ -189,6 +192,7 @@ export class SystemSim {
     this.peoples.update(dt);
     this.civ.update(dt);
     this.patrols.update(dt);
+    this.wings.update(dt);
     this.voices.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);

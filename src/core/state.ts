@@ -262,6 +262,11 @@ export interface CivState {
   stats: { expeditions: number; battles: number; trades: number; colonies: number; armadas: number };
 }
 
+/** How dangerous a trouble at a distant colony is. */
+export type Risk = 'low' | 'mid' | 'high';
+/** Size of a Freedom Wings sortie: small, medium or large. */
+export type WingSize = 'S' | 'M' | 'L';
+
 /** A colony of one of the system's peoples around another star. */
 export interface OuterStar {
   id: number;
@@ -275,9 +280,26 @@ export interface OuterStar {
   founded: number;
   /** 0..1 how well it is doing; troubles wear it down. */
   health: number;
-  trouble?: { kind: 'pirates' | 'natives' | 'invaders' | 'plague'; t: number; dur: number } | null;
-  /** The Space Patrols are on their way or fighting there. */
-  strike?: { conquer: boolean } | null;
+  trouble?: { kind: 'pirates' | 'natives' | 'invaders' | 'plague'; t: number; dur: number; risk?: Risk } | null;
+  /** Companies of the Space Patrols are on their way or fighting there. */
+  strike?: { conquer: boolean; companies?: number } | null;
+  /** A Freedom Wings sortie is fighting there. */
+  wing?: { size: WingSize; units: number } | null;
+}
+
+/** The Freedom Wings: volunteer squadrons of the free peoples, a fleet that grows with life and peace. */
+export interface WingsState {
+  units: number;
+  born: number;
+  /** Seconds since the last war between the peoples. */
+  peace: number;
+  /** How far along the next ship is (0..1). */
+  grow: number;
+  won: number;
+  lost: number;
+  /** Batches of ships bought with science (each one dearer). */
+  bought?: number;
+  sorties: { id: number; star: number; size: WingSize; units: number; t: number; dur: number }[];
 }
 
 /** The Space Patrols: armoured warriors the peoples raise when invaders become a real threat. */
@@ -297,6 +319,8 @@ export interface PatrolState {
   sz: number;
   /** Parking angle on its high orbit. */
   ang: number;
+  /** Companies (one battle barge each) away at other stars. */
+  detach?: { star: number; companies: number; t: number; conquer: boolean }[];
   /** World being assaulted, and why. */
   target?: number;
   goal?: 'purge' | 'war';
@@ -404,6 +428,7 @@ export interface GameState {
   /** Colonies around other stars. */
   stars?: OuterStar[];
   patrol?: PatrolState | null;
+  wings?: WingsState | null;
   /** How dangerous the galaxy has become for this system (1–10): it grows with the system's power. */
   threat?: { level: number; power: number };
   peoples?: People[];

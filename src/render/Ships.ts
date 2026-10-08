@@ -17,7 +17,7 @@ const MODELS: Record<ModelHull, { cap: number; fallback: ProcHull }> = {
   bob: { cap: 140, fallback: 'hauler' },
   dispatcher: { cap: 30, fallback: 'diamond' },
   executioner: { cap: 40, fallback: 'gunship' },
-  imperial: { cap: 2, fallback: 'barge' },
+  imperial: { cap: 12, fallback: 'barge' },
   insurgent: { cap: 50, fallback: 'tanker' },
   omen: { cap: 70, fallback: 'claw' },
   pancake: { cap: 8, fallback: 'mother' },
@@ -253,7 +253,7 @@ function finish(geo: THREE.BufferGeometry, paint?: Paint[]) {
   return g;
 }
 
-const CAP: Record<ProcHull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2, barge: 1, pod: 30, gunship: 24 };
+const CAP: Record<ProcHull, number> = { dart: 260, hauler: 70, tanker: 40, diamond: 24, claw: 60, mother: 6, orb: 12, ark: 2, barge: 12, pod: 30, gunship: 24 };
 
 /**
  * Every ship as a tiny 3D hull, batched per shape. Hulls keep a minimum size on screen, so a

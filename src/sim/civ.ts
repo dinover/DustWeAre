@@ -63,8 +63,8 @@ export type CivFx =
   | { kind: 'laser'; ship: number; world: number }
   | { kind: 'boom'; ship: number; big: boolean }
   | { kind: 'shieldHit'; world: number; threat: number }
-  | { kind: 'warpOut'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol'; people?: number }
-  | { kind: 'warpIn'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol'; people?: number }
+  | { kind: 'warpOut'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol' | 'wings'; people?: number }
+  | { kind: 'warpIn'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol' | 'wings'; people?: number }
   | { kind: 'supernova' }
   | { kind: 'superflare' }
   | { kind: 'built'; id: ProjectId; world: number }
@@ -519,7 +519,8 @@ export class CivSim {
       gain(civ.res, { science: 80 });
       const star = worldName(rng, new Set());
       this.h.foundStar(star, this.h.peoples.leader()?.id ?? 0, rng.range(0, TAU));
-      this.h.news('✶', `Los ${sn} fundan una colonia junto a la estrella ${star}. La vida de este sistema ya alcanza ${civ.stats.colonies + 1} estrellas.`, `The ${S} found a colony by the star ${star}. Life from this system now reaches ${civ.stats.colonies + 1} stars.`, 'good');
+      const n = (this.h.s.stars?.length ?? 0) + 1;
+      this.h.news('✶', `Los ${sn} fundan una colonia junto a la estrella ${star}. La vida de este sistema ya alcanza ${n} estrellas.`, `The ${S} found a colony by the star ${star}. Life from this system now reaches ${n} stars.`, 'good');
     } else if (roll < 0.92) {
       if (civ.building) civ.building.t = Math.min(civ.building.dur, civ.building.t + civ.building.dur * 0.5);
       else gain(civ.res, { science: 200 });
@@ -582,7 +583,8 @@ export class CivSim {
     civ.flotilla = null;
     this.h.foundStar(f.star, f.people ?? this.h.peoples.leader()?.id ?? 0, Math.atan2(f.z, f.x));
     const sn = this.h.peoples.get(f.people)?.name ?? this.leaderName();
-    this.h.news('✶', `¡Salto! La flotilla de los ${sn} llega a ${f.star}. La vida de este sistema ya alcanza ${civ.stats.colonies + 1} estrellas.`, `Jump! The flotilla of the ${capName(sn)} reaches ${f.star}. Life from this system now reaches ${civ.stats.colonies + 1} stars.`, 'good');
+    const n = (this.h.s.stars?.length ?? 0) + 1;
+    this.h.news('✶', `¡Salto! La flotilla de los ${sn} llega a ${f.star}. La vida de este sistema ya alcanza ${n} estrellas.`, `Jump! The flotilla of the ${capName(sn)} reaches ${f.star}. Life from this system now reaches ${n} stars.`, 'good');
   }
 
   // ------------------------------------------------------------------ armada

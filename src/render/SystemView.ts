@@ -46,6 +46,8 @@ const hullOf = (kind: ShipKind, people?: number): Hull => (kind === 'armada' || 
 /** Space Patrol engines burn blue-white; their gunships wear ultramarine stripes. */
 const PATROL_GLOW = new THREE.Color(0.75, 0.85, 1);
 const PATROL_ACCENT = new THREE.Color(0.25, 0.42, 1);
+/** The Freedom Wings fly in pale gold. */
+const WINGS_TINT = new THREE.Color(1, 0.86, 0.55);
 
 /** Faction colours: every people its own hue, traders gold, refugees teal, invaders violet. */
 export const FACTION = { trader: new THREE.Color(1, 0.8, 0.32), refugee: new THREE.Color(0.45, 0.95, 0.85) };
@@ -564,21 +566,55 @@ export class SystemView {
       const model = this.hulls.has('imperial');
       if (model) hue.copy(PATROL_ACCENT);
       else hue.setRGB(1, 1, 1);
-      this.hulls.add(model ? 'imperial' : 'barge', v, dir, hue, BARGE_SIZE, BARGE_PX, cam);
+      const hull: Hull = model ? 'imperial' : 'barge';
+      this.hulls.add(hull, v, dir, hue, BARGE_SIZE, BARGE_PX, cam);
       const scale = Math.max(BARGE_SIZE, BARGE_PX * this.hulls.pxScale * cam.distanceTo(v));
+      // Every company at home is one more barge, flying in echelon behind the flagship.
+      const total = Math.max(1, s.civ?.def?.patrol ?? 1);
+      const home = total - (pt.detach ?? []).reduce((n, d) => n + d.companies, 0);
+      for (let i = 1; i < home; i++) {
+        const row = Math.ceil(i / 2);
+        const side = i % 2 ? 1 : -1;
+        q.set(
+          v.x - dir.x * row * scale * 0.95 - dir.z * side * row * scale * 0.62,
+          v.y + 0.25 * row + Math.sin(time * 0.7 + i) * 0.12,
+          v.z - dir.z * row * scale * 0.95 + dir.x * side * row * scale * 0.62,
+        );
+        this.hulls.add(hull, q, dir, hue, BARGE_SIZE * 0.92, BARGE_PX * 0.85, cam);
+      }
       if (p < MAX_POINTS) {
         this.shipPos.set([v.x - dir.x * scale * 0.55, v.y, v.z - dir.z * scale * 0.55], p * 3);
         this.shipCol.set([PATROL_GLOW.r * 1.4, PATROL_GLOW.g * 1.4, PATROL_GLOW.b * 1.6], p * 3);
         this.shipSize[p] = 2.2;
         p++;
       }
-      const escorts = Math.min(6, 1 + Math.max(1, s.civ?.def?.patrol ?? 1));
+      const escorts = 2;
       for (let j = 0; j < escorts; j++) {
         const a = time * 0.8 + (j * TAU) / escorts;
         const r = scale * (0.72 + 0.08 * (j % 2));
         q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
         const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
         this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 11, cam);
+      }
+    }
+    // The Freedom Wings at home: three squadrons of fighters circling the home world, more as they grow.
+    const wg = s.wings;
+    if (wg && wg.units > 0) {
+      const base = s.worlds.find((w) => w.life?.origin && w.life.stage >= 3) ?? s.worlds.find((w) => isSettled(w));
+      if (base) {
+        const c = worldXZ(base, this.byId, this.tmp);
+        const cx = c.x;
+        const cz = c.z;
+        const n = Math.min(12, Math.ceil(wg.units / 4));
+        const r0 = worldRadius(base) * 2.6 + 1.6;
+        for (let j = 0; j < n; j++) {
+          const sq = j % 3;
+          const a = time * (0.45 + 0.08 * sq) + Math.floor(j / 3) * 0.32 + sq * 2.1;
+          const r = r0 + sq * 0.7;
+          v.set(cx + Math.cos(a) * r, 0.6 + sq * 0.35 + Math.sin(a * 3) * 0.1, cz + Math.sin(a) * r);
+          dir.set(-Math.sin(a), 0, Math.cos(a));
+          this.hulls.add('spitfire', v, dir, WINGS_TINT, 0.36, 9, cam);
+        }
       }
     }
     this.hulls.end();

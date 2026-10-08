@@ -665,3 +665,20 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .proj.def.behind { border-color: rgba(255, 110, 80, .55); }
 .proj.def.behind .def-status { color: var(--ember); }
 .proj.def.none { opacity: .72; }
+
+/* risk, companies and Freedom Wings */
+.risk { font-weight: 700; white-space: nowrap; }
+.risk.low { color: var(--moss); }
+.risk.mid { color: #ffb45a; }
+.risk.high { color: var(--ember); text-shadow: 0 0 8px rgba(255, 110, 60, .5); }
+.wg { color: #ffe1a0; }
+.proj-ico.wg { color: #ffe1a0; text-shadow: 0 0 8px rgba(255, 220, 150, .6); }
+.barges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
+.barge-pips { display: inline-flex; gap: 3px; }
+.barge-pips i { width: 14px; height: 6px; border-radius: 2px; background: #6f9bff; box-shadow: 0 0 6px rgba(111, 155, 255, .6); }
+.barge-pips i.away { background: transparent; border: 1px dashed rgba(111, 155, 255, .7); box-shadow: none; }
+.wings-card { margin-top: 8px; border-color: rgba(255, 225, 160, .25); }
+.btn.wing-btn small { opacity: .75; font-size: 10px; }
+.people-row.wings span { color: #ffe1a0; }
+.star-label .wg { margin-left: 3px; }
+.decision .d-buttons { flex-wrap: wrap; }

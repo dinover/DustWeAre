@@ -622,12 +622,24 @@ export class Ledger {
     }
     const pt = s.patrol;
     if (pt) {
-      const busy = pt.phase === 'away' ? tr('lejos', 'away') : pt.phase === 'approach' || pt.phase === 'assault' ? (pt.goal === 'war' ? tr('pacificando', 'pacifying') : tr('purgando', 'purging')) : tr('en órbita', 'in orbit');
+      const total = Math.max(1, s.civ?.def?.patrol ?? 1);
+      const away = (pt.detach ?? []).reduce((n, d) => n + d.companies, 0);
+      const home = Math.max(0, total - away);
+      const busy = !home || pt.phase === 'away' ? tr('lejos', 'away') : pt.phase === 'approach' || pt.phase === 'assault' ? (pt.goal === 'war' ? tr('pacificando', 'pacifying') : tr('purgando', 'purging')) : tr('en órbita', 'in orbit');
       const tip = tr(
-        `<b>Space Patrols</b> · «${pt.barge.es}»<br>Guerreros acorazados de todos los pueblos. Purgan los mundos ocupados, no toleran guerras y saltan a otras estrellas cuando se les llama.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purgas · ☮ ${pt.wars} guerras terminadas`,
-        `<b>Space Patrols</b> · “${pt.barge.en}”<br>Armoured warriors of every people. They purge occupied worlds, tolerate no wars and jump to other stars when called.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purges · ☮ ${pt.wars} wars ended`,
+        `<b>Space Patrols</b> · «${pt.barge.es}»<br>Guerreros acorazados de todos los pueblos. Purgan los mundos ocupados, no toleran guerras y saltan a otras estrellas cuando se les llama.<br>⛨ ${total} ${total === 1 ? 'compañía' : 'compañías'} (una barcaza cada una): ${home} en casa, ${away} en otras estrellas.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purgas · ☮ ${pt.wars} guerras terminadas`,
+        `<b>Space Patrols</b> · “${pt.barge.en}”<br>Armoured warriors of every people. They purge occupied worlds, tolerate no wars and jump to other stars when called.<br>⛨ ${total} ${total === 1 ? 'company' : 'companies'} (one barge each): ${home} at home, ${away} at other stars.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purges · ☮ ${pt.wars} wars ended`,
       );
-      ph += `<div class="people-row patrol" data-tip="${attr(tip)}"><i style="background:#6f9bff;color:#ffd27a"></i><span>Space Patrols</span><em>${busy}</em></div>`;
+      ph += `<div class="people-row patrol" data-tip="${attr(tip)}"><i style="background:#6f9bff;color:#ffd27a"></i><span>Space Patrols</span><em>${busy} · ${home}/${total} ⛨</em></div>`;
+    }
+    const wg = s.wings;
+    if (wg) {
+      const out = wg.sorties.reduce((n, o) => n + o.units, 0);
+      const tip = tr(
+        `<b>Freedom Wings</b><br>Escuadrillas de voluntarios de todos los pueblos que defienden las colonias lejanas. Crecen con cada mundo con vida y con la paz entre los pueblos.<br>✈ ${wg.units} naves en casa${out ? `, ${out} luchando lejos` : ''} · ✓ ${wg.won} victorias · ✗ ${wg.lost} derrotas`,
+        `<b>Freedom Wings</b><br>Volunteer squadrons from every people that defend the distant colonies. They grow with every living world and with peace between the peoples.<br>✈ ${wg.units} ships at home${out ? `, ${out} fighting far away` : ''} · ✓ ${wg.won} victories · ✗ ${wg.lost} defeats`,
+      );
+      ph += `<div class="people-row wings" data-tip="${attr(tip)}"><i style="background:#ffe1a0;color:#ffe1a0"></i><span>Freedom Wings</span><em>${wg.units} ✈${out ? ` · ${out} ${tr('lejos', 'away')}` : ''}</em></div>`;
     }
     const stars = s.stars ?? [];
     if (stars.length) {
@@ -650,7 +662,8 @@ export class Ledger {
         const [ies, ien] = invaderNames(s.alienSpecies);
         lg += `<span data-tip="${attr(tr(`Los ${ies}: invasores de otra estrella`, `The ${ien}: invaders from another star`))}"><b style="color:${hsl(s.alienSpecies.hue, 85, 60)}">✦</b> ${tr(ies, ien)}</span>`;
       }
-      if (s.patrol) lg += `<span data-tip="${attr(tr('Space Patrols: barcaza de batalla, cápsulas de desembarco y cañoneras, en azul y oro', 'Space Patrols: battle barge, drop pods and gunships, in blue and gold'))}"><b style="color:#6f9bff">⛨</b> Space Patrols</span>`;
+      if (s.patrol) lg += `<span data-tip="${attr(tr('Space Patrols: barcazas de batalla (una por compañía), cápsulas de desembarco y cañoneras, en azul y oro', 'Space Patrols: battle barges (one per company), drop pods and gunships, in blue and gold'))}"><b style="color:#6f9bff">⛨</b> Space Patrols</span>`;
+      if (s.wings) lg += `<span data-tip="${attr(tr('Freedom Wings: cazas de voluntarios que custodian el mundo natal', 'Freedom Wings: volunteer fighters guarding the home world'))}"><b style="color:#ffe1a0">✈</b> Freedom Wings</span>`;
     }
     if (this.legendHtml !== lg) this.legend.innerHTML = this.legendHtml = lg;
   }

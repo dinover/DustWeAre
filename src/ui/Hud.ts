@@ -94,7 +94,7 @@ export interface HudHandlers {
   chronicle(): void;
   cancelTarget(): void;
   works(): void;
-  decide(id: number, accept: boolean): void;
+  decide(id: number, accept: boolean, choice?: number): void;
   /** A piece of news was clicked: take the camera there. */
   news(n: NewsItem): void;
   renameSystem(): void;
@@ -111,6 +111,8 @@ export interface DecisionView {
   no: string;
   left: number;
   dur: number;
+  /** Several ways to say yes (they replace the yes button): `choice` goes back with the answer. */
+  options?: { label: string; ok: boolean; tip?: string; choice: number; primary?: boolean }[];
 }
 
 export interface LateInfo {
@@ -449,7 +451,7 @@ export class Hud {
   showDecisions(list: DecisionView[]) {
     // Newest first: it is shown in full, older ones fold into a single line.
     list = [...list].reverse();
-    const key = list.map((d) => `${d.id}:${d.yesOk}`).join(',');
+    const key = list.map((d) => `${d.id}:${d.yesOk}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
     if (key !== this.decisionKey) {
       this.decisionKey = key;
       clear(this.decisionsEl);
@@ -462,7 +464,13 @@ export class Hud {
             'div',
             { class: 'd-buttons' },
             h('button', { class: 'btn small', onclick: () => this.on.decide(d.id, false) }, d.no),
-            h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes),
+            ...(d.options
+              ? d.options.map((o) => {
+                  const b = h('button', { class: `btn small ${o.primary ? 'primary' : ''}`, disabled: !o.ok, onclick: () => this.on.decide(d.id, true, o.choice), html: o.label });
+                  // Disabled buttons take no pointer: the reason lives on a wrapper.
+                  return o.tip ? h('span', { class: 'bw', 'data-tip': o.tip }, b) : b;
+                })
+              : [h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes)]),
           ),
           h('div', { class: 'vessel thin gold d-timer' }, h('i')),
         );

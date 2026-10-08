@@ -2,7 +2,10 @@ import { int, pick, tr } from '../i18n';
 import type { Resources } from '../core/state';
 import { ERA_NAMES, MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectDef, type ProjectId } from '../content/projects';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
-import { PATROL_COST, STAR_INCOME, type PatrolSim } from '../sim/patrols';
+import { STAR_INCOME, companiesFor, strikeCost, strikeRisk, troubleRisk, type PatrolSim } from '../sim/patrols';
+import { BUY_SHIPS, WINGS_TECH, WING_COST, WING_SIZES, WING_UNITS, buyCost, type WingsSim } from '../sim/wings';
+import { riskText, wingForecast } from './decisions';
+import type { WingSize } from '../core/state';
 import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, lanceSpeed, nextAt, podsPerWave, shieldStop, threatOf, upgradeCost, type DefenceId } from '../sim/threat';
 import { clamp } from '../util';
 import { h, stone, clear } from './dom';
@@ -41,8 +44,9 @@ export class ProjectsPanel {
 
   constructor(
     private civ: CivSim,
-    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; upgrade(id: DefenceId): void },
+    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; upgrade(id: DefenceId): void; wing(id: number, size: WingSize): void; unlockWings(): void; buyWings(): void },
     private patrols?: PatrolSim,
+    private wings?: WingsSim,
   ) {
     this.el = h('div', { class: 'projects' });
     this.build();
@@ -141,6 +145,9 @@ export class ProjectsPanel {
       const id = Number(b.dataset.id);
       if (b.dataset.act === 'rename') this.on.rename(id);
       else if (b.dataset.act === 'release') this.on.release(id);
+      else if (b.dataset.act === 'wing') this.on.wing(id, b.dataset.size as WingSize);
+      else if (b.dataset.act === 'wings-unlock') this.on.unlockWings();
+      else if (b.dataset.act === 'wings-buy') this.on.buyWings();
       else this.on.send(id, b.dataset.act === 'conquer');
     });
     this.refresh();
@@ -177,8 +184,8 @@ export class ProjectsPanel {
         effect: (n) => {
           const pods = podsPerWave(n);
           return tr(
-            `${n} ${n === 1 ? 'compañía' : 'compañías'}: ${pods} cápsulas por oleada, la lanza dispara ×${lanceSpeed(n).toFixed(1).replace('.', ',')}${n >= 3 ? ' y una compañía queda de guardia cuando la barcaza salta a otra estrella' : ''}. Más compañías ganan más batallas lejanas.`,
-            `${n} ${n === 1 ? 'company' : 'companies'}: ${pods} drop pods per wave, the lance fires ×${lanceSpeed(n).toFixed(1)}${n >= 3 ? ' and one company stays on guard when the barge jumps to another star' : ''}. More companies win more distant battles.`,
+            `${n} ${n === 1 ? 'compañía' : 'compañías'}, una barcaza de batalla cada una: pueden defender varias estrellas a la vez (1 compañía por riesgo bajo o medio, 2 por riesgo alto) y siempre vencen. Las que quedan en casa lanzan ${pods} cápsulas por oleada y su lanza dispara ×${lanceSpeed(n).toFixed(1).replace('.', ',')}.`,
+            `${n} ${n === 1 ? 'company' : 'companies'}, one battle barge each: they can defend several stars at once (1 company for a low or medium risk, 2 for a high risk) and always win. Those at home drop ${pods} pods per wave and their lance fires ×${lanceSpeed(n).toFixed(1)}.`,
           );
         },
       },
@@ -208,6 +215,45 @@ export class ProjectsPanel {
     return html + '</div>';
   }
 
+  /** The Freedom Wings: how many ships, how fast they grow, and where they fight. */
+  private wingsCard() {
+    const W = this.wings;
+    const g = W?.wings;
+    let html = '<div class="patrol-card wings-card">';
+    const res = this.civ.civ?.res ?? null;
+    if (!W || !g) {
+      const lock = W?.unlockLock();
+      html += `<div class="proj-head"><span class="proj-ico wg">✈</span><b>Freedom Wings</b><span class="def-lvl">${tr('Tecnología', 'Technology')}</span></div><div class="small muted">${tr(
+        'Escuadrillas de voluntarios de todos los pueblos, aparte de los Space Patrols, para defender las colonias lejanas. Una vez desarrolladas, suman naves solas con el tiempo (más con cada mundo con vida y con la paz entre los pueblos), y se pueden comprar más con ciencia.',
+        'Volunteer squadrons from every people, apart from the Space Patrols, to defend the distant colonies. Once developed, they gather ships on their own over time (more with every living world and with peace between the peoples), and more can be bought with science.',
+      )}</div><div class="costs">${costChips(WINGS_TECH, res)}</div>${lock ? `<div class="note small">${pick(lock)}</div>` : ''}<button class="btn small primary" data-act="wings-unlock"${lock ? ' disabled' : ''}>${tr('Desarrollar', 'Develop')}</button></div>`;
+      return html;
+    }
+    const buyLock = W.buyLock();
+    const buy = `<span class="bw" data-tip="${buyLock ? pick(buyLock) : tr('Caras a propósito: cada tanda cuesta más que la anterior.', 'Dear on purpose: each batch costs more than the last.')}"><button class="btn small" data-act="wings-buy"${buyLock ? ' disabled' : ''}>${tr(`Comprar ${BUY_SHIPS} naves`, `Buy ${BUY_SHIPS} ships`)} ${costChips(buyCost(g.bought ?? 0), res)}</button></span>`;
+    const living = W.living();
+    const war = this.civ.state.relations?.some((r) => r.state === 'war');
+    const mins = Math.floor(g.peace / 60);
+    const growth = war
+      ? tr('Hay guerra entre los pueblos: casi no llegan voluntarios.', 'There is war between the peoples: hardly any volunteers come.')
+      : tr(`${living} ${living === 1 ? 'mundo con vida' : 'mundos con vida'} y ${mins} min de paz.`, `${living} living ${living === 1 ? 'world' : 'worlds'} and ${mins} min of peace.`);
+    const sorties = g.sorties
+      .map((o) => {
+        const where = this.patrols?.star(o.star)?.name ?? '?';
+        return tr(`${o.size} (${o.units}) en ${where} · ${Math.max(0, Math.ceil(o.dur - o.t))} s`, `${o.size} (${o.units}) at ${where} · ${Math.max(0, Math.ceil(o.dur - o.t))}s`);
+      })
+      .join(' · ');
+    html += `<div class="proj-head"><span class="proj-ico wg">✈</span><b>Freedom Wings</b><span class="def-lvl">${int(g.units)} ${tr('naves', 'ships')}</span></div>
+      <div class="small" data-tip="${tr(
+        'Cada mundo con vida envía voluntarios; cuanto más dura la paz entre los pueblos, más llegan (hasta el triple). Las victorias suman voluntarios; las derrotas cuestan naves.',
+        'Every living world sends volunteers; the longer the peace between the peoples lasts, the more come (up to three times as many). Victories bring volunteers; defeats cost ships.',
+      )}"><span class="wg">+${W.rate().toFixed(1).replace('.', tr(',', '.'))}/min</span> · ${growth} <span class="muted">${tr(`Máximo ${W.cap()}.`, `Up to ${W.cap()}.`)}</span></div>
+      <div class="small muted">${tr('Escuadrillas: S (6 naves) para riesgo bajo, M (12) para medio, L (20) para alto. Una más grande vence antes y pierde menos; una más chica puede no volver.', 'Squadrons: S (6 ships) for a low risk, M (12) for medium, L (20) for high. A bigger one wins sooner and loses less; a smaller one may not come back.')}</div>
+      <div class="patrol-stats small"><span>✓ ${int(g.won)} <em>${g.won === 1 ? tr('victoria', 'victory') : tr('victorias', 'victories')}</em></span><span>✗ ${int(g.lost)} <em>${g.lost === 1 ? tr('derrota', 'defeat') : tr('derrotas', 'defeats')}</em></span>${sorties ? `<span class="wg">✈ ${sorties}</span>` : ''}</div>
+      <div class="sr-btns">${buy}</div></div>`;
+    return html;
+  }
+
   /** The Space Patrols' card and one row per distant colony. */
   private beyondView() {
     const P = this.patrols;
@@ -233,11 +279,24 @@ export class ProjectsPanel {
                 ? tr(`imponiendo la paz sobre ${target}`, `imposing peace on ${target}`)
                 : tr(`purgando ${target}`, `purging ${target}`)
               : tr('en órbita alta, vigilando', 'in high orbit, on watch');
+      const total = P.companies();
+      const home = P.homeCompanies();
+      const det = (p.detach ?? [])
+        .map((d) => {
+          const left = Math.max(0, Math.ceil(42 - d.t));
+          const where = P.star(d.star)?.name ?? '?';
+          return tr(`${d.companies === 2 ? '2 compañías' : '1 compañía'} en ${where} (vuelve${d.companies === 2 ? 'n' : ''} en ${left} s)`, `${d.companies === 2 ? '2 companies' : '1 company'} at ${where} (back in ${left}s)`);
+        })
+        .join(' · ');
+      let barges = '';
+      for (let i = 0; i < total; i++) barges += `<i class="${i < home ? 'home' : 'away'}"></i>`;
       html += `<div class="proj-head"><span class="proj-ico pt">⛨</span><b>Space Patrols · «${tr(p.barge.es, p.barge.en)}»</b></div>
-        <div class="small"><span class="muted">${tr('Estado', 'Status')}:</span> ${status}</div>
+        <div class="small"><span class="muted">${tr('Estado', 'Status')}:</span> ${home ? status : tr('todas las compañías luchan en otras estrellas', 'every company is fighting at other stars')}</div>
+        <div class="small barges" data-tip="${tr('Cada compañía es una barcaza de batalla. Recluta más en Defensas.', 'Each company is a battle barge. Raise more in Defences.')}"><span class="barge-pips">${barges}</span> ${tr(`${total} ${total === 1 ? 'compañía' : 'compañías'} · ${home} en casa`, `${total} ${total === 1 ? 'company' : 'companies'} · ${home} at home`)}${det ? ` · <span class="pt">${det}</span>` : ''}</div>
         <div class="patrol-stats small"><span>☠ ${int(p.kills)} <em>${tr('xenos abatidos', 'xenos slain')}</em></span><span>⛨ ${int(p.purges)} <em>${p.purges === 1 ? tr('mundo purgado', 'world purged') : tr('mundos purgados', 'worlds purged')}</em></span><span>☮ ${int(p.wars)} <em>${p.wars === 1 ? tr('guerra terminada', 'war ended') : tr('guerras terminadas', 'wars ended')}</em></span><span>✶ ${int(p.strikes)} <em>${p.strikes === 1 ? tr('salto a otra estrella', 'jump to another star') : tr('saltos a otras estrellas', 'jumps to other stars')}</em></span></div>`;
     }
     html += '</div>';
+    html += this.wingsCard();
     const stars = P.stars;
     if (!stars.length) {
       html += `<div class="small muted" style="margin:8px 2px">${tr('Todavía ningún pueblo vive junto a otra estrella. Las flotillas de colonos, las expediciones y la armada fundarán colonias lejanas.', 'No people lives around another star yet. Colonist flotillas, expeditions and the armada will found distant colonies.')}</div>`;
@@ -253,8 +312,11 @@ export class ProjectsPanel {
       const people = s.peoples?.find((x) => x.id === st.people);
       const col = people ? `hsl(${Math.round(people.hue * 360)} 70% 64%)` : '#e8d2a0';
       const who = people ? tr(`colonia ${people.name}`, `${people.name.charAt(0).toUpperCase() + people.name.slice(1)} colony`) : tr('colonia mixta', 'mixed colony');
+      const risk = troubleRisk(st);
       const trouble = st.trouble
-        ? `<span class="ember">${{ pirates: tr('⚠ piratas', '⚠ pirates'), natives: tr('⚑ revuelta', '⚑ revolt'), invaders: tr('⚠ invasores', '⚠ invaders'), plague: tr('☣ plaga', '☣ plague') }[st.trouble.kind]}</span>`
+        ? `<span class="ember">${{ pirates: tr('⚠ piratas', '⚠ pirates'), natives: tr('⚑ revuelta', '⚑ revolt'), invaders: tr('⚠ invasores', '⚠ invaders'), plague: tr('☣ plaga', '☣ plague') }[st.trouble.kind]}</span> · ${riskText(risk!)}${
+            st.strike ? ` · <span class="pt">${tr('⛨ los Patrols van hacia allí', '⛨ the Patrols are on their way')}</span>` : st.wing ? ` · <span class="wg">${tr(`✈ escuadrilla ${st.wing.size} luchando`, `✈ squadron ${st.wing.size} fighting`)}</span>` : ''
+          }`
         : st.strike
           ? `<span class="pt">${tr('⛨ los Patrols van hacia allí', '⛨ the Patrols are on their way')}</span>`
           : `<span class="muted">${tr('en calma', 'calm')}</span>`;
@@ -266,8 +328,20 @@ export class ProjectsPanel {
       const btn = (act: string, cls: string, label: string, tip: string, off: boolean) =>
         `<span class="bw" data-tip="${tip}"><button class="btn small ${cls}" data-act="${act}" data-id="${st.id}"${off ? ' disabled' : ''}>${label}</button></span>`;
       let btns = '';
-      if (st.trouble && p) btns += btn('help', 'primary', `${tr('Socorrer', 'Defend')} ${costChips(PATROL_COST.help, res)}`, helpLock ? pick(helpLock) : tr('Los Space Patrols saltan a defender la colonia.', 'The Space Patrols jump to defend the colony.'), !!helpLock);
-      if (st.mode === 'trade' && p) btns += btn('conquer', '', `${tr('Conquistar', 'Conquer')} ${costChips(PATROL_COST.conquer, res)}`, conqLock ? pick(conqLock) : tr('Los Space Patrols someten el sistema: pasará a ser un dominio.', 'The Space Patrols bring the system to heel: it will become a dominion.'), !!conqLock);
+      const helped = !!st.strike || !!st.wing;
+      if (st.trouble && p && !helped) {
+        const need = companiesFor(strikeRisk(st, false));
+        btns += btn('help', 'primary', `⛨ ×${need} ${costChips(strikeCost(st, false), res)}`, helpLock ? pick(helpLock) : tr(`${need === 2 ? 'Dos compañías' : 'Una compañía'} de los Space Patrols saltan a defender la colonia: vencen seguro.`, `${need === 2 ? 'Two companies' : 'One company'} of the Space Patrols jump to defend the colony: a sure victory.`), !!helpLock);
+      }
+      if (st.trouble && this.wings?.wings && risk && !helped)
+        for (const z of WING_SIZES) {
+          const lock = this.wings.lock(st, z);
+          btns += `<span class="bw" data-tip="<b>Freedom Wings ${z}</b> · ${WING_UNITS[z]} ${tr('naves', 'ships')}<br>${lock ? pick(lock) : wingForecast(z, risk)}"><button class="btn small wing-btn" data-act="wing" data-size="${z}" data-id="${st.id}"${lock ? ' disabled' : ''}>✈ ${z} <small>${WING_UNITS[z]}</small> ${costChips(WING_COST[z], res)}</button></span>`;
+        }
+      if (st.mode === 'trade' && p) {
+        const need = companiesFor(strikeRisk(st, true));
+        btns += btn('conquer', '', `${tr('Conquistar', 'Conquer')} ×${need} ${costChips(strikeCost(st, true), res)}`, conqLock ? pick(conqLock) : tr('Los Space Patrols someten el sistema: pasará a ser un dominio.', 'The Space Patrols bring the system to heel: it will become a dominion.'), !!conqLock);
+      }
       if (st.mode === 'dominion') btns += btn('release', '', tr('Liberar', 'Set free'), tr('Devolverle la libertad: solo comerciará, y el sistema se ganará menos enemigos.', 'Give it back its freedom: it will only trade, and the system will make fewer enemies.'), false);
       html += `<div class="star-row ${st.mode}${st.trouble ? ' trouble' : ''}">
         <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" data-tip="${tr('Ponerle nombre', 'Give it a name')}">✎</button><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>

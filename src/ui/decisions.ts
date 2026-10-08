@@ -1,9 +1,10 @@
-import { int, tr } from '../i18n';
-import type { Decision, GameState, Resources } from '../core/state';
+import { int, pick, tr } from '../i18n';
+import type { Decision, GameState, Resources, Risk, WingSize } from '../core/state';
 import { capName, invaderNames } from '../content/names';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
-import { PATROL_COST } from '../sim/patrols';
+import { PATROL_COST, companiesFor, strikeCost, troubleRisk, type PatrolSim } from '../sim/patrols';
+import { WING_SIZES, WING_UNITS, wingOdds, type WingsSim } from '../sim/wings';
 import type { DecisionView } from './Hud';
 import { resName } from './Projects';
 
@@ -12,8 +13,24 @@ const list = (r: Partial<Resources> | undefined) =>
     .map((k) => `<b>${RES_ICON[k]} ${int(r![k]!)}</b> ${resName(k)}`)
     .join(', ');
 
+/** A trouble's risk, as a coloured word. */
+export const riskText = (r: Risk, cap = false) => {
+  const t = { low: tr('riesgo bajo', 'low risk'), mid: tr('riesgo medio', 'medium risk'), high: tr('riesgo alto', 'high risk') }[r];
+  return `<span class="risk ${r}">${cap ? t.charAt(0).toUpperCase() + t.slice(1) : t}</span>`;
+};
+
+/** What a Freedom Wings sortie of this size can expect against this risk. */
+export function wingForecast(size: WingSize, risk: Risk) {
+  const o = wingOdds(size, risk);
+  const p = Math.round(o.win * 100);
+  if (o.diff >= 1) return tr(`Flota sobrada: gana (${p} %) antes y con pocas bajas.`, `More than enough: it wins (${p}%) sooner and with few losses.`);
+  if (o.diff === 0) return tr(`Flota a la medida del riesgo: ${p} % de victoria, con algunas bajas.`, `Sized to the risk: ${p}% to win, with some losses.`);
+  if (o.diff === -1) return tr(`Flota corta para este riesgo: solo ${p} % de victoria y muchas bajas.`, `Too small for this risk: only ${p}% to win and heavy losses.`);
+  return tr(`Flota demasiado chica: ${p} % de victoria; lo más probable es perderla entera.`, `Far too small: ${p}% to win; it will most likely be lost entirely.`);
+}
+
 /** Writes a pending choice in the current language. */
-export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionView {
+export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { patrols: PatrolSim; wings: WingsSim }): DecisionView {
   const w = d.world !== undefined ? s.worlds.find((x) => x.id === d.world) : undefined;
   const wn = w?.name ?? '';
   const spEs = d.species ?? '';
@@ -88,15 +105,36 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim): DecisionVi
       }[kind];
       const res = s.civ?.res;
       const can = (c: Partial<Resources>) => !!res && RES_KEYS.every((k) => res[k] >= (c[k] ?? 0));
+      const risk = (st && troubleRisk(st)) ?? 'low';
+      const options: NonNullable<DecisionView['options']> = [];
+      if (st && forces && p) {
+        const need = companiesFor(risk);
+        const lock = forces.patrols.strikeLock(st, false);
+        options.push({
+          choice: 0,
+          primary: true,
+          label: `⛨ Patrols ×${need} · ◍ ${strikeCost(st, false).fuel}`,
+          ok: !lock,
+          tip: lock
+            ? pick(lock)
+            : tr(`${need === 2 ? 'Dos compañías' : 'Una compañía'} de los Space Patrols: vencen seguro.`, `${need === 2 ? 'Two companies' : 'One company'} of the Space Patrols: a sure victory.`),
+        });
+      }
+      if (st && forces && s.wings)
+        WING_SIZES.forEach((z, i) => {
+          const lock = forces.wings.lock(st, z);
+          options.push({ choice: i + 1, label: `✈ ${z} · ${WING_UNITS[z]}`, ok: !lock, tip: `<b>Freedom Wings ${z}</b> · ${WING_UNITS[z]} ${tr('naves', 'ships')}<br>${lock ? pick(lock) : wingForecast(z, risk)}` });
+        });
       return {
         ...base,
         icon: icons[kind],
         title: tr(`Socorro desde ${where}`, `A call for help from ${where}`),
-        body: p
-          ? `${what} ${p.phase === 'away' ? tr('Los Space Patrols están en otra estrella.', 'The Space Patrols are at another star.') : tr('¿Envías a los Space Patrols?', 'Will you send the Space Patrols?')}`
-          : `${what} ${tr('Aún no hay Space Patrols, pero una flotilla de socorro podría bastar.', 'There are no Space Patrols yet, but a relief flotilla might be enough.')}`,
-        yes: p ? tr('Enviar a los Space Patrols · ◍ 50', 'Send the Space Patrols · ◍ 50') : tr('Enviar socorro · ◍ 40', 'Send relief · ◍ 40'),
-        yesOk: p ? p.phase !== 'away' && p.phase !== 'rising' && can(PATROL_COST.help) : can(PATROL_COST.relief),
+        body: options.length
+          ? `${what} ${riskText(risk, true)}. ${tr('¿A quién envías?', 'Who will you send?')}`
+          : `${what} ${riskText(risk, true)}. ${tr('Aún no hay Space Patrols ni Freedom Wings, pero una flotilla de socorro podría bastar.', 'There are no Space Patrols or Freedom Wings yet, but a relief flotilla might be enough.')}`,
+        yes: tr('Enviar socorro · ◍ 40', 'Send relief · ◍ 40'),
+        yesOk: can(PATROL_COST.relief),
+        options: options.length ? options : undefined,
         no: tr('Que resistan solos', 'Let them hold out alone'),
       };
     }

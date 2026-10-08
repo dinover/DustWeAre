@@ -1,11 +1,12 @@
-import type { Decision, GameState, OuterStar, PatrolState, Resources, Ship, World } from '../core/state';
-import { Rng, TAU, clamp, easeInOut } from '../util';
+import type { Decision, GameState, OuterStar, PatrolState, Resources, Risk, Ship, World, WingSize } from '../core/state';
+import { Rng, TAU, easeInOut } from '../util';
 import { worldRadius, worldXZ } from '../render/layout';
 import { capName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { CivFx, CivSim } from './civ';
 import { peopleOf, type PeopleFx, type PeopleSim } from './peoples';
 import { addHarm } from './voices';
+import { WING_SIZES, type WingsSim } from './wings';
 import { defLevel, lanceSpeed, podsPerWave, threatOf } from './threat';
 
 /** Height of the battle barge's high orbit above the plane of the system. */
@@ -29,6 +30,7 @@ export interface PatrolHost {
   fx(f: CivFx | PeopleFx | PatrolFx): void;
   readonly peoples: PeopleSim;
   readonly civ: CivSim;
+  readonly wings: WingsSim;
 }
 
 const BARGES: Bi[] = [
@@ -45,6 +47,27 @@ export const STAR_INCOME: Record<OuterStar['mode'], Resources> = {
   dominion: { metal: 0.6, fuel: 0.55, water: 0.3, science: 0.1 },
 };
 export const PATROL_COST = { help: { fuel: 50 }, relief: { fuel: 40 }, conquer: { fuel: 90, metal: 60 } };
+
+export const RISK_RANK: Record<Risk, number> = { low: 1, mid: 2, high: 3 };
+/** The Space Patrols settle any fight with two companies at most: two for a high risk, one otherwise. */
+export const companiesFor = (risk: Risk) => (risk === 'high' ? 2 : 1);
+/** How dangerous a colony's trouble is (old saves had none: guessed from its kind). */
+export function troubleRisk(st: OuterStar): Risk | null {
+  const t = st.trouble;
+  if (!t) return null;
+  return t.risk ?? (t.kind === 'natives' || t.kind === 'invaders' ? 'mid' : 'low');
+}
+/** The risk of a Space Patrol strike: conquering is at least a medium risk. */
+export function strikeRisk(st: OuterStar, conquer: boolean): Risk {
+  const r = troubleRisk(st) ?? 'low';
+  return conquer && RISK_RANK[r] < 2 ? 'mid' : r;
+}
+/** What sending the Space Patrols costs: fuel for every company that jumps. */
+export function strikeCost(st: OuterStar, conquer: boolean): Partial<Resources> {
+  const n = companiesFor(strikeRisk(st, conquer));
+  const base = conquer ? PATROL_COST.conquer : PATROL_COST.help;
+  return { ...base, fuel: base.fuel * n };
+}
 
 const RES: (keyof Resources)[] = ['metal', 'fuel', 'water', 'science'];
 const has = (r: Resources, c: Partial<Resources>) => RES.every((k) => r[k] >= (c[k] ?? 0));
@@ -81,6 +104,18 @@ export class PatrolSim {
   get ready() {
     const p = this.patrol;
     return !!p && p.phase !== 'away' && p.phase !== 'rising';
+  }
+  /** Companies of Space Patrols, each one with its own battle barge (the patrol defence level). */
+  companies() {
+    return defLevel(this.h.s, 'patrol');
+  }
+  /** Companies away at other stars. */
+  awayCompanies() {
+    return (this.patrol?.detach ?? []).reduce((n, d) => n + d.companies, 0);
+  }
+  /** Companies at home, for the system's own fights. */
+  homeCompanies() {
+    return Math.max(0, this.companies() - this.awayCompanies());
   }
   dominions() {
     return this.stars.filter((x) => x.mode === 'dominion').length;
@@ -124,13 +159,24 @@ export class PatrolSim {
     }
     const p = this.patrol;
     if (!p) return;
+    if (!p.detach) {
+      // Saves from before the companies: the one barge that was away becomes a detachment.
+      p.detach = [];
+      if (p.phase === 'away' && p.star !== undefined) p.detach.push({ star: p.star, companies: this.companies(), t: p.t, conquer: !!this.star(p.star)?.strike?.conquer });
+      p.star = undefined;
+    }
     p.t += dt;
+    for (const d of [...p.detach]) {
+      d.t += dt;
+      if (d.t >= AWAY) this.detachBack(p, d);
+    }
+    // A company raised while every barge was away takes up the watch at once.
+    if (p.phase === 'away' && this.homeCompanies() > 0) this.rejoin(p);
     this.move(p, dt);
     this.lance(p, dt);
     this.hits(p, dt);
     if (p.phase === 'assault') this.assault(p);
     else if (p.phase === 'orbit' && s.time >= p.next) this.think(p);
-    else if (p.phase === 'away' && p.t >= AWAY) this.comeBack(p);
   }
 
   /** Invaders holding several worlds for a while: the peoples raise the Space Patrols. */
@@ -232,19 +278,10 @@ export class PatrolSim {
     }
   }
 
-  /** Companies of Space Patrols (the patrol defence level). */
-  companies() {
-    return defLevel(this.h.s, 'patrol');
-  }
-
-  /**
-   * The barge's lance: invaders in flight first, then raiders of peoples at war. More companies
-   * fire more often, and from three companies on one stays home on guard while the barge is away.
-   */
+  /** The barges' lances: invaders in flight first, then raiders of peoples at war. More barges at home fire more often. */
   private lance(p: PatrolState, dt: number) {
-    const P = this.companies();
-    const away = p.phase === 'away';
-    if (p.phase === 'rising' || (away && P < 3)) return;
+    const H = this.homeCompanies();
+    if (p.phase === 'rising' || p.phase === 'away' || H < 1) return;
     p.lanceT -= dt;
     if (p.lanceT > 0) return;
     const s = this.h.s;
@@ -260,15 +297,10 @@ export class PatrolSim {
       p.lanceT = 1;
       return;
     }
-    p.lanceT = (rng.range(2.4, 4.2) / lanceSpeed(P)) * (away ? 2 : 1);
+    p.lanceT = rng.range(2.4, 4.2) / lanceSpeed(H);
     tgt.doom = 0.5;
     this.marked.set(tgt.id, 0.5);
-    if (!away) this.h.fx({ kind: 'lance', ship: tgt.id });
-    else {
-      // The company left on guard fires from the ground.
-      const guards = this.h.civ.settled();
-      if (guards.length) this.h.fx({ kind: 'laser', ship: tgt.id, world: rng.pick(guards).id });
-    }
+    this.h.fx({ kind: 'lance', ship: tgt.id });
   }
 
   private hits(p: PatrolState, dt: number) {
@@ -359,12 +391,12 @@ export class PatrolSim {
     }
   }
 
-  /** Drop pods in three waves, gunships with the first, the lance on the ground: more of them with every company. */
+  /** Drop pods in three waves, gunships with the first, the lance on the ground: more of them with every barge at home. */
   private assault(p: PatrolState) {
     const w = p.target !== undefined ? this.h.world(p.target) : undefined;
     if (!w) return this.phase(p, 'return');
     const waves = p.podsLeft ?? 0;
-    const P = this.companies();
+    const P = Math.max(1, this.homeCompanies());
     if (waves > 0 && p.t >= (3 - waves) * 2.2 + 0.4) {
       p.podsLeft = waves - 1;
       const pods = podsPerWave(P);
@@ -428,34 +460,55 @@ export class PatrolSim {
     const civ = this.h.s.civ;
     const p = this.patrol;
     if (!p) return { es: 'Aún no existen los Space Patrols.', en: 'The Space Patrols do not exist yet.' };
-    if (p.phase === 'away') return { es: 'Los Space Patrols están en otra estrella.', en: 'The Space Patrols are at another star.' };
     if (p.phase === 'rising') return { es: 'La barcaza aún se está elevando.', en: 'The barge is still rising.' };
     if (st.strike) return { es: 'Ya van hacia allí.', en: 'They are already on their way.' };
+    if (st.wing) return { es: 'Las Freedom Wings ya luchan allí.', en: 'The Freedom Wings are already fighting there.' };
     if (conquer && st.mode === 'dominion') return { es: 'Ya es un dominio.', en: 'It is already a dominion.' };
-    if (!civ || !has(civ.res, conquer ? PATROL_COST.conquer : PATROL_COST.help)) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
+    const need = companiesFor(strikeRisk(st, conquer));
+    const free = this.homeCompanies();
+    if (free < need) {
+      if (this.companies() < need) return { es: 'Riesgo alto: hacen falta 2 compañías. Recluta otra en Defensas.', en: 'High risk: it takes 2 companies. Raise another one in Defences.' };
+      return need === 2
+        ? { es: `Riesgo alto: hacen falta 2 compañías libres y hay ${free} en casa.`, en: `High risk: it takes 2 free companies and ${free} ${free === 1 ? 'is' : 'are'} at home.` }
+        : { es: 'Todas las compañías están en otras estrellas.', en: 'Every company is at another star.' };
+    }
+    if (!civ || !has(civ.res, strikeCost(st, conquer))) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
     return null;
   }
 
-  /** Sends the barge to another star: to defend a colony in trouble, or to conquer its system. */
+  /** Name of the barge a detachment flies on. */
+  private bargeOf(p: PatrolState, k: number): Bi {
+    if (k === 0) return p.barge;
+    const i = (BARGES.findIndex((b) => b.es === p.barge.es) + k) % BARGES.length;
+    return BARGES[i];
+  }
+
+  /** Sends companies to another star — one, or two for a high risk: to defend a colony in trouble, or to conquer its system. */
   send(id: number, conquer: boolean) {
     const s = this.h.s;
     const st = this.star(id);
     const p = this.patrol;
     if (!st || !p || !s.civ || this.strikeLock(st, conquer)) return false;
-    pay(s.civ.res, conquer ? PATROL_COST.conquer : PATROL_COST.help);
+    const need = companiesFor(strikeRisk(st, conquer));
+    pay(s.civ.res, strikeCost(st, conquer));
     addHarm(s, conquer ? 6 : -1);
-    st.strike = { conquer };
-    p.star = st.id;
-    p.target = undefined;
-    p.goal = undefined;
+    st.strike = { conquer, companies: need };
+    (p.detach ??= []).push({ star: st.id, companies: need, t: 0, conquer });
     p.strikes++;
     const dx = Math.cos(st.ang);
     const dz = Math.sin(st.ang);
-    this.h.fx({ kind: 'warpOut', x: p.x, z: p.z, dx, dz, count: 1, tint: 'patrol' });
-    this.phase(p, 'away');
+    this.h.fx({ kind: 'warpOut', x: p.x, z: p.z, dx, dz, count: need, tint: 'patrol' });
+    const b = this.bargeOf(p, this.awayCompanies() - need);
+    const who = need === 2 ? { es: `Dos compañías, con la «${b.es}» al frente,`, en: `Two companies, led by the “${b.en}”,` } : { es: `La «${b.es}»`, en: `The “${b.en}”` };
+    if (this.homeCompanies() === 0) {
+      p.target = undefined;
+      p.goal = undefined;
+      p.pair = undefined;
+      this.phase(p, 'away');
+    }
     if (conquer)
-      this.h.news('⛨', `La «${p.barge.es}» salta hacia ${st.name} para someter su sistema. ¡Por la Estrella!`, `The “${p.barge.en}” jumps to ${st.name} to bring its system to heel. For the Star!`, 'warn');
-    else this.h.news('⛨', `La «${p.barge.es}» salta hacia ${st.name} en auxilio de sus colonos. ¡Por la Estrella!`, `The “${p.barge.en}” jumps to ${st.name} to aid its settlers. For the Star!`, 'good');
+      this.h.news('⛨', `${who.es} ${need === 2 ? 'saltan' : 'salta'} hacia ${st.name} para someter su sistema. ¡Por la Estrella!`, `${who.en} ${need === 2 ? 'jump' : 'jumps'} to ${st.name} to bring its system to heel. For the Star!`, 'warn');
+    else this.h.news('⛨', `${who.es} ${need === 2 ? 'saltan' : 'salta'} hacia ${st.name} en auxilio de sus colonos. ¡Por la Estrella!`, `${who.en} ${need === 2 ? 'jump' : 'jumps'} to ${st.name} to aid its settlers. For the Star!`, 'good');
     return true;
   }
 
@@ -470,34 +523,31 @@ export class PatrolSim {
     return true;
   }
 
-  private comeBack(p: PatrolState) {
-    const s = this.h.s;
-    const st = this.star(p.star);
+  /** Every barge was away and one is home again: back on its high orbit. */
+  private rejoin(p: PatrolState) {
     const o = this.orbitSpot(p);
     p.x = o.x;
     p.y = o.y;
     p.z = o.z;
-    const len = Math.hypot(o.x, o.z) || 1;
-    this.h.fx({ kind: 'warpIn', x: o.x, z: o.z, dx: -o.x / len, dz: -o.z / len, count: 1, tint: 'patrol' });
     this.phase(p, 'orbit');
-    p.star = undefined;
-    p.next = s.time + 8;
-    if (st) this.strikeResult(p, st);
+    p.next = this.h.s.time + 8;
   }
 
-  private strikeResult(p: PatrolState, st: OuterStar) {
+  /** A detachment warps back in, and tells how the fight went. */
+  private detachBack(p: PatrolState, d: NonNullable<PatrolState['detach']>[number]) {
+    p.detach!.splice(p.detach!.indexOf(d), 1);
+    if (p.phase === 'away') this.rejoin(p);
+    const len = Math.hypot(p.x, p.z) || 1;
+    this.h.fx({ kind: 'warpIn', x: p.x, z: p.z, dx: -p.x / len, dz: -p.z / len, count: d.companies, tint: 'patrol' });
+    const st = this.star(d.star);
+    if (st) this.strikeResult(p, st, d.conquer);
+  }
+
+  /** With enough companies, the Space Patrols always prevail. */
+  private strikeResult(p: PatrolState, st: OuterStar, conquer: boolean) {
     const rng = this.h.rng;
-    const conquer = !!st.strike?.conquer;
     st.strike = null;
     const kind = st.trouble?.kind;
-    // More companies win more often; a threat that has outgrown them makes every fight harder.
-    const win = rng.next() < clamp((kind === 'invaders' ? 0.75 : 0.9) + 0.06 * (this.companies() - threatOf(this.h.s)), 0.3, 0.97);
-    if (!win) {
-      st.health = Math.max(0.15, st.health - 0.2);
-      if (st.trouble) st.trouble.dur += 40;
-      this.h.news('⛨', `Los Space Patrols vuelven diezmados de ${st.name}. La lucha allí sigue.`, `The Space Patrols come back battered from ${st.name}. The fight there goes on.`, 'warn');
-      return;
-    }
     p.kills += rng.int(4, 12);
     st.trouble = null;
     st.health = 1;
@@ -536,8 +586,14 @@ export class PatrolSim {
     else if (s.invasion.signal) s.invasion.next = Math.min(s.invasion.next, s.time + 150);
   }
 
-  /** The player's answer about a distant colony. */
-  decide(d: Decision, accept: boolean) {
+  /** A colony saved by someone else (the Freedom Wings): its trouble is over. */
+  liberate(st: OuterStar) {
+    st.trouble = null;
+    st.health = 1;
+  }
+
+  /** The player's answer about a distant colony: `choice` 0 sends the Space Patrols, 1–3 a Freedom Wings sortie S, M or L. */
+  decide(d: Decision, accept: boolean, choice?: number) {
     const s = this.h.s;
     const st = this.star(d.star);
     if (!st || !s.civ) return;
@@ -554,11 +610,15 @@ export class PatrolSim {
       this.h.news('✶', `Los colonos de ${st.name} tendrán que arreglárselas solos.`, `The settlers of ${st.name} will have to fend for themselves.`, 'info');
       return;
     }
+    if (choice !== undefined && choice > 0) {
+      this.h.wings.send(st.id, WING_SIZES[choice - 1]);
+      return;
+    }
     if (this.patrol) {
       this.send(st.id, false);
       return;
     }
-    // Before the patrols exist, a relief flotilla is all there is.
+    // Before the patrols and the wings exist, a relief flotilla is all there is.
     if (!has(s.civ.res, PATROL_COST.relief)) return;
     pay(s.civ.res, PATROL_COST.relief);
     if (this.h.rng.next() < 0.55) {
@@ -582,15 +642,16 @@ export class PatrolSim {
         continue;
       }
       st.trouble.t += dt;
-      if (!st.strike) st.health = Math.max(0, st.health - dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008) * (1 + 0.08 * (threatOf(s) - 1)));
-      if (st.trouble.t >= st.trouble.dur && !st.strike) this.troubleEnds(st);
+      const helped = !!st.strike || !!st.wing;
+      if (!helped) st.health = Math.max(0, st.health - dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008) * (1 + 0.08 * (threatOf(s) - 1)));
+      if (st.trouble.t >= st.trouble.dur && !helped) this.troubleEnds(st);
     }
     if (!this.stars.length) return;
     if (!this.nextTrouble) this.nextTrouble = s.time + rng.range(50, 90);
     if (s.time < this.nextTrouble) return;
     const dom = this.dominions();
     this.nextTrouble = s.time + rng.range(110, 170) / (1 + 0.12 * this.stars.length + 0.3 * dom + 0.1 * (threatOf(s) - 1));
-    const calm = this.stars.filter((x) => !x.trouble && !x.strike);
+    const calm = this.stars.filter((x) => !x.trouble && !x.strike && !x.wing);
     if (!calm.length) return;
     let total = 0;
     for (const x of calm) total += x.mode === 'dominion' ? 2.5 : 1;
@@ -606,7 +667,10 @@ export class PatrolSim {
     const r = rng.next();
     const kind: NonNullable<OuterStar['trouble']>['kind'] =
       st.mode === 'dominion' ? (r < 0.55 ? 'natives' : r < 0.75 ? 'pirates' : s.alienSpecies ? 'invaders' : 'natives') : r < 0.5 ? 'pirates' : r < 0.75 && s.alienSpecies ? 'invaders' : 'plague';
-    st.trouble = { kind, t: 0, dur: 75 };
+    // How dangerous it is: by its kind, and worse as the threat grows.
+    const score = { plague: 0, pirates: 0.2, natives: 0.5, invaders: 0.7 }[kind] + rng.next() + 0.08 * (threatOf(s) - 1);
+    const risk: Risk = score < 0.7 ? 'low' : score < 1.3 ? 'mid' : 'high';
+    st.trouble = { kind, t: 0, dur: 75, risk };
     const who = this.h.peoples.get(st.people)?.name;
     const W = who ?? '';
     const [al, AL] = invaderNames(s.alienSpecies);

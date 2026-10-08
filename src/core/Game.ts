@@ -40,6 +40,7 @@ type Sel = number | 'star' | null;
 
 /** Space Patrol blue. */
 const PATROL = 0x6f9bff;
+const WINGS = 0xffe1a0;
 
 interface Ptr {
   x: number;
@@ -119,11 +120,11 @@ export class Game {
       },
       cancelTarget: () => this.setTargeting(null),
       works: () => this.openProjects(),
-      decide: (id, accept) => {
+      decide: (id, accept, choice) => {
         sound.click();
         // Negative ids are collision alerts (not choices for the peoples).
         if (id < 0) return this.encounterChoice(-id, accept);
-        this.sim?.decide(id, accept);
+        this.sim?.decide(id, accept, choice);
       },
       renameSystem: () => this.rename('star'),
     });
@@ -699,7 +700,7 @@ export class Game {
       }
       case 'warpOut':
       case 'warpIn':
-        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : f.tint === 'patrol' ? PATROL : tone(f.people), f.kind === 'warpIn');
+        this.fx.warp(f.x, f.z, f.dx, f.dz, f.count, f.tint === 'alien' ? alien : f.tint === 'patrol' ? PATROL : f.tint === 'wings' ? WINGS : tone(f.people), f.kind === 'warpIn');
         sound.warp();
         if (f.count > 6 || f.tint === 'patrol') this.stage.shake(f.tint === 'patrol' ? 0.35 : 0.6);
         return;
@@ -1374,7 +1375,7 @@ export class Game {
           { class: 'summary' },
           h('div', { class: 'w' }, h('span', null, '⌂'), h('span', null, tr('Mundos habitados', 'Worlds settled')), h('b', null, String(reached))),
           h('div', { class: 'w' }, h('span', null, '⧗'), h('span', null, tr('Edad del sistema', 'System age')), h('b', null, fmtAge(s.age))),
-          h('div', { class: 'w' }, h('span', null, '✦'), h('span', null, tr('Sistemas alcanzados', 'Systems reached')), h('b', null, String(s.legacy + 1 + (s.civ?.stats.colonies ?? 0)))),
+          h('div', { class: 'w' }, h('span', null, '✦'), h('span', null, tr('Sistemas alcanzados', 'Systems reached')), h('b', null, String(s.legacy + 1 + (s.stars?.length ?? 0)))),
         ),
       ],
       buttons: [
@@ -1527,13 +1528,27 @@ export class Game {
           dt,
         );
         const civ = s.civ;
-        this.hud.showDecisions([...this.encounterViews(), ...(civ ? civ.decisions.map((d) => decisionView(d, s, sim.civ)) : [])]);
+        this.hud.showDecisions([...this.encounterViews(), ...(civ ? civ.decisions.map((d) => decisionView(d, s, sim.civ, sim)) : [])]);
         if (civ?.decisions.length) this.hint('s.decision', '⚖', () => tr('Llegan visitantes y te piden algo. Decide antes de que se acabe el tiempo; si no, se marchan.', 'Visitors arrive and ask you something. Decide before time runs out; otherwise they leave.'));
         if (civ && sim.civ.spacefaring)
           this.hint('s.works', '⚒', () =>
             tr(
               'Los pueblos ya pueden emprender <b>grandes obras</b>. Abre <b>Proyectos</b> (tecla P): cada tipo de mundo colonizado aporta un recurso distinto.',
               'The peoples can now take on <b>great works</b>. Open <b>Projects</b> (P key): each kind of settled world contributes a different resource.',
+            ),
+          );
+        if (civ?.done.warp && !s.wings)
+          this.hint('s.wingsTech', '✈', () =>
+            tr(
+              'Con el motor de curvatura ya puedes desarrollar las <b>Freedom Wings</b> en <b>Proyectos → Más allá del sistema</b>: escuadrillas de voluntarios, aparte de los Space Patrols, para defender las colonias lejanas.',
+              'With the warp drive you can now develop the <b>Freedom Wings</b> in <b>Projects → Beyond the system</b>: volunteer squadrons, apart from the Space Patrols, to defend the distant colonies.',
+            ),
+          );
+        if (s.wings)
+          this.hint('s.wings', '✈', () =>
+            tr(
+              'Las <b>Freedom Wings</b> suman naves solas: más con cada mundo con vida y con la paz entre los pueblos (también se compran con ciencia, caras). Cuando una colonia lejana pida ayuda, elige el tamaño: <b>S</b> para riesgo bajo, <b>M</b> para medio y <b>L</b> para alto. Una flota chica contra un riesgo alto puede no volver.',
+              'The <b>Freedom Wings</b> gather ships on their own: more with every living world and with peace between the peoples (they can also be bought with science, at a price). When a distant colony asks for help, pick the size: <b>S</b> for a low risk, <b>M</b> for medium and <b>L</b> for high. A small fleet against a high risk may never come back.',
             ),
           );
         if ((s.threat?.level ?? 1) >= 2)
@@ -1597,7 +1612,7 @@ export class Game {
     const L = threatOf(s);
     const lv = { fleet: defLevel(s, 'fleet'), shield: defLevel(s, 'shield'), patrol: defLevel(s, 'patrol') };
     // A defence behind the threat that can be raised right now also lights the Projects button.
-    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id));
+    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
     return {
       threat: L,
       def: lv,
@@ -1642,12 +1657,24 @@ export class Game {
         panel.refresh();
       },
       rename: (id) => this.rename({ star: id }),
+      wing: (id, size) => {
+        if (sim.wings.send(id, size)) sound.warp();
+        panel.refresh();
+      },
+      unlockWings: () => {
+        if (sim.wings.unlock()) sound.chime('good');
+        panel.refresh();
+      },
+      buyWings: () => {
+        if (sim.wings.buy()) sound.chime('good');
+        panel.refresh();
+      },
       upgrade: (id) => {
         if (sim.civ.upgrade(id)) sound.chime('good');
         panel.refresh();
       },
       close: () => {},
-    }, sim.patrols);
+    }, sim.patrols, sim.wings);
     this.projects = panel;
     const close = modal(this.ui, {
       title: tr('Grandes obras', 'Great works'),
@@ -1697,12 +1724,15 @@ export class Game {
       const pp = s.peoples?.find((x) => x.id === st.people);
       const col = pp ? `hsl(${Math.round(pp.hue * 360)} 70% 68%)` : '#e8d2a0';
       const mark = st.mode === 'dominion' ? '⚑' : '✦';
-      const html = `<i style="color:${col}">${mark}</i>${st.name}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}`;
+      const html = `<i style="color:${col}">${mark}</i>${st.name}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}${st.wing ? '<b class="wg">✈</b>' : ''}`;
       this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
     }
     // The Space Patrols' battle barge.
     const pt = s.patrol;
-    if (pt && pt.phase !== 'away') this.labels.put('barge', 'barge-label', `⛨ ${tr(pt.barge.es, pt.barge.en)}`, pt.x, pt.y, pt.z, 36);
+    if (pt && pt.phase !== 'away') {
+      const home = (this.sim?.patrols.homeCompanies() ?? 1);
+      this.labels.put('barge', 'barge-label', `⛨ ${tr(pt.barge.es, pt.barge.en)}${home > 1 ? ` <small>×${home}</small>` : ''}`, pt.x, pt.y, pt.z, 36);
+    }
   }
 }
 
