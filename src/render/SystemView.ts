@@ -34,12 +34,14 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   alien: { hull: 'omen', size: 0.75, px: 16 },
   mother: { hull: 'pancake', size: 2.8, px: 38 },
   ark: { hull: 'ark', size: 1.8, px: 22 },
-  pod: { hull: 'pod', size: 0.42, px: 10 },
-  gunship: { hull: 'executioner', size: 0.65, px: 14 },
+  pod: { hull: 'pod', size: 0.42, px: 6 },
+  gunship: { hull: 'executioner', size: 0.65, px: 8 },
 };
-/** The battle barge: true size and smallest size on screen. */
+/**
+ * The battle barge's true size. It keeps it at every zoom, like the worlds (no minimum size on
+ * screen: from afar it would swell far beyond the planets).
+ */
 const BARGE_SIZE = 4.6;
-const BARGE_PX = 62;
 /** Each people's shipyards favour one warship design. */
 const WARSHIPS: Hull[] = ['striker', 'spitfire', 'zenith'];
 const hullOf = (kind: ShipKind, people?: number): Hull => (kind === 'armada' || kind === 'raider' ? WARSHIPS[(people ?? 0) % WARSHIPS.length] : HULL_OF[kind].hull);
@@ -567,8 +569,8 @@ export class SystemView {
       if (model) hue.copy(PATROL_ACCENT);
       else hue.setRGB(1, 1, 1);
       const hull: Hull = model ? 'imperial' : 'barge';
-      this.hulls.add(hull, v, dir, hue, BARGE_SIZE, BARGE_PX, cam);
-      const scale = Math.max(BARGE_SIZE, BARGE_PX * this.hulls.pxScale * cam.distanceTo(v));
+      this.hulls.add(hull, v, dir, hue, BARGE_SIZE, 0, cam);
+      const scale = BARGE_SIZE;
       // Every company at home is one more barge, flying in echelon behind the flagship.
       const total = Math.max(1, s.civ?.def?.patrol ?? 1);
       const home = total - (pt.detach ?? []).reduce((n, d) => n + d.companies, 0);
@@ -580,12 +582,12 @@ export class SystemView {
           v.y + 0.25 * row + Math.sin(time * 0.7 + i) * 0.12,
           v.z - dir.z * row * scale * 0.95 + dir.x * side * row * scale * 0.62,
         );
-        this.hulls.add(hull, q, dir, hue, BARGE_SIZE * 0.92, BARGE_PX * 0.85, cam);
+        this.hulls.add(hull, q, dir, hue, BARGE_SIZE * 0.92, 0, cam);
       }
       if (p < MAX_POINTS) {
         this.shipPos.set([v.x - dir.x * scale * 0.55, v.y, v.z - dir.z * scale * 0.55], p * 3);
-        this.shipCol.set([PATROL_GLOW.r * 1.4, PATROL_GLOW.g * 1.4, PATROL_GLOW.b * 1.6], p * 3);
-        this.shipSize[p] = 2.2;
+        this.shipCol.set([PATROL_GLOW.r, PATROL_GLOW.g, PATROL_GLOW.b * 1.2], p * 3);
+        this.shipSize[p] = 1;
         p++;
       }
       const escorts = 2;
@@ -594,7 +596,7 @@ export class SystemView {
         const r = scale * (0.72 + 0.08 * (j % 2));
         q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
         const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
-        this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 11, cam);
+        this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 6, cam);
       }
     }
     // The Freedom Wings at home: three squadrons of fighters circling the home world, more as they grow.
