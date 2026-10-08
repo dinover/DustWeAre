@@ -48,6 +48,10 @@ const hullOf = (kind: ShipKind, people?: number): Hull => (kind === 'armada' || 
 /** Space Patrol engines burn blue-white; their gunships wear ultramarine stripes. */
 const PATROL_GLOW = new THREE.Color(0.75, 0.85, 1);
 const PATROL_ACCENT = new THREE.Color(0.25, 0.42, 1);
+/** Height of each barge of the formation above or below the flagship: they stack in tiers. */
+const TIERS = [0, 2.6, -2.2, 4.4, -3.8, 6, -5.2, 7.6, -6.4, 9];
+/** Integer hash for the patrol craft routes (deterministic, so they need no state). */
+const hop = (a: number, b: number) => (((a * 73856093) ^ (b * 19349663)) >>> 0) % 1000003;
 /** The Freedom Wings fly in pale gold. */
 const WINGS_TINT = new THREE.Color(1, 0.86, 0.55);
 
@@ -85,6 +89,9 @@ export class SystemView {
   group = new THREE.Group();
   private map = new Map<number, Entry>();
   private byId = new Map<number, World>();
+  private craftPorts: { x: number; z: number; r: number }[] = [];
+  private craftPos = new THREE.Vector3();
+  private craftDir = new THREE.Vector3();
   private orbitGeo: THREE.BufferGeometry;
   private belts: THREE.Points | null = null;
   private beltData: { r: number; th: number; s: number }[] = [];
@@ -574,16 +581,18 @@ export class SystemView {
       // Every company at home is one more barge, flying in echelon behind the flagship.
       const total = Math.max(1, s.civ?.def?.patrol ?? 1);
       const home = total - (pt.detach ?? []).reduce((n, d) => n + d.companies, 0);
+      // Every company at home is one more barge, in echelon behind the flagship and stacked in tiers.
       for (let i = 1; i < home; i++) {
         const row = Math.ceil(i / 2);
         const side = i % 2 ? 1 : -1;
         q.set(
           v.x - dir.x * row * scale * 0.95 - dir.z * side * row * scale * 0.62,
-          v.y + 0.25 * row + Math.sin(time * 0.7 + i) * 0.12,
+          v.y + TIERS[i % TIERS.length] + Math.sin(time * 0.7 + i) * 0.15,
           v.z - dir.z * row * scale * 0.95 + dir.x * side * row * scale * 0.62,
         );
         this.hulls.add(hull, q, dir, hue, BARGE_SIZE * 0.92, 0, cam);
       }
+      p = this.patrolCraft(s, Math.max(1, home), time, cam, p);
       if (p < MAX_POINTS) {
         this.shipPos.set([v.x - dir.x * scale * 0.55, v.y, v.z - dir.z * scale * 0.55], p * 3);
         this.shipCol.set([PATROL_GLOW.r, PATROL_GLOW.g, PATROL_GLOW.b * 1.2], p * 3);
@@ -595,8 +604,8 @@ export class SystemView {
         const a = time * 0.8 + (j * TAU) / escorts;
         const r = scale * (0.72 + 0.08 * (j % 2));
         q.set(v.x + Math.cos(a) * r, v.y + Math.sin(a * 2) * 0.3, v.z + Math.sin(a) * r);
-        const d2 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
-        this.hulls.add('executioner', q, d2, PATROL_ACCENT, 0.55, 6, cam);
+        this.craftDir.set(-Math.sin(a), 0, Math.cos(a));
+        this.hulls.add('executioner', q, this.craftDir, PATROL_ACCENT, 0.55, 6, cam);
       }
     }
     // The Freedom Wings at home: three squadrons of fighters circling the home world, more as they grow.
@@ -681,6 +690,67 @@ export class SystemView {
   }
 
   /** Great works: Dyson swarm, orbital ring, space elevator, and the wandering planet. */
+  /**
+   * Smaller Space Patrol craft sweep the system while barges are at home — three for each one —
+   * hopping from settled world to settled world (or circling the star) at their own heights.
+   * Returns the next free engine-glow point.
+   */
+  private patrolCraft(s: GameState, barges: number, time: number, cam: THREE.Vector3, p: number) {
+    const ports = this.craftPorts;
+    ports.length = 0;
+    for (const w of s.worlds) {
+      if (!isSettled(w)) continue;
+      const c = worldXZ(w, this.byId, this.tmp);
+      ports.push({ x: c.x, z: c.z, r: worldRadius(w) * 2 + 1.4 });
+    }
+    const n = Math.min(12, barges * 3);
+    const at = this.craftPos;
+    const dir = this.craftDir;
+    for (let i = 0; i < n; i++) {
+      const alt = 1.6 + (i % 4) * 1.1;
+      if (ports.length >= 2) {
+        // Legs of 9–13 s between two worlds, each craft on its own route.
+        const seg = 9 + (i % 3) * 2;
+        const tt = time / seg + i * 1.37;
+        const leg = Math.floor(tt);
+        const f = tt - leg;
+        const ai = hop(leg, i) % ports.length;
+        let bi = hop(leg + 1, i) % ports.length;
+        if (bi === ai) bi = (ai + 1) % ports.length;
+        const A = ports[ai];
+        const B = ports[bi];
+        let dx = B.x - A.x;
+        let dz = B.z - A.z;
+        const len = Math.hypot(dx, dz) || 1;
+        dx /= len;
+        dz /= len;
+        // Leave and arrive just outside each world, curving a little to one side.
+        const ax = A.x + dx * A.r;
+        const az = A.z + dz * A.r;
+        const bx = B.x - dx * B.r;
+        const bz = B.z - dz * B.r;
+        const k = easeInOut(f);
+        const bend = Math.sin(Math.PI * f) * Math.min(4, len * 0.15) * (i % 2 ? 1 : -1);
+        at.set(ax + (bx - ax) * k - dz * bend, alt + Math.sin(Math.PI * f) * 1.8, az + (bz - az) * k + dx * bend);
+        dir.set(bx - ax, 0, bz - az);
+      } else {
+        const a = time * (0.05 + 0.01 * (i % 3)) + i * 1.9;
+        const r = 18 + (i % 4) * 7;
+        at.set(Math.cos(a) * r, alt, Math.sin(a) * r);
+        dir.set(-Math.sin(a), 0, Math.cos(a));
+      }
+      this.hulls.add('executioner', at, dir, PATROL_ACCENT, 0.5, 6, cam);
+      if (p < MAX_POINTS) {
+        dir.normalize();
+        this.shipPos.set([at.x - dir.x * 0.4, at.y, at.z - dir.z * 0.4], p * 3);
+        this.shipCol.set([PATROL_GLOW.r, PATROL_GLOW.g, PATROL_GLOW.b], p * 3);
+        this.shipSize[p] = 0.5;
+        p++;
+      }
+    }
+    return p;
+  }
+
   private updateWorks(s: GameState, time: number) {
     const civ = s.civ;
     const b = civ?.building;
