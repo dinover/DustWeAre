@@ -2,7 +2,7 @@ import { int, pick, tr } from '../i18n';
 import type { Resources } from '../core/state';
 import { ERA_NAMES, MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectDef, type ProjectId } from '../content/projects';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
-import { STAR_INCOME, companiesFor, strikeCost, strikeRisk, troubleRisk, type PatrolSim } from '../sim/patrols';
+import { FORT_MAX, STAR_INCOME, companiesFor, fortCost, fortRepel, strikeCost, strikeRisk, troubleRisk, type PatrolSim } from '../sim/patrols';
 import { BUY_SHIPS, WINGS_TECH, WING_COST, WING_SIZES, WING_UNITS, buyCost, type WingsSim } from '../sim/wings';
 import { riskText, wingForecast } from './decisions';
 import type { WingSize } from '../core/state';
@@ -44,7 +44,7 @@ export class ProjectsPanel {
 
   constructor(
     private civ: CivSim,
-    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; upgrade(id: DefenceId): void; wing(id: number, size: WingSize): void; unlockWings(): void; buyWings(): void },
+    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; fortify(id: number): void; upgrade(id: DefenceId): void; wing(id: number, size: WingSize): void; unlockWings(): void; buyWings(): void },
     private patrols?: PatrolSim,
     private wings?: WingsSim,
   ) {
@@ -145,6 +145,7 @@ export class ProjectsPanel {
       const id = Number(b.dataset.id);
       if (b.dataset.act === 'rename') this.on.rename(id);
       else if (b.dataset.act === 'release') this.on.release(id);
+      else if (b.dataset.act === 'fortify') this.on.fortify(id);
       else if (b.dataset.act === 'wing') this.on.wing(id, b.dataset.size as WingSize);
       else if (b.dataset.act === 'wings-unlock') this.on.unlockWings();
       else if (b.dataset.act === 'wings-buy') this.on.buyWings();
@@ -342,9 +343,20 @@ export class ProjectsPanel {
         const need = companiesFor(strikeRisk(st, true));
         btns += btn('conquer', '', `${tr('Conquistar', 'Conquer')} ×${need} ${costChips(strikeCost(st, true), res)}`, conqLock ? pick(conqLock) : tr('Los Space Patrols someten el sistema: pasará a ser un dominio.', 'The Space Patrols bring the system to heel: it will become a dominion.'), !!conqLock);
       }
+      const fort = st.fort ?? 0;
+      if (fort < FORT_MAX) {
+        const lock = P.fortifyLock(st);
+        btns += btn(
+          'fortify',
+          '',
+          `♜ ${tr('Fortificar', 'Fortify')} ${costChips(fortCost(fort), res)}`,
+          `${tr(`<b>Defensas ${fort + 1}/${FORT_MAX}</b>: rechazan solas el ${Math.round(fortRepel(fort + 1) * 100)} % de los ataques, los que pasan son menos graves y la colonia resiste más mientras llega la ayuda.`, `<b>Defences ${fort + 1}/${FORT_MAX}</b>: they beat off ${Math.round(fortRepel(fort + 1) * 100)}% of attacks on their own, those that get through are milder and the colony holds out longer while help comes.`)}${lock ? `<br>${pick(lock)}` : ''}`,
+          !!lock,
+        );
+      }
       if (st.mode === 'dominion') btns += btn('release', '', tr('Liberar', 'Set free'), tr('Devolverle la libertad: solo comerciará, y el sistema se ganará menos enemigos.', 'Give it back its freedom: it will only trade, and the system will make fewer enemies.'), false);
       html += `<div class="star-row ${st.mode}${st.trouble ? ' trouble' : ''}">
-        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" data-tip="${tr('Ponerle nombre', 'Give it a name')}">✎</button><span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
+        <div class="sr-head"><i style="background:${col};color:${col}"></i><b>${st.name}</b><button class="rename-btn" data-act="rename" data-id="${st.id}" data-tip="${tr('Ponerle nombre', 'Give it a name')}">✎</button>${st.fort ? `<span class="fort" data-tip="${tr(`Defensas propias ${st.fort}/${FORT_MAX}: rechazan el ${Math.round(fortRepel(st.fort) * 100)} % de los ataques`, `Own defences ${st.fort}/${FORT_MAX}: they beat off ${Math.round(fortRepel(st.fort) * 100)}% of attacks`)}">♜ ${st.fort}</span>` : ''}<span class="badge ${st.mode}">${st.mode === 'dominion' ? tr('Dominio', 'Dominion') : tr('Comercio', 'Trade')}</span></div>
         <div class="small"><span class="muted">${who}</span> · ${trouble}</div>
         <div class="vessel thin ${st.health > 0.5 ? 'moss' : 'gold'}" data-tip="${tr(`Estado de la colonia: ${Math.round(st.health * 100)} %`, `Colony condition: ${Math.round(st.health * 100)}%`)}"><i style="--v:${Math.round(st.health * 100)}%"></i></div>
         <div class="sr-inc small">${income} <em class="muted">/s</em></div>

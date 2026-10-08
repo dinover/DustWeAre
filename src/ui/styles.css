@@ -682,3 +682,5 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .people-row.wings span { color: #ffe1a0; }
 .star-label .wg { margin-left: 3px; }
 .decision .d-buttons { flex-wrap: wrap; }
+.star-row .fort, .star-label .fort { color: #cfd8e6; font: 700 11px var(--title); margin-left: 4px; padding: 0 5px; border-radius: 6px; background: rgba(160, 180, 210, .12); border: 1px solid rgba(180, 200, 230, .25); white-space: nowrap; }
+.star-label .fort { font-size: 10px; padding: 0 3px; }

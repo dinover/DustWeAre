@@ -49,6 +49,14 @@ export const STAR_INCOME: Record<OuterStar['mode'], Resources> = {
 export const PATROL_COST = { help: { fuel: 50 }, relief: { fuel: 40 }, conquer: { fuel: 90, metal: 60 } };
 
 export const RISK_RANK: Record<Risk, number> = { low: 1, mid: 2, high: 3 };
+/** A distant colony's own defences: levels, and what raising them costs. */
+export const FORT_MAX = 5;
+export const fortCost = (level: number): Partial<Resources> => {
+  const k = Math.pow(1.5, level);
+  return { metal: Math.round((80 * k) / 5) * 5, fuel: Math.round((40 * k) / 5) * 5, science: Math.round((30 * k) / 5) * 5 };
+};
+/** Chance that a colony's defences beat off an attack on their own. */
+export const fortRepel = (level: number) => 0.13 * level;
 /** The Space Patrols settle any fight with two companies at most: two for a high risk, one otherwise. */
 export const companiesFor = (risk: Risk) => (risk === 'high' ? 2 : 1);
 /** How dangerous a colony's trouble is (old saves had none: guessed from its kind). */
@@ -586,6 +594,25 @@ export class PatrolSim {
     else if (s.invasion.signal) s.invasion.next = Math.min(s.invasion.next, s.time + 150);
   }
 
+  /** Why a colony's defences cannot be raised right now (null: they can). */
+  fortifyLock(st: OuterStar): Bi | null {
+    const civ = this.h.s.civ;
+    if ((st.fort ?? 0) >= FORT_MAX) return { es: 'Defensas al máximo.', en: 'Defences at their best.' };
+    if (!civ || !has(civ.res, fortCost(st.fort ?? 0))) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
+    return null;
+  }
+
+  /** Raises a distant colony's own defences one level: walls, batteries, a garrison. */
+  fortify(id: number) {
+    const s = this.h.s;
+    const st = this.star(id);
+    if (!st || !s.civ || this.fortifyLock(st)) return false;
+    pay(s.civ.res, fortCost(st.fort ?? 0));
+    st.fort = (st.fort ?? 0) + 1;
+    this.h.news('♜', `${st.name} refuerza sus defensas (nivel ${st.fort}): baterías en órbita y una guarnición propia.`, `${st.name} strengthens its defences (level ${st.fort}): orbital batteries and a garrison of its own.`, 'good');
+    return true;
+  }
+
   /** A colony saved by someone else (the Freedom Wings): its trouble is over. */
   liberate(st: OuterStar) {
     st.trouble = null;
@@ -643,7 +670,8 @@ export class PatrolSim {
       }
       st.trouble.t += dt;
       const helped = !!st.strike || !!st.wing;
-      if (!helped) st.health = Math.max(0, st.health - dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008) * (1 + 0.08 * (threatOf(s) - 1)));
+      // Its own defences make it hold out longer.
+      if (!helped) st.health = Math.max(0, st.health - (dt * (st.trouble.kind === 'plague' ? 0.005 : 0.008) * (1 + 0.08 * (threatOf(s) - 1))) / (1 + 0.25 * (st.fort ?? 0)));
       if (st.trouble.t >= st.trouble.dur && !helped) this.troubleEnds(st);
     }
     if (!this.stars.length) return;
@@ -653,12 +681,14 @@ export class PatrolSim {
     this.nextTrouble = s.time + rng.range(110, 170) / (1 + 0.12 * this.stars.length + 0.3 * dom + 0.1 * (threatOf(s) - 1));
     const calm = this.stars.filter((x) => !x.trouble && !x.strike && !x.wing);
     if (!calm.length) return;
+    // Dominions draw far more trouble; well defended colonies, much less.
+    const weight = (x: OuterStar) => (x.mode === 'dominion' ? 2.5 : 1) / (1 + 0.6 * (x.fort ?? 0));
     let total = 0;
-    for (const x of calm) total += x.mode === 'dominion' ? 2.5 : 1;
+    for (const x of calm) total += weight(x);
     let roll = rng.next() * total;
     let st = calm[0];
     for (const x of calm) {
-      roll -= x.mode === 'dominion' ? 2.5 : 1;
+      roll -= weight(x);
       if (roll <= 0) {
         st = x;
         break;
@@ -667,8 +697,15 @@ export class PatrolSim {
     const r = rng.next();
     const kind: NonNullable<OuterStar['trouble']>['kind'] =
       st.mode === 'dominion' ? (r < 0.55 ? 'natives' : r < 0.75 ? 'pirates' : s.alienSpecies ? 'invaders' : 'natives') : r < 0.5 ? 'pirates' : r < 0.75 && s.alienSpecies ? 'invaders' : 'plague';
-    // How dangerous it is: by its kind, and worse as the threat grows.
-    const score = { plague: 0, pirates: 0.2, natives: 0.5, invaders: 0.7 }[kind] + rng.next() + 0.08 * (threatOf(s) - 1);
+    // Its own defences may beat off the attack (a plague is not stopped by guns).
+    if (kind !== 'plague' && rng.next() < fortRepel(st.fort ?? 0)) {
+      const [al, AL] = invaderNames(s.alienSpecies);
+      const foe = { pirates: { es: 'los piratas', en: 'the pirates' }, natives: { es: 'una revuelta', en: 'a revolt' }, invaders: { es: `los ${al}`, en: `the ${AL}` } }[kind];
+      this.h.news('♜', `Las defensas de ${st.name} rechazan a ${foe.es} sin pedir ayuda.`, `The defences of ${st.name} beat off ${foe.en} without calling for help.`, 'good');
+      return;
+    }
+    // How dangerous it is: by its kind, worse as the threat grows, milder behind good defences.
+    const score = { plague: 0, pirates: 0.2, natives: 0.5, invaders: 0.7 }[kind] + rng.next() + 0.08 * (threatOf(s) - 1) - 0.18 * (st.fort ?? 0);
     const risk: Risk = score < 0.7 ? 'low' : score < 1.3 ? 'mid' : 'high';
     st.trouble = { kind, t: 0, dur: 75, risk };
     const who = this.h.peoples.get(st.people)?.name;

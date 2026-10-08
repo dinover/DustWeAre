@@ -285,6 +285,8 @@ export interface OuterStar {
   strike?: { conquer: boolean; companies?: number } | null;
   /** A Freedom Wings sortie is fighting there. */
   wing?: { size: WingSize; units: number } | null;
+  /** Its own defences (0–5): fewer attacks, milder ones, and it holds out longer. */
+  fort?: number;
 }
 
 /** The Freedom Wings: volunteer squadrons of the free peoples, a fleet that grows with life and peace. */

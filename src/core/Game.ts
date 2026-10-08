@@ -88,7 +88,9 @@ export class Game {
   private toolActive = false;
   private rotating = false;
   private dragged = false;
-  private pinch: { d: number; a: number } | null = null;
+  private pinch: { d: number; a: number; my: number } | null = null;
+  /** A primary-button (or one-finger) drag slides the view across the system. */
+  private panning = false;
   private hoverBody: Body | null = null;
   private settling = false;
   private stats = new Map<number, WorldStats>();
@@ -131,12 +133,12 @@ export class Game {
     this.inspector = new Inspector(this.ui, {
       close: () => this.select(null),
       rename: (t) => this.rename(t),
-      focus: (id) => this.focus(id),
+      focus: (id) => this.focus(id, true),
       dial: (v) => {
         if (this.s) this.s.dial = v;
       },
     });
-    this.ledger = new Ledger(this.ui, { select: (id) => (this.select(id), this.focus(id)) });
+    this.ledger = new Ledger(this.ui, { select: (id) => (this.select(id), this.focus(id, true)) });
     this.hud.setVisible(false);
     this.ledger.el.style.display = 'none';
     sound.setVolumes(this.settings.music, this.settings.sfx);
@@ -552,7 +554,7 @@ export class Game {
     if ('world' in f) {
       if (!s.worlds.some((w) => w.id === f.world)) return false;
       this.select(f.world);
-      this.focus(f.world);
+      this.focus(f.world, true);
       return true;
     }
     if ('pair' in f) return this.watchPair(f.pair[0], f.pair[1]);
@@ -1012,15 +1014,18 @@ export class Game {
     this.selected = sel;
     this.systemView.selected = typeof sel === 'number' ? sel : null;
     if (sel === null) {
+      // The camera stays where it is: it only stops following.
       this.inspector.hide();
-      this.follow = null;
-      this.followFn = null;
-      this.stage.goal.target.set(0, 0, 0);
+      this.unfollow();
     }
     this.panelT = 0;
   }
 
-  focus(id: Sel) {
+  /**
+   * Centres the camera on a world (or the star) and keeps it there until the player moves the view.
+   * `close` also zooms in on it; otherwise it only comes nearer when the view is far away.
+   */
+  focus(id: Sel, close = false) {
     this.follow = id;
     this.followFn = null;
     if (id === 'star' || id === null) {
@@ -1029,7 +1034,14 @@ export class Game {
     }
     const w = this.s?.worlds.find((x) => x.id === id);
     if (!w) return;
-    this.stage.goal.dist = clamp(worldRadius(w) * 11 + 9, 12, 70);
+    const near = clamp(worldRadius(w) * 11 + 9, 12, 70);
+    this.stage.goal.dist = close ? near : Math.min(this.stage.goal.dist, Math.max(near, 60));
+  }
+
+  /** Stop following anything (the view stays put). */
+  private unfollow() {
+    this.follow = null;
+    this.followFn = null;
   }
 
   // ------------------------------------------------------------------ input
@@ -1053,7 +1065,7 @@ export class Game {
       const hit = this.pickWorld(e.clientX, e.clientY);
       if (hit !== null) {
         this.select(hit);
-        this.focus(hit);
+        this.focus(hit, true);
       }
     });
     window.addEventListener('keydown', (e) => this.onKey(e));
@@ -1083,6 +1095,15 @@ export class Game {
     if (e.key === 'c' || e.key === 'C') this.openChronicle();
     if (e.key === '+' || e.key === '=') this.stage.zoom(0.85);
     if (e.key === '-') this.stage.zoom(1.18);
+    // Arrow keys slide the view across the system.
+    const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+    const a = arrows[e.key];
+    if (a) {
+      e.preventDefault();
+      this.unfollow();
+      const k = this.stage.dist * 0.06;
+      this.stage.panScreen(a[0] * k, a[1] * k);
+    }
   }
 
   private onDown(e: PointerEvent) {
@@ -1099,14 +1120,16 @@ export class Game {
       if (this.toolActive) this.formation?.pointerUp();
       this.toolActive = false;
       this.rotating = false;
+      this.panning = false;
       const [a, b] = [...this.pointers.values()];
-      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
+      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x), my: (a.y + b.y) / 2 };
       return;
     }
     if (this.mode !== 'play' || this.hold) {
       this.rotating = true;
       return;
     }
+    // Secondary (or middle) button: look around in 3D. Primary: slide across the system.
     if (e.button === 2 || e.button === 1) {
       this.rotating = true;
       return;
@@ -1117,8 +1140,8 @@ export class Game {
         this.formation.pointerDown(g.x, g.z);
         this.toolActive = true;
         if (this.formation.tool === 'heat' || this.formation.tool === 'cool') sound.whoosh();
-      } else this.rotating = true;
-    }
+      } else this.panning = true;
+    } else if (this.sim) this.panning = true;
   }
 
   private onMove(e: PointerEvent) {
@@ -1130,16 +1153,25 @@ export class Game {
       p.y = e.clientY;
       if (Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 6) this.dragged = true;
       if (this.pointers.size === 2 && this.pinch) {
+        // Two fingers: pinch to zoom, twist to turn, slide up or down together to tilt.
         const [a, b] = [...this.pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        const my = (a.y + b.y) / 2;
         this.stage.zoom(this.pinch.d / Math.max(10, d));
         this.stage.goal.yaw += ang - this.pinch.a;
-        this.pinch = { d, a: ang };
+        this.stage.rotate(0, (my - this.pinch.my) * 0.5);
+        this.pinch = { d, a: ang, my };
         return;
       }
-      if (this.rotating || (this.sim && this.dragged && !this.toolActive)) {
+      if (this.rotating) {
         this.stage.rotate(dx, dy);
+        return;
+      }
+      if (this.panning && this.dragged) {
+        this.unfollow();
+        this.stage.pan(e.clientX - dx, e.clientY - dy, e.clientX, e.clientY);
+        this.stage.canvas.style.cursor = 'grabbing';
         return;
       }
     }
@@ -1167,6 +1199,7 @@ export class Game {
       if (e.pointerType !== 'mouse' && this.formation) this.formation.pointer.valid = false;
     }
     if (this.rotating && this.pointers.size === 0) this.rotating = false;
+    if (this.pointers.size === 0) this.panning = false;
     if (!p || this.dragged || this.mode !== 'play' || this.hold) return;
     if (this.sim && p.button === 0) this.click(e.clientX, e.clientY);
     else if (this.formation && p.button === 0 && this.pickStar(e.clientX, e.clientY) && this.formation.tool === 'nudge') this.select('star');
@@ -1200,10 +1233,12 @@ export class Game {
       if (this.targeting) return this.doAction(this.targeting, w);
       sound.click();
       this.select(hit);
+      this.focus(hit);
       return;
     }
     if (this.pickStar(x, y)) {
       this.select('star');
+      this.focus('star');
       return;
     }
     if (!this.targeting) this.select(null);
@@ -1656,6 +1691,10 @@ export class Game {
         if (sim.patrols.release(id)) sound.chime('good');
         panel.refresh();
       },
+      fortify: (id) => {
+        if (sim.patrols.fortify(id)) sound.chime('good');
+        panel.refresh();
+      },
       rename: (id) => this.rename({ star: id }),
       wing: (id, size) => {
         if (sim.wings.send(id, size)) sound.warp();
@@ -1724,7 +1763,7 @@ export class Game {
       const pp = s.peoples?.find((x) => x.id === st.people);
       const col = pp ? `hsl(${Math.round(pp.hue * 360)} 70% 68%)` : '#e8d2a0';
       const mark = st.mode === 'dominion' ? '⚑' : '✦';
-      const html = `<i style="color:${col}">${mark}</i>${st.name}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}${st.wing ? '<b class="wg">✈</b>' : ''}`;
+      const html = `<i style="color:${col}">${mark}</i>${st.name}${st.fort ? `<b class="fort">♜${st.fort}</b>` : ''}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}${st.wing ? '<b class="wg">✈</b>' : ''}`;
       this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
     }
     // The Space Patrols' battle barge.

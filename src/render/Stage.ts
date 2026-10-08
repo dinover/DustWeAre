@@ -3,8 +3,8 @@ import { Rng, clamp, damp } from '../util';
 
 /**
  * Renderer, camera rig and the far backdrop (stars and the old nebula you were born from).
- * The camera orbits a target point on the disk plane: wheel/pinch zooms, right-drag or
- * two fingers turn it.
+ * The camera orbits a target point on the disk plane, which can wander freely over the system:
+ * a drag slides it across the plane, wheel/pinch zooms, right-drag or two fingers turn it.
  */
 export class Stage {
   renderer: THREE.WebGLRenderer;
@@ -17,6 +17,8 @@ export class Stage {
   goal = { yaw: 0.7, pitch: 0.98, dist: 158, target: new THREE.Vector3() };
   minDist = 10;
   maxDist = 300;
+  /** How far from the star the view may wander. */
+  maxPan = 150;
   /** Slow drift when nobody touches the camera (title screen). */
   drift = 0;
   /** The sky brightens (a nearby supernova) and fades back. */
@@ -74,6 +76,40 @@ export class Stage {
   rotate(dx: number, dy: number) {
     this.goal.yaw -= dx * 0.006;
     this.goal.pitch = clamp(this.goal.pitch + dy * 0.005, 0.35, 1.45);
+  }
+
+  /** Drags the view across the plane of the system: the point under the cursor stays under it. */
+  pan(x0: number, y0: number, x1: number, y1: number) {
+    const a = this.groundPoint(x0, y0);
+    const b = this.groundPoint(x1, y1);
+    if (a && b && Math.hypot(a.x - b.x, a.z - b.z) < this.dist) this.panBy(a.x - b.x, a.z - b.z);
+    else {
+      // Looking towards the horizon: move by screen distance instead.
+      const k = this.dist * 0.0022;
+      this.panScreen(-(x1 - x0) * k, (y1 - y0) * k);
+    }
+  }
+
+  /** Moves the view along the screen's right and forward directions, on the plane. */
+  panScreen(right: number, fwd: number) {
+    const s = Math.sin(this.yaw);
+    const c = Math.cos(this.yaw);
+    this.panBy(right * c - fwd * s, -right * s - fwd * c);
+  }
+
+  panBy(dx: number, dz: number) {
+    const g = this.goal.target;
+    let x = g.x + dx;
+    let z = g.z + dz;
+    const r = Math.hypot(x, z);
+    if (r > this.maxPan) {
+      x *= this.maxPan / r;
+      z *= this.maxPan / r;
+    }
+    // The view follows the hand at once, without easing.
+    this.target.x += x - g.x;
+    this.target.z += z - g.z;
+    g.set(x, 0, z);
   }
 
   update(dt: number) {
