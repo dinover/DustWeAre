@@ -109,6 +109,8 @@ export class ProjectsPanel {
       const on = id === tab;
       this.tabs[id].btn.classList.toggle('on', on);
       this.tabs[id].btn.setAttribute('aria-selected', String(on));
+      // Only the open tab is a Tab stop; the arrows move between tabs.
+      this.tabs[id].btn.tabIndex = on ? 0 : -1;
       this.tabs[id].pane.style.display = on ? '' : 'none';
     }
   }
@@ -128,13 +130,24 @@ export class ProjectsPanel {
       faith: tr('La fe', 'Faith'),
     };
     for (const id of TABS) {
-      const dot = h('span', { class: 'tab-dot' }, '●');
-      const btn = h('button', { class: 'proj-tab', role: 'tab', onclick: () => this.show(id) }, names[id], dot) as HTMLButtonElement;
-      const pane = h('div', { class: `proj-pane pane-${id}`, role: 'tabpanel' });
+      const dot = h('span', { class: 'tab-dot', 'aria-hidden': 'true' }, '●');
+      const btn = h('button', { class: 'proj-tab', role: 'tab', id: `ptab-${id}`, 'aria-controls': `ppane-${id}`, onclick: () => this.show(id) }, names[id], dot) as HTMLButtonElement;
+      const pane = h('div', { class: `proj-pane pane-${id}`, role: 'tabpanel', id: `ppane-${id}`, 'aria-labelledby': `ptab-${id}` });
       this.tabBar.append(btn);
       this.el.append(pane);
       this.tabs[id] = { btn, dot, pane };
     }
+    // ← → move between the tabs that exist (round), Home and End jump to the ends.
+    this.tabBar.addEventListener('keydown', (e) => {
+      const vis = TABS.filter((x) => this.tabs[x].btn.style.display !== 'none');
+      const i = vis.indexOf(this.tab);
+      const j = e.key === 'ArrowRight' ? (i + 1) % vis.length : e.key === 'ArrowLeft' ? (i - 1 + vis.length) % vis.length : e.key === 'Home' ? 0 : e.key === 'End' ? vis.length - 1 : -1;
+      if (j < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.show(vis[j]);
+      this.tabs[vis[j]].btn.focus();
+    });
     const P = this.tabs;
     // The threat and the defences that answer it.
     P.def.pane.append(h('h3', { class: 'proj-era' }, tr('Amenaza y defensas', 'Threat and defences')), this.defences);

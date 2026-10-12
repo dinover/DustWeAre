@@ -1034,8 +1034,11 @@ export class Game {
     const sim = this.sim;
     if (!sim) return;
     sound.click();
-    if (!sim.canAfford(sim.cost(a))) {
-      this.hud.showTip(tr(`Necesitas <b>${sim.cost(a)}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${sim.cost(a)}</b> starlight. It refills on its own over time.`), 3.5);
+    // Wrath has a price per curse: the cheapest one decides whether it can be called at all.
+    const need = a === 'wrath' ? Math.min(...Object.values(WRATH_COST)) : sim.cost(a);
+    if (!sim.canAfford(need)) {
+      this.hud.showTip(tr(`Necesitas <b>${need}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${need}</b> starlight. It refills on its own over time.`), 3.5);
+      this.hud.deny();
       return;
     }
     if (typeof this.selected === 'number') {
@@ -1051,7 +1054,10 @@ export class Game {
     this.setTargeting(null);
     const st = sim.stats(w);
     const say = (es: string, en: string) => this.hud.showTip(tr(es, en), 3.8);
-    if (!sim.canAfford(sim.cost(a))) return say(`Necesitas <b>${sim.cost(a)}</b> de luz estelar.`, `You need <b>${sim.cost(a)}</b> starlight.`);
+    if (!sim.canAfford(sim.cost(a))) {
+      this.hud.deny();
+      return say(`Necesitas <b>${sim.cost(a)}</b> de luz estelar.`, `You need <b>${sim.cost(a)}</b> starlight.`);
+    }
     if (a === 'flare') {
       sim.flare(w);
       return;

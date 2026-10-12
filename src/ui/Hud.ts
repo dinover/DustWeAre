@@ -144,6 +144,8 @@ export interface DecisionView {
 
 /** Decisions on screen at once before the rest fold into “+N more”. */
 const MAX_DECISIONS = 3;
+/** A resource change this big in one moment glows (spent or gained). */
+const RES_PULSE = 10;
 
 /** Faith in the star, for the starlight slab. */
 export interface FaithInfo {
@@ -211,7 +213,7 @@ export class Hud {
   private worksEl: HTMLElement | null = null;
   private tipTimer = 0;
   /** The resource tablet's pills, built once: only their text, class and tip change. */
-  private resPills: { k: string; el: HTMLElement; n: HTMLElement; label?: HTMLElement }[] | null = null;
+  private resPills: { k: string; el: HTMLElement; n: HTMLElement; label?: HTMLElement; prev?: number; until?: number }[] | null = null;
   private layoutT = 0;
 
   constructor(
@@ -570,8 +572,20 @@ export class Hud {
           tipOf(p.el, tip);
         } else {
           const k = p.k as keyof Resources;
-          set(p.n, 'textContent', int(late.res[k]));
+          const v = late.res[k];
+          set(p.n, 'textContent', int(v));
           tipOf(p.el, `+${num(late.rates[k], 1)}/s`);
+          // A spend or a windfall of 10 or more glows for a moment (steady income does not).
+          const now = performance.now();
+          if (p.prev !== undefined && Math.abs(v - p.prev) >= RES_PULSE) {
+            p.el.classList.remove('spent', 'gain');
+            p.el.classList.add(v < p.prev ? 'spent' : 'gain');
+            p.until = now + 700;
+          } else if (p.until && now >= p.until) {
+            p.el.classList.remove('spent', 'gain');
+            p.until = 0;
+          }
+          p.prev = v;
         }
       }
     }
@@ -714,6 +728,15 @@ export class Hud {
     this.hintQueue = [];
     this.hintEl?.remove();
     this.hintEl = null;
+  }
+
+  /** Not enough starlight: the starlight slab shakes, a physical “no”. */
+  deny() {
+    const el = this.root.querySelector('.energy') as HTMLElement | null;
+    if (!el) return;
+    el.classList.remove('deny');
+    void el.offsetWidth;
+    el.classList.add('deny');
   }
 
   // ------------------------------------------------------------------ milestones
