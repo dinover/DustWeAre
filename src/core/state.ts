@@ -14,6 +14,19 @@ export const SCALE_K = 16;
 export const toWorld = (au: number) => SCALE_K * Math.pow(au, SCALE_EXP);
 /** World units → orbit radius (AU). */
 export const toAU = (w: number) => Math.pow(Math.max(0, w) / SCALE_K, 1 / SCALE_EXP);
+
+/** How far apart the player wants the finished system's worlds and moons (Options): 1 is the old, tight map. */
+export const SPREAD_MIN = 0.8;
+export const SPREAD_MAX = 2.4;
+export const SPREAD_DEFAULT = 1.4;
+/** The spread in use right now (it eases towards the player's setting, so changes glide). */
+export const view = { spread: SPREAD_DEFAULT };
+/** Orbit radius (AU) → world units on the finished system's map (planets spread out by the player's setting). */
+export const sysWorld = (au: number) => toWorld(au) * view.spread;
+/** World units on the finished system's map → orbit radius (AU). */
+export const sysAU = (w: number) => toAU(w / view.spread);
+/** A fixed distance of the old map (deep space, distant stars) on the current one. */
+export const far = (d: number) => d * view.spread;
 /** Angular speed (rad/s at game speed 1). Gentler than Kepler so inner orbits stay readable. */
 export const omega = (au: number) => 0.5 * Math.pow(Math.max(au, 0.05), -0.75);
 
@@ -64,11 +77,20 @@ export interface Life {
   stage: number;
   progress: number;
   health: number;
+  /** Intelligent beings living here (millions), from intelligence on. */
+  pop?: number;
+  /** Seconds spent below what its stage needs to hold on (too few people, or a dying biosphere). */
+  strain?: number;
   /** True on the world where this species was born. */
   origin: boolean;
   /** The people this life became (people id), once it reached intelligence. */
   people?: number;
 }
+
+/** What a people makes of a world it settles. */
+export type Use = 'garden' | 'lab' | 'mine' | 'ice' | 'gas' | 'fort';
+/** A people's character. */
+export type Ethos = 'science' | 'industry' | 'war' | 'trade';
 
 /** A people of the system. The player is none of them: they only watch, and sometimes intervene. */
 export interface People {
@@ -84,6 +106,8 @@ export interface People {
   arrived?: boolean;
   gone?: boolean;
   nextShip: number;
+  /** Their character: what they do with the worlds they settle and how they treat others. */
+  ethos?: Ethos;
 }
 
 /** How two peoples get along. */
@@ -151,6 +175,18 @@ export interface World extends Stuff {
   debrisRing?: boolean;
   /** People living on this world as a colony (people id); none: unclaimed. */
   owner?: number;
+  /** What the settlers make of it: a terraformed garden, mines, ice wells, a lab, a fortress, floating cities. */
+  use?: Use;
+  /** How far its towns, mines or bases have grown (0..1). */
+  dev?: number;
+  /** Settlers living here (millions). */
+  cpop?: number;
+  /** Seconds a plague still rages here. */
+  plague?: number;
+  /** What the star decided about natives sharing the world with settlers. */
+  natives?: 'asked' | 'protect' | 'purge';
+  /** Earliest time the star may demand offerings here again. */
+  tithe?: number;
 }
 
 export type ShipKind =
@@ -168,7 +204,9 @@ export type ShipKind =
   | 'mother'
   | 'ark'
   | 'pod'
-  | 'gunship';
+  | 'gunship'
+  | 'looter'
+  | 'bomber';
 
 export interface Ship {
   id: number;
@@ -201,6 +239,8 @@ export interface Ship {
   people?: number;
   /** Distant star it comes from or goes to (OuterStar id). */
   star?: number;
+  /** What invading looters carry away (given back if they are shot down). */
+  loot?: Partial<Resources>;
 }
 
 export interface Resources {
@@ -212,7 +252,7 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives';
   /** Distant star involved (outpost and annex). */
   star?: number;
   /** Legacy: rival people involved. */
@@ -347,6 +387,8 @@ export interface Threat {
   angle: number;
   /** The shields already tried to stop it. */
   tried?: boolean;
+  /** Part of a meteor storm the star itself hurled. */
+  storm?: boolean;
 }
 
 /** What a piece of news points at, for the camera. */
@@ -452,4 +494,6 @@ export interface Settings {
   sfx: number;
   quality: 'low' | 'high';
   speed: number;
+  /** How far apart worlds and moons are drawn (SPREAD_MIN…SPREAD_MAX). */
+  spread: number;
 }

@@ -37,6 +37,18 @@ export function powerOf(s: GameState, settled: number) {
   return settled + works * 1.5 + (civ.tech ?? 0) * 0.6 + (stars.length - dom) + dom * 2.5;
 }
 
+/**
+ * How tempting the system looks to raiders: every settled world, and above all the stores the
+ * peoples have piled up. It swells invasions (and brings looters) whatever the threat level.
+ */
+export function allureOf(s: GameState, settled: number) {
+  const r = s.civ?.res;
+  const stock = r ? Math.max(0, r.metal) + Math.max(0, r.fuel) + Math.max(0, r.water) + Math.max(0, r.science) : 0;
+  return Math.min(ALLURE_MAX, settled * 0.3 + Math.sqrt(stock / 100));
+}
+/** However rich the system, a wave never grows by more than this many ships for it. */
+export const ALLURE_MAX = 12;
+
 export const levelFor = (power: number) => clamp(1 + Math.floor(power / STEP), 1, MAX_LEVEL);
 /** Power at which the next threat level arrives. */
 export const nextAt = (level: number) => level * STEP;

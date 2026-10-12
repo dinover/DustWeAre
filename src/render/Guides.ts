@@ -9,6 +9,8 @@ export class Guides {
   private snow: THREE.LineLoop;
   private snowMat: THREE.LineDashedMaterial;
   opacity = 1;
+  /** Map scale: 1 while the disk forms, the player's spread once the system has settled. */
+  scale = 1;
 
   constructor() {
     this.hzMat = new THREE.ShaderMaterial({
@@ -35,7 +37,7 @@ export class Guides {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
     });
-    this.hz = new THREE.Mesh(new THREE.RingGeometry(8, 40, 160, 1), this.hzMat);
+    this.hz = new THREE.Mesh(new THREE.RingGeometry(4, 130, 200, 1), this.hzMat);
     this.hz.rotation.x = -Math.PI / 2;
     this.hz.position.y = -0.05;
     const pts: THREE.Vector3[] = [];
@@ -52,10 +54,10 @@ export class Guides {
 
   hzRadii(L: number) {
     const [a, b] = habZone(L);
-    return [toWorld(a), toWorld(b)] as const;
+    return [toWorld(a) * this.scale, toWorld(b) * this.scale] as const;
   }
   snowRadius(L: number) {
-    return toWorld(snowLine(L));
+    return toWorld(snowLine(L)) * this.scale;
   }
 
   update(L: number, time: number, showSnow: boolean) {

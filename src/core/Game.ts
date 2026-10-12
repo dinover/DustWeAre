@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { onLangChange, tr, num } from '../i18n';
-import { Rng, clamp, randomSeed } from '../util';
-import { massOf, solidsOf, toWorld, habZone, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
+import { onLangChange, pick, tr, num } from '../i18n';
+import { Rng, clamp, damp, randomSeed } from '../util';
+import { far, massOf, solidsOf, toWorld, habZone, view, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
-import { SystemSim, COST, type Fx } from '../sim/system';
+import { SystemSim, COST, WRATHS, WRATH_COST, type Fx, type Wrath } from '../sim/system';
 import { isGiantStuff, makeWorlds, worldStats, colonizable, type WorldStats } from '../sim/worlds';
 import { Stage } from '../render/Stage';
 import { Star } from '../render/Star';
@@ -32,7 +32,7 @@ import { installTips } from '../ui/Tip';
 import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
-import { DEFENCES, defLevel, threatOf } from '../sim/threat';
+import { DEFENCES, allureOf, defLevel, threatOf } from '../sim/threat';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
 
@@ -261,6 +261,7 @@ export class Game {
       this.attachDisk(f);
     } else {
       s.phase = 'system';
+      view.spread = this.settings.spread;
       this.startSystem();
     }
     this.enterPlay();
@@ -274,7 +275,8 @@ export class Game {
     }
     this.mode = 'play';
     this.stage.drift = 0;
-    this.stage.goal.dist = 175;
+    // The settled system is laid out wider (the player's spread): the camera starts farther back.
+    this.stage.goal.dist = this.s!.phase === 'system' ? 130 + 45 * this.settings.spread : 175;
     this.stage.goal.pitch = 0.98;
     this.stage.goal.target.set(0, 0, 0);
     this.hud.setVisible(true);
@@ -569,7 +571,7 @@ export class Game {
       const st = s.stars?.find((x) => x.id === f.star);
       if (!st) return false;
       this.select(null);
-      const v = new THREE.Vector3(Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+      const v = new THREE.Vector3(Math.cos(st.ang) * far(96), 0, Math.sin(st.ang) * far(96));
       this.followFn = () => v;
       this.stage.goal.dist = 70;
       return true;
@@ -872,8 +874,8 @@ export class Game {
   private colonyHint() {
     this.hint('s.colony', '⌂', () =>
       tr(
-        'Un pueblo ya viaja entre mundos. Tú no eres ninguno de ellos: los observas a todos y decides si intervienes. Cada tipo de mundo aporta algo: los gigantes dan combustible, los helados agua, los rocosos metal y los vivos ciencia.',
-        'A people now travels between worlds. You are none of them: you watch over them all and choose whether to step in. Each kind of world gives something: giants give fuel, icy worlds water, rocky worlds metal and living worlds science.',
+        'Un pueblo ya viaja entre mundos. Tú no eres ninguno de ellos: los observas a todos y decides si intervienes. No todo mundo se terraforma: solo los que valen la pena se vuelven jardines; el resto serán pueblos mineros, pozos de hielo, laboratorios o fortalezas, según el mundo y el carácter de cada pueblo. Toca un mundo para ver qué aporta.',
+        'A people now travels between worlds. You are none of them: you watch over them all and choose whether to step in. Not every world is terraformed: only those worth it become gardens; the rest will be mining towns, ice wells, labs or fortresses, by the world and the character of each people. Tap a world to see what it gives.',
       ),
     );
   }
@@ -932,7 +934,7 @@ export class Game {
     this.targeting = a;
     this.hud.setActiveTool(a);
     if (!a) return this.hud.showBanner(null);
-    const name = { flare: tr('la llamarada', 'the flare'), volcano: tr('despertar volcanes', 'waking volcanoes'), comets: tr('la lluvia de cometas', 'the comet shower'), migrate: tr('la migración', 'the migration') }[a];
+    const name = { flare: tr('la llamarada', 'the flare'), volcano: tr('despertar volcanes', 'waking volcanoes'), comets: tr('la lluvia de cometas', 'the comet shower'), migrate: tr('la migración', 'the migration'), wrath: tr('la ira de la estrella', 'the wrath of the star') }[a];
     const extra = a === 'flare' ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)') : '';
     this.hud.showBanner(tr(`Elige un objetivo para ${name}${extra}.`, `Choose a target for ${name}${extra}.`));
   }
@@ -963,6 +965,7 @@ export class Game {
       sim.flare(w);
       return;
     }
+    if (a === 'wrath') return this.wrathMenu(w);
     if (a === 'volcano') {
       if (st.giant) return say('Un gigante gaseoso no tiene volcanes: no tiene suelo.', 'A gas giant has no volcanoes: it has no ground.');
       if (massOf(w) < 0.03) return say(`${w.name} es tan pequeño que su interior ya se enfrió.`, `${w.name} is so small its interior has already cooled.`);
@@ -1007,6 +1010,72 @@ export class Game {
         },
       );
     }
+  }
+
+  /** The star's cruelty on one world: every option, what it costs, what it does and why it cannot be done. */
+  private wrathMenu(w: World) {
+    const sim = this.sim!;
+    const info: Record<Wrath, { icon: string; name: string; desc: string }> = {
+      plague: {
+        icon: '☣',
+        name: tr('Plaga', 'Plague'),
+        desc: tr('Una enfermedad diezma a quienes viven allí (también a los invasores) y viaja en sus naves a otros mundos.', 'A disease thins out whoever lives there (invaders too) and travels aboard their ships to other worlds.'),
+      },
+      storm: {
+        icon: '☄',
+        name: tr('Lluvia de meteoritos', 'Meteor storm'),
+        desc: tr('De 4 a 6 rocas caen sobre el mundo: matan a millones, hieren la vida y dispersan a los invasores. Los escudos de los pueblos intentarán detenerte.', '4 to 6 rocks fall on the world: they kill millions, wound life and scatter invaders. The peoples’ shields will try to stop you.'),
+      },
+      winter: {
+        icon: '❄',
+        name: tr('Invierno sin fin', 'Endless winter'),
+        desc: tr('Apartas tu luz: el mundo se hiela, las cosechas fallan y la población cae. Una civilización diezmada puede retroceder.', 'You turn your light away: the world freezes, crops fail and the population falls. A decimated civilization may fall back.'),
+      },
+      discord: {
+        icon: '⚡\uFE0E',
+        name: tr('Discordia', 'Discord'),
+        desc: tr('Sueños inquietos: los pueblos de este mundo desconfían de sus vecinos. Las guerras llegan solas.', 'Restless dreams: the peoples of this world mistrust their neighbours. Wars follow on their own.'),
+      },
+      tithe: {
+        icon: '✝',
+        name: tr('Exigir ofrendas', 'Demand offerings'),
+        desc: tr('Te ofrecen vidas en sacrificio. Su fe aviva la estrella: ganas luz estelar, más cuanto más poblado sea el mundo.', 'They offer you lives in sacrifice. Their faith feeds the star: you gain starlight, more the more peopled the world.'),
+      },
+    };
+    this.hold++;
+    let close = () => {};
+    const list = h('div', { class: 'wrath-list' });
+    for (const k of WRATHS) {
+      const lock = sim.wrathLock(w, k);
+      const d = info[k];
+      list.append(
+        h(
+          'button',
+          {
+            class: 'wrath-opt',
+            disabled: !!lock,
+            onclick: () => {
+              if (!sim.wrath(w, k)) return;
+              sound.thud(0.8);
+              const p = this.systemView.pos(w);
+              this.fx.flash(p.x, 0, p.z, k === 'winter' ? 0x9fd4e6 : k === 'plague' ? 0x9be36a : 0xff5a3a, worldRadius(w) * 5 + 3, 1.4);
+              close();
+            },
+          },
+          h('span', { class: 'wo-ico' }, d.icon),
+          h('span', { class: 'wo-text' }, h('b', null, d.name), h('small', null, lock ? pick(lock) : d.desc)),
+          h('span', { class: 'wo-cost' }, WRATH_COST[k] ? `☀ ${WRATH_COST[k]}` : tr('☀ +', '☀ +')),
+        ),
+      );
+    }
+    close = modal(this.ui, {
+      title: tr(`La ira de la estrella · ${w.name}`, `The wrath of the star · ${w.name}`),
+      lore: tr('Los pueblos no saben quién eres, pero sabrán temerte. Cada crueldad se recuerda; el miedo, a cambio, aviva tu luz.', 'The peoples do not know who you are, but they will learn to fear you. Every cruelty is remembered; fear, in turn, feeds your light.'),
+      cls: 'wrath-modal',
+      body: [list],
+      buttons: [{ label: tr('Tener piedad', 'Show mercy'), primary: true }],
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
   }
 
   // ------------------------------------------------------------------ selection
@@ -1087,9 +1156,9 @@ export class Game {
       return;
     }
     const n = Number(e.key);
-    if (n >= 1 && n <= 4) {
-      if (this.formation) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
-      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate'] as Action[])[n - 1]);
+    if (n >= 1 && n <= 5) {
+      if (this.formation && n <= 4) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
+      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate', 'wrath'] as Action[])[n - 1]);
     }
     if (e.key === 'p' || e.key === 'P') this.openProjects();
     if (e.key === 'c' || e.key === 'C') this.openChronicle();
@@ -1467,6 +1536,10 @@ export class Game {
     // Real time spent playing (the peoples' voices wait for a long game).
     if (s && this.mode === 'play' && speed > 0) s.playTime = (s.playTime ?? 0) + dt;
     const L = s ? s.L * s.dial : 1;
+    // The map of the settled system eases towards the player's spread (on settling, the worlds drift
+    // apart from where the disk left them; a change in Options glides too).
+    view.spread = damp(view.spread, this.sim ? this.settings.spread : 1, 2.2, dt);
+    this.guides.scale = this.sim ? view.spread : 1;
     // Simulation.
     if (this.mode === 'title' && this.demo) {
       this.demo.update(Math.min(dt, 1 / 30));
@@ -1493,7 +1566,7 @@ export class Game {
         this.sim.update(step);
         left -= step;
       }
-      if (s.threats.length) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
+      if (s.threats.some((t) => !t.storm)) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
       if (s.time > 110)
         this.hint('s.names', '✎', () =>
           tr(
@@ -1586,6 +1659,13 @@ export class Game {
               'The <b>Freedom Wings</b> gather ships on their own: more with every living world and with peace between the peoples (they can also be bought with science, at a price). When a distant colony asks for help, pick the size: <b>S</b> for a low risk, <b>M</b> for medium and <b>L</b> for high. A small fleet against a high risk may never come back.',
             ),
           );
+        if (sim.topStage >= 3)
+          this.hint('s.wrath', '⚡', () =>
+            tr(
+              'Si quieres ser temido, la <b>Ira</b> (tecla 5) desata plagas, meteoritos, inviernos, discordia u ofrendas sobre un mundo. Los pueblos lo recordarán, pero su miedo aviva tu luz estelar.',
+              'If you want to be feared, <b>Wrath</b> (key 5) unleashes plagues, meteors, winters, discord or offerings on a world. The peoples will remember, but their fear feeds your starlight.',
+            ),
+          );
         if ((s.threat?.level ?? 1) >= 2)
           this.hint('s.danger', '⚠', () =>
             tr(
@@ -1608,7 +1688,7 @@ export class Game {
           }
         }
         const afford: Record<string, { ok: boolean; afford: boolean }> = {};
-        for (const a of ['flare', 'volcano', 'comets', 'migrate'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
+        for (const a of ['flare', 'volcano', 'comets', 'migrate', 'wrath'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
         this.hud.setActionState(afford);
         if (this.panelT <= 0) {
           this.panelT = 0.3;
@@ -1650,6 +1730,7 @@ export class Game {
     const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
     return {
       threat: L,
+      allure: allureOf(s, sim.civ.settled().length),
       def: lv,
       era: tr(ERA_NAMES[era].es, ERA_NAMES[era].en),
       label: def && b ? tr(`Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %`, `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%`) : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
@@ -1718,8 +1799,8 @@ export class Game {
     const close = modal(this.ui, {
       title: tr('Grandes obras', 'Great works'),
       lore: tr(
-        'Tú inspiras; los pueblos construyen. Cada mundo aporta lo suyo: los gigantes, combustible; los helados, agua; los rocosos, metal; los mundos vivos, ciencia.',
-        'You inspire; the peoples build. Each world contributes its own: giants give fuel, icy worlds water, rocky worlds metal, living worlds science.',
+        'Tú inspiras; los pueblos construyen. Cada colonia aporta según lo que hagan de ella: los jardines y laboratorios, ciencia; las minas y fortalezas, metal; los pozos de hielo, agua; las ciudades flotantes de los gigantes, combustible.',
+        'You inspire; the peoples build. Each colony gives according to what they make of it: gardens and labs, science; mines and fortresses, metal; ice wells, water; the floating cities of the giants, fuel.',
       ),
       wide: true,
       cls: 'works-modal',
@@ -1764,7 +1845,7 @@ export class Game {
       const col = pp ? `hsl(${Math.round(pp.hue * 360)} 70% 68%)` : '#e8d2a0';
       const mark = st.mode === 'dominion' ? '⚑' : '✦';
       const html = `<i style="color:${col}">${mark}</i>${st.name}${st.fort ? `<b class="fort">♜${st.fort}</b>` : ''}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}${st.wing ? '<b class="wg">✈</b>' : ''}`;
-      this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+      this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * far(96), 0, Math.sin(st.ang) * far(96));
     }
     // The Space Patrols' battle barge.
     const pt = s.patrol;

@@ -7,7 +7,7 @@ import { h, stone, clear, ICONS } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
 
-export type Action = 'flare' | 'volcano' | 'comets' | 'migrate';
+export type Action = 'flare' | 'volcano' | 'comets' | 'migrate' | 'wrath';
 
 interface ToolDef<T extends string> {
   id: T;
@@ -82,6 +82,17 @@ const SYSTEM_ACTIONS: ToolDef<Action>[] = [
     name: () => tr('Migrar', 'Migrate'),
     tip: () => tr('<b>Migración orbital</b> · Acerca o aleja un planeta de la estrella con empujones gravitatorios bien sincronizados.', '<b>Orbital migration</b> · Move a planet closer to or farther from the star with well-timed gravity assists.'),
   },
+  {
+    id: 'wrath',
+    key: '5',
+    icon: 'wrath',
+    name: () => tr('Ira', 'Wrath'),
+    tip: () =>
+      tr(
+        '<b>Ira de la estrella</b> · Para quien quiera ser temido: plagas, lluvias de meteoritos, inviernos sin fin, discordia u ofrendas de vidas. Los pueblos lo recuerdan, y su miedo aviva tu luz.',
+        '<b>Wrath of the star</b> · For those who want to be feared: plagues, meteor storms, endless winters, discord or offerings of lives. The peoples remember, and their fear feeds your light.',
+      ),
+  },
 ];
 
 export interface HudHandlers {
@@ -124,6 +135,8 @@ export interface LateInfo {
   canBuild: boolean;
   /** Threat level, and the level of each defence (0: not there yet). */
   threat: number;
+  /** How tempting the system looks to raiders (worlds and stores). */
+  allure: number;
   def: Record<'fleet' | 'shield' | 'patrol', number>;
 }
 
@@ -228,7 +241,7 @@ export class Hud {
         h('span', { class: 'key' }, d.key),
         h('span', { html: ICONS[d.icon], style: 'display:contents' }),
         h('span', { class: 't' }, d.name()),
-        d.cost ? h('span', { class: 'cost' }, `☀ ${d.cost}`) : null,
+        d.cost ? h('span', { class: 'cost' }, `☀ ${d.cost}`) : d.id === 'wrath' ? h('span', { class: 'cost' }, '☀ …') : null,
       );
       el.addEventListener('click', () => {
         if (mode === 'formation') this.on.tool(d.id as Tool);
@@ -407,8 +420,8 @@ export class Hud {
       const state = !built.length ? (L >= 3 ? 'warn' : 'ok') : worst >= L ? 'ok' : worst === L - 1 ? 'warn' : 'bad';
       const lv = (n: number) => (n ? String(n) : '—');
       const tip = tr(
-        `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
-        `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
+        `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Botín a la vista: <b>${int(late.allure)}</b> · cada mundo habitado y cada recurso acumulado agrandan las oleadas (y atraen saqueadores).<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
+        `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Loot in sight: <b>${int(late.allure)}</b> · every settled world and every stored resource makes the waves bigger (and draws looters).<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
       );
       const html =
         RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('') +

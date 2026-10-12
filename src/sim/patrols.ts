@@ -1,6 +1,6 @@
-import type { Decision, GameState, OuterStar, PatrolState, Resources, Risk, Ship, World, WingSize } from '../core/state';
+import { far, type Decision, type GameState, type OuterStar, type PatrolState, type Resources, type Risk, type Ship, type World, type WingSize } from '../core/state';
 import { Rng, TAU, easeInOut } from '../util';
-import { worldRadius, worldXZ } from '../render/layout';
+import { travel, worldRadius, worldXZ } from '../render/layout';
 import { capName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { CivFx, CivSim } from './civ';
@@ -31,6 +31,10 @@ export interface PatrolHost {
   readonly peoples: PeopleSim;
   readonly civ: CivSim;
   readonly wings: WingsSim;
+  /** An invading ship was shot down (looters drop what they stole). */
+  shipDown(sh: Ship): void;
+  /** A blow that kills a share of everyone on a world. */
+  kill(w: World, frac: number): number;
 }
 
 const BARGES: Bi[] = [
@@ -219,7 +223,8 @@ export class PatrolSim {
 
   // ------------------------------------------------------------------ the barge
   private orbitSpot(p: PatrolState) {
-    return { x: Math.cos(p.ang) * ORBIT_R, y: BARGE_Y, z: Math.sin(p.ang) * ORBIT_R };
+    const R = far(ORBIT_R);
+    return { x: Math.cos(p.ang) * R, y: BARGE_Y, z: Math.sin(p.ang) * R };
   }
 
   /** Hovering just outside a world, on the far side from the star. */
@@ -330,6 +335,7 @@ export class PatrolSim {
       }
       this.h.fx({ kind: 'boom', ship: sh.id, big: sh.kind === 'mother' });
       s.ships.splice(s.ships.indexOf(sh), 1);
+      this.h.shipDown(sh);
       p.kills++;
     }
   }
@@ -421,7 +427,7 @@ export class PatrolSim {
   private launch(p: PatrolState, w: World, kind: 'pod' | 'gunship', t0: number) {
     const q = this.pos(w);
     const d = Math.hypot(q.x - p.x, q.z - p.z);
-    this.h.s.ships.push({ id: this.h.nid(), from: -7, to: w.id, t: t0, dur: kind === 'pod' ? 1.8 + d * 0.02 : 3 + d * 0.06, alien: false, kind, sx: p.x, sz: p.z });
+    this.h.s.ships.push({ id: this.h.nid(), from: -7, to: w.id, t: t0, dur: kind === 'pod' ? 1.8 + travel(d) * 0.02 : 3 + travel(d) * 0.06, alien: false, kind, sx: p.x, sz: p.z });
   }
 
   /** A pod or a gunship reached its world. Returns true when handled here. */
@@ -436,6 +442,7 @@ export class PatrolSim {
       // Punishing the side that would not stop: their colony takes the blow.
       if (pod && w.colony > 0 && w.life?.people !== peopleOf(w)) w.colony = Math.max(0.35, w.colony - 0.1);
       else if (pod && w.life) w.life.health -= 0.015;
+      if (pod) this.h.kill(w, 0.015);
     } else if (w.invaded > 0) {
       const before = w.invaded;
       w.invaded = Math.max(0, w.invaded - (pod ? 0.22 : 0.08));
@@ -501,6 +508,7 @@ export class PatrolSim {
     pay(s.civ.res, strikeCost(st, conquer));
     addHarm(s, conquer ? 6 : -1);
     st.strike = { conquer, companies: need };
+    this.answered(st.id);
     (p.detach ??= []).push({ star: st.id, companies: need, t: 0, conquer });
     p.strikes++;
     const dx = Math.cos(st.ang);
@@ -558,6 +566,7 @@ export class PatrolSim {
     const kind = st.trouble?.kind;
     p.kills += rng.int(4, 12);
     st.trouble = null;
+    this.answered(st.id);
     st.health = 1;
     const [al, AL] = invaderNames(this.h.s.alienSpecies);
     const lines: Record<string, Bi> = {
@@ -617,6 +626,16 @@ export class PatrolSim {
   liberate(st: OuterStar) {
     st.trouble = null;
     st.health = 1;
+    this.answered(st.id);
+  }
+
+  /**
+   * A colony's call for help has been answered (or no longer matters): its pending card goes away,
+   * so it cannot be turned down after help was already sent from Projects.
+   */
+  answered(id: number) {
+    const civ = this.h.s.civ;
+    if (civ) civ.decisions = civ.decisions.filter((d) => !(d.kind === 'outpost' && d.star === id));
   }
 
   /** The player's answer about a distant colony: `choice` 0 sends the Space Patrols, 1–3 a Freedom Wings sortie S, M or L. */
@@ -632,6 +651,8 @@ export class PatrolSim {
       return;
     }
     if (!st.trouble) return;
+    // Help is already on its way (sent from Projects): nobody is being abandoned.
+    if (st.strike || st.wing) return;
     if (!accept) {
       addHarm(s, 2);
       this.h.news('✶', `Los colonos de ${st.name} tendrán que arreglárselas solos.`, `The settlers of ${st.name} will have to fend for themselves.`, 'info');
@@ -732,6 +753,7 @@ export class PatrolSim {
   private troubleEnds(st: OuterStar) {
     const kind = st.trouble?.kind;
     st.trouble = null;
+    this.answered(st.id);
     const who = this.h.peoples.get(st.people)?.name;
     if (st.health > 0.3) {
       this.h.news('✶', `La colonia de ${st.name} resiste sola, maltrecha pero en pie.`, `The colony at ${st.name} holds out alone, battered but standing.`, 'info');
@@ -769,8 +791,8 @@ export class PatrolSim {
     const pool = ports.length ? ports : this.h.civ.settled();
     if (!pool.length) return;
     const w = rng.pick(pool);
-    const sx = Math.cos(st.ang) * 118;
-    const sz = Math.sin(st.ang) * 118;
+    const sx = Math.cos(st.ang) * far(118);
+    const sz = Math.sin(st.ang) * far(118);
     const n = st.mode === 'dominion' ? 2 : 1;
     for (let k = 0; k < n; k++)
       s.ships.push({ id: this.h.nid(), from: -8, to: w.id, t: -k * 0.7, dur: 11, alien: false, kind: st.mode === 'dominion' ? 'tanker' : 'freight', sx, sz, people: st.people || undefined, star: st.id });

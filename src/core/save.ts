@@ -1,5 +1,5 @@
 import { Rng, randomSeed } from '../util';
-import type { GameState, Settings, Species } from './state';
+import { SPREAD_DEFAULT, SPREAD_MAX, SPREAD_MIN, type GameState, type Settings, type Species } from './state';
 import { worldName } from '../content/names';
 
 const KEY = 'dwa.save.v1';
@@ -79,13 +79,17 @@ export const hasSave = () => {
 
 const defaults = (): Settings => {
   const weak = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-  return { music: 0.6, sfx: 0.7, quality: weak ? 'low' : 'high', speed: 1 };
+  return { music: 0.6, sfx: 0.7, quality: weak ? 'low' : 'high', speed: 1, spread: SPREAD_DEFAULT };
 };
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SKEY);
-    if (raw) return { ...defaults(), ...(JSON.parse(raw) as Partial<Settings>) };
+    if (raw) {
+      const st = { ...defaults(), ...(JSON.parse(raw) as Partial<Settings>) };
+      st.spread = Math.min(SPREAD_MAX, Math.max(SPREAD_MIN, Number(st.spread) || SPREAD_DEFAULT));
+      return st;
+    }
   } catch {
     /* ignore */
   }

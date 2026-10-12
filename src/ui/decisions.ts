@@ -7,6 +7,8 @@ import { PATROL_COST, companiesFor, strikeCost, troubleRisk, type PatrolSim } fr
 import { WING_SIZES, WING_UNITS, wingOdds, type WingsSim } from '../sim/wings';
 import type { DecisionView } from './Hud';
 import { resName } from './Projects';
+import { NATIVE_COST, STAGE_NAMES } from '../sim/system';
+import { USE_INFO } from '../sim/uses';
 
 const list = (r: Partial<Resources> | undefined) =>
   RES_KEYS.filter((k) => r?.[k])
@@ -202,6 +204,46 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
         yesOk: s.energy >= 40,
         no: tr('Que decidan las armas', 'Let the weapons decide'),
       };
+    // Natives living under someone else's colony: the star may shelter them, or let them be wiped out.
+    case 'natives': {
+      const settlers = nameOf(w?.owner);
+      const life = w?.life;
+      const natives = life?.people ? nameOf(life.people) : '';
+      const stage = life ? pick(STAGE_NAMES[life.stage]).toLowerCase() : '';
+      const use = w?.use ? pick(USE_INFO[w.use].name).toLowerCase() : '';
+      return {
+        ...base,
+        icon: '❦',
+        title: tr(`Nativos en ${wn}`, `Natives on ${wn}`),
+        body: natives
+          ? tr(
+              `Los colonos ${settlers} de ${wn} viven junto a un pueblo nativo, los ${natives}, y sus ${use} los arrinconan. Si sobreviven hasta construir ciudades, recuperarán su mundo… o se mezclarán con los colonos.`,
+              `The ${capName(settlers)} settlers of ${wn} live beside a native people, the ${capName(natives)}, and their ${use} are pushing them aside. If they survive to build cities, they will take their world back… or blend with the settlers.`,
+            )
+          : tr(
+              `En ${wn}, entre los ${use} de los colonos ${settlers}, la vida nativa se abre paso (${stage}). Los colonos no saben si cuidarla o despejar el terreno.`,
+              `On ${wn}, among the ${use} of the ${capName(settlers)} settlers, native life is making its way (${stage}). The settlers do not know whether to look after it or clear the ground.`,
+            ),
+        yes: '',
+        yesOk: false,
+        options: [
+          {
+            choice: 1,
+            primary: true,
+            label: tr(`Protegerlos · ☀ ${NATIVE_COST.protect}`, `Protect them · ☀ ${NATIVE_COST.protect}`),
+            ok: s.energy >= NATIVE_COST.protect,
+            tip: tr('Una reserva: los colonos apenas los molestan. Si llegan a construir ciudades, lo más probable es que se mezclen en paz.', 'A reserve: the settlers hardly bother them. If they ever build cities, they will most likely blend in peace.'),
+          },
+          {
+            choice: 2,
+            label: tr('Que los exterminen', 'Let them be wiped out'),
+            ok: true,
+            tip: tr('Los colonos despejan el mundo: matan a la mayoría, ganan metal y crecen más rápido. Los pueblos lo recordarán.', 'The settlers clear the world: they kill most of them, gain metal and grow faster. The peoples will remember.'),
+          },
+        ],
+        no: tr('Que convivan como puedan', 'Let them get along'),
+      };
+    }
     default:
       return {
         ...base,

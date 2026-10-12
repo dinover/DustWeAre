@@ -1,25 +1,31 @@
-import { massOf, toAU, toWorld, type CivState, type Decision, type GameState, type Resources, type Ship, type World } from '../core/state';
+import { far, massOf, sysAU, sysWorld, type CivState, type Decision, type GameState, type Resources, type Ship, type World } from '../core/state';
 import { Rng, TAU, clamp } from '../util';
 import { colonizable, isGiantStuff, type WorldStats } from './worlds';
-import { worldXZ } from '../render/layout';
+import { travel, worldXZ } from '../render/layout';
 import { MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectId } from '../content/projects';
 import { FLAVOR } from '../content/flavor';
 import { capName, speciesName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
 import type { PeopleSim, PeopleFx } from './peoples';
 import { addHarm } from './voices';
+import { USE_ROLE, ethosOf, naturalUse, type Role } from './uses';
+import { colonyCap, nativeCap } from './population';
 import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, levelFor, powerOf, shieldStop, threatOf, upgradeCost, type DefenceId } from './threat';
 
-export type Role = 'fuel' | 'water' | 'science' | 'metal';
+export type { Role } from './uses';
 export const RES_KEYS: (keyof Resources)[] = ['metal', 'fuel', 'water', 'science'];
 export const RES_ICON: Record<keyof Resources, string> = { metal: '⛏', fuel: '◍', water: '❄', science: '✦' };
 
-/** What a settled world contributes to the civilization. */
+/**
+ * What a settled world contributes to the civilization: by what its settlers made of it (a garden or
+ * a lab gives science, mines metal, ice wells water, giants fuel). A people's own home lives on
+ * knowledge; an unclaimed world is judged by what it would most naturally be used for.
+ */
 export function roleOf(w: World, st: WorldStats): Role {
   if (st.giant) return 'fuel';
-  if (w.life || w.guest || st.H >= 0.5 || w.terra >= 0.5) return 'science';
-  if (st.kind === 'ice' || st.kind === 'ocean') return 'water';
-  return 'metal';
+  if (w.use && w.colony > 0) return USE_ROLE[w.use];
+  if (w.guest || (w.life?.people && w.life.stage >= 2)) return 'science';
+  return USE_ROLE[naturalUse(w, st)];
 }
 
 /** A world where some people lives: a colony, refugees taken in, or a people's home with cities. */
@@ -57,6 +63,10 @@ export interface CivHost {
   readonly peoples: PeopleSim;
   /** A people settles around another star (direction `ang` on the sky). */
   foundStar(name: string, people: number, ang: number): void;
+  /** A blow that kills a share of everyone on a world. */
+  kill(w: World, frac: number): number;
+  /** An invading ship was shot down (looters drop what they stole). */
+  shipDown(sh: Ship): void;
 }
 
 export type CivFx =
@@ -211,25 +221,37 @@ export class CivSim {
   private produce(civ: CivState, dt: number) {
     const r: Resources = { metal: 0, fuel: 0, water: 0, science: 0 };
     const roles = new Set<Role>();
-    const origin = this.h.origin;
     for (const w of this.h.s.worlds) {
       if (!isSettled(w)) continue;
       const st = this.h.stats(w);
       const role = roleOf(w, st);
       roles.add(role);
       const moon = w.parent !== null ? 0.6 : 1;
+      const m = Math.max(1e-6, massOf(w));
+      const use = w.colony > 0 ? w.use : undefined;
+      // Grown towns full of people give more; a fresh or decimated colony, less.
+      const K = use ? colonyCap(w) : 0;
+      const grown = use ? (0.5 + 0.5 * (w.dev ?? 0)) * (K > 0 ? 0.5 + 0.5 * Math.min(1, (w.cpop ?? K) / K) : 1) : 1;
+      const ethos = use ? ethosOf(this.h.peoples.get(w.owner)) : undefined;
+      // Living moons warmed by their giant are treasured: twice the science.
+      const parent = w.parent !== null ? this.h.world(w.parent) : null;
+      const jewel = parent && isGiantStuff(parent) ? 2 : 1;
       if (role === 'fuel') {
-        r.fuel += (st.kind === 'icegiant' ? 0.35 : 0.5) * (civ.done.refinery ? 2 : 1);
+        r.fuel += (st.kind === 'icegiant' ? 0.35 : 0.5) * (civ.done.refinery ? 2 : 1) * (use ? grown : 1);
         if (st.kind === 'icegiant') r.water += 0.2;
-      } else if (role === 'water') r.water += 0.45 * moon;
-      else if (role === 'metal') r.metal += (st.kind === 'lava' ? 0.6 : 0.5) * moon;
-      else {
-        // Living moons warmed by their giant are treasured: twice the science.
-        const parent = w.parent !== null ? this.h.world(w.parent) : null;
-        const jewel = parent && isGiantStuff(parent) ? 2 : 1;
-        r.science += 0.45 * moon * jewel;
+      } else if (use === 'mine') r.metal += (0.38 + 0.5 * (w.metal / m) + (st.kind === 'lava' ? 0.15 : 0) + 0.2 * Math.min(1, Math.max(0, (st.T - 330) / 190))) * moon * grown * (ethos === 'industry' ? 1.15 : 1);
+      else if (use === 'fort') r.metal += 0.15 * moon * grown;
+      else if (use === 'ice') r.water += (0.35 + 0.4 * Math.min(1, (w.water / m) * 2)) * moon * grown * (ethos === 'industry' ? 1.15 : 1);
+      else if (use === 'lab') r.science += 0.28 * moon * jewel * grown * (ethos === 'science' ? 1.15 : 1);
+      else if (use === 'garden') r.science += 0.45 * (0.35 + 0.65 * w.terra) * moon * jewel * grown * (ethos === 'science' ? 1.15 : 1);
+      else if (role === 'water') r.water += 0.45 * moon;
+      else if (role === 'metal') r.metal += 0.5 * moon;
+      else r.science += 0.45 * moon * jewel;
+      // A people's own home with cities: its universities, as busy as it is full.
+      if (w.life?.people && w.life.stage >= 3) {
+        const cap = nativeCap(w, st);
+        r.science += 0.6 * (cap > 0 ? 0.3 + 0.7 * Math.min(1, (w.life.pop ?? cap) / cap) : 1);
       }
-      if (w.life?.people && w.life.stage >= 3) r.science += 0.6;
     }
     if (civ.done.mining && this.h.s.belts.length) r.metal += 0.6;
     if (civ.done.ring) r.science *= 1.5;
@@ -376,7 +398,7 @@ export class CivSim {
           const a = this.pos(w);
           const b = this.pos(to);
           const d = Math.hypot(a.x - b.x, a.z - b.z);
-          s.ships.push({ id: this.h.nid(), from: w.id, to: to.id, t: 0, dur: 6 + d * 0.22, alien: false, kind: role === 'fuel' ? 'tanker' : 'freight', people: people || undefined });
+          s.ships.push({ id: this.h.nid(), from: w.id, to: to.id, t: 0, dur: 6 + travel(d) * 0.22, alien: false, kind: role === 'fuel' ? 'tanker' : 'freight', people: people || undefined });
         }
       }
       this.freightT.set(w.id, t);
@@ -396,14 +418,14 @@ export class CivSim {
             const i = (rng.next() * s.belts.length) | 0;
             const b = s.belts[i];
             const th = b.th + 0.5 * Math.pow(Math.max(b.r, 0.05), -0.75) * 0.42 * s.time;
-            const rw = toWorld(b.r);
+            const rw = sysWorld(b.r);
             const d = Math.hypot(Math.cos(th) * rw - p.x, Math.sin(th) * rw - p.z);
             if (d < bd) {
               bd = d;
               best = i;
             }
           }
-          if (best >= 0 && bd < 30) s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 6 + bd * 0.2, alien: false, kind: 'miner', belt: best, people: this.ownerOf(w) || undefined });
+          if (best >= 0 && bd < far(30)) s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 6 + travel(bd) * 0.2, alien: false, kind: 'miner', belt: best, people: this.ownerOf(w) || undefined });
         }
       }
     }
@@ -470,7 +492,7 @@ export class CivSim {
     const p = this.pos(home);
     const len = Math.hypot(p.x, p.z) || 1;
     const ang = Math.atan2(p.z, p.x) + this.h.rng.range(-0.6, 0.6);
-    const R = len + 26;
+    const R = len + far(26);
     this.h.s.ships.push({ id: this.h.nid(), from: home.id, to: -1, t: 0, dur: 7, alien: false, kind: 'expedition', tx: Math.cos(ang) * R, tz: Math.sin(ang) * R, people: this.ownerOf(home) || undefined });
     civ.stats.expeditions++;
     const sn = this.leaderName();
@@ -558,14 +580,14 @@ export class CivSim {
     if (!home || !ports.length) return;
     const p = this.pos(home);
     const ang = Math.atan2(p.z, p.x) + rng.range(-0.8, 0.8);
-    const R = Math.hypot(p.x, p.z) + 22;
+    const R = Math.hypot(p.x, p.z) + far(22);
     const x = Math.cos(ang) * R;
     const z = Math.sin(ang) * R;
     const n = Math.min(7, 3 + ports.length);
     for (let k = 0; k < n; k++) {
       const w = k < 2 ? home : rng.pick(ports);
       const q = this.pos(w);
-      s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -k * 0.8, dur: 6 + Math.hypot(q.x - x, q.z - z) * 0.18, alien: false, kind: 'flotilla', tx: x, tz: z, people: who.id });
+      s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -k * 0.8, dur: 6 + travel(Math.hypot(q.x - x, q.z - z)) * 0.18, alien: false, kind: 'flotilla', tx: x, tz: z, people: who.id });
     }
     civ.flotilla = { launched: n, gathered: 0, x, z, star: worldName(rng, new Set()), people: who.id };
     const sn = who.name;
@@ -596,7 +618,7 @@ export class CivSim {
     pay(civ.res, MISSION_COST.armada);
     const hp = this.pos(home);
     const len = Math.hypot(hp.x, hp.z) || 1;
-    const R = { x: hp.x + (hp.x / len) * 16, z: hp.z + (hp.z / len) * 16 };
+    const R = { x: hp.x + (hp.x / len) * far(16), z: hp.z + (hp.z / len) * far(16) };
     let launched = 0;
     // Every people sends ships: the armada flies many colours.
     const crew: number[] = [];
@@ -606,7 +628,7 @@ export class CivSim {
       for (let i = 0; i < n && launched < 30; i++) {
         const p = this.pos(w);
         const d = Math.hypot(p.x - R.x, p.z - R.z);
-        s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -i * 0.6, dur: 5 + d * 0.16, alien: false, kind: 'armada', tx: R.x, tz: R.z, people });
+        s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: -i * 0.6, dur: 5 + travel(d) * 0.16, alien: false, kind: 'armada', tx: R.x, tz: R.z, people });
         crew.push(people ?? 0);
         launched++;
       }
@@ -678,14 +700,17 @@ export class CivSim {
   private defend(civ: CivState, dt: number) {
     const s = this.h.s;
     const F = defLevel(s, 'fleet');
-    if (!F) return;
-    // Every settled world, whatever its people, shoots at intruders.
-    const guards = this.settled();
+    // Fortress worlds fire at intruders on their own, even before there is a defence fleet.
+    const forts = this.settled().filter((w) => w.use === 'fort' && w.colony >= 1);
+    if (!F && !forts.length) return;
+    // With a fleet, every settled world, whatever its people, shoots at intruders.
+    const guards = F ? this.settled() : forts;
     if (!guards.length) return;
     // A fleet that keeps up with the threat catches nearly every intruder on its way in; one left
     // behind lets more and more of them through.
     const L = threatOf(s);
-    const rate = -Math.log(1 - fleetCatch(F, L)) / 13;
+    // Fortresses help, but a handful is all that counts: the fleet does the real work.
+    const rate = (F ? -Math.log(1 - fleetCatch(F, L)) / 13 : 0) + Math.min(4, forts.length) * 0.01;
     for (const sh of [...s.ships]) {
       if (!sh.alien) continue;
       if (sh.doom !== undefined) {
@@ -699,21 +724,23 @@ export class CivSim {
         }
         this.h.fx({ kind: 'boom', ship: sh.id, big: sh.kind === 'mother' });
         s.ships.splice(s.ships.indexOf(sh), 1);
+        this.h.shipDown(sh);
         civ.stats.battles++;
         if (civ.stats.battles === 1 || civ.stats.battles % 6 === 0) {
           const [al, AL] = invaderNames(s.alienSpecies);
-          this.h.news('⟁', `La flota de defensa intercepta a los ${al}. Ya van ${civ.stats.battles} naves derribadas.`, `The defence fleet intercepts the ${AL}. ${civ.stats.battles} ships brought down so far.`, 'good');
+          if (F) this.h.news('⟁', `La flota de defensa intercepta a los ${al}. Ya van ${civ.stats.battles} naves derribadas.`, `The defence fleet intercepts the ${AL}. ${civ.stats.battles} ships brought down so far.`, 'good');
+          else this.h.news('♜', `Las fortalezas derriban naves de los ${al}. Ya van ${civ.stats.battles}.`, `The fortresses shoot down ${AL} ships. ${civ.stats.battles} so far.`, 'good');
         }
         continue;
       }
       const k = sh.t / sh.dur;
       if (k > 0.3 && k < 0.92 && this.h.rng.next() < dt * rate) {
         sh.doom = 1.1;
-        const shooter = this.h.rng.pick(guards);
+        const shooter = forts.length && this.h.rng.next() < 0.5 ? this.h.rng.pick(forts) : this.h.rng.pick(guards);
         this.h.fx({ kind: 'laser', ship: sh.id, world: shooter.id });
       }
     }
-    for (const w of s.worlds) if (w.invaded > 0) w.invaded = Math.max(0, w.invaded - dt * 0.004 * clamp(1 - 0.12 * (L - F), 0.3, 1.3));
+    if (F) for (const w of s.worlds) if (w.invaded > 0) w.invaded = Math.max(0, w.invaded - dt * 0.004 * clamp(1 - 0.12 * (L - F), 0.3, 1.3));
   }
 
   /** Called by the system when an asteroid is about to hit: shields stop it. */
@@ -758,7 +785,7 @@ export class CivSim {
       addHarm(s, accept && w ? -1.5 : 1);
       if (accept && w) {
         const a = rng.range(0, TAU);
-        s.ships.push({ id: this.h.nid(), from: -5, to: w.id, t: 0, dur: 14, alien: false, kind: 'refugee', sx: Math.cos(a) * 110, sz: Math.sin(a) * 110, species: name });
+        s.ships.push({ id: this.h.nid(), from: -5, to: w.id, t: 0, dur: 14, alien: false, kind: 'refugee', sx: Math.cos(a) * far(110), sz: Math.sin(a) * far(110), species: name });
         this.h.news('⌂', `${w.name} recibirá a los ${name}. Su nave ya se acerca.`, `${w.name} will take in the ${capName(name)}. Their ship is already approaching.`, 'good');
       } else this.h.news('⌂', `Los ${name} siguen su viaje en busca de otro hogar.`, `The ${capName(name)} continue their journey in search of another home.`, 'info');
     } else if (d.kind === 'signal') {
@@ -768,8 +795,8 @@ export class CivSim {
         if (home) {
           const p = this.pos(home);
           const len = Math.hypot(p.x, p.z) || 1;
-          const x = (p.x / len) * (len + 26);
-          const z = (p.z / len) * (len + 26);
+          const x = (p.x / len) * (len + far(26));
+          const z = (p.z / len) * (len + far(26));
           this.h.fx({ kind: 'warpOut', x, z, dx: p.x / len, dz: p.z / len, count: 3, tint: 'own', people: this.ownerOf(home) || undefined });
           civ.missions.push({ id: this.h.nid(), kind: 'signal', t: 0, dur: 45, x, z });
         }
@@ -794,7 +821,7 @@ export class CivSim {
     const s = this.h.s;
     if (!w) return;
     const a = this.h.rng.range(0, TAU);
-    s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 13, alien: false, kind: 'trader', tx: Math.cos(a) * 125, tz: Math.sin(a) * 125 });
+    s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 13, alien: false, kind: 'trader', tx: Math.cos(a) * far(125), tz: Math.sin(a) * far(125) });
   }
 
   private decisions(civ: CivState, dt: number) {
@@ -841,8 +868,8 @@ export class CivSim {
     const r = this.civ?.rogue;
     if (!r) return null;
     const k = r.t / r.dur;
-    const d = toWorld(9) + r.off;
-    const along = (k - 0.5) * 260;
+    const d = sysWorld(9) + r.off;
+    const along = (k - 0.5) * far(260);
     const nx = Math.cos(r.ang);
     const nz = Math.sin(r.ang);
     return { x: nx * d - nz * along, z: nz * d + nx * along };
@@ -877,7 +904,7 @@ export class CivSim {
     const rng = new Rng(r.seed);
     const used = new Set(s.worlds.map((w) => w.name));
     const dist = Math.hypot(p.x, p.z);
-    const a = clamp(toAU(dist), 7, 15);
+    const a = clamp(sysAU(dist), 7, 15);
     const w: World = {
       id: this.h.nid(),
       name: worldName(rng, used),
@@ -952,7 +979,7 @@ export class CivSim {
       const give = Math.max(20, Math.round(Math.min(civ.res[giveK] * 0.4, rng.range(40, 90))));
       const get = Math.round(give * rng.range(1.3, 1.8));
       const a = rng.range(0, TAU);
-      s.ships.push({ id: this.h.nid(), from: -6, to: w.id, t: 0, dur: 14, alien: false, kind: 'trader', sx: Math.cos(a) * 125, sz: Math.sin(a) * 125 });
+      s.ships.push({ id: this.h.nid(), from: -6, to: w.id, t: 0, dur: 14, alien: false, kind: 'trader', sx: Math.cos(a) * far(125), sz: Math.sin(a) * far(125) });
       this.offer({ kind: 'trade', world: w.id, give: { [giveK]: give }, get: { [getK]: get }, species: name });
       this.h.news('⚖', `Una caravana de los ${name} se acerca a ${w.name} con ganas de comerciar.`, `A caravan of the ${capName(name)} approaches ${w.name}, eager to trade.`, 'info');
     } else if (pick === 'refugees') {
@@ -973,6 +1000,7 @@ export class CivSim {
       else {
         for (const w of s.worlds) {
           if (w.life) w.life.health -= 0.12;
+          this.h.kill(w, 0.08);
           w.sats = Math.floor(w.sats * 0.6);
         }
         this.h.news('✺', 'Una supernova estalla a pocos años luz: su radiación castiga la vida y los satélites.', 'A supernova bursts a few light years away: its radiation batters life and satellites.', 'warn');

@@ -6,6 +6,8 @@ import { capName, invaderNames } from '../content/names';
 import { h, stone, clear } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
 import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
+import { ETHOS_INFO, USE_INFO, ethosOf, naturalUse } from '../sim/uses';
+import { coexists, colonyCap, nativeCap, pressureOn } from '../sim/population';
 
 const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
 const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
@@ -201,7 +203,7 @@ export function roleText(r: Role) {
       return tr('<b>Ciencia</b>: un mundo vivo donde prosperan ciudades, universidades y nuevas ideas.', '<b>Science</b>: a living world where cities, universities and new ideas thrive.');
   }
 }
-import { FACTOR_KEYS, factorName, fmtAge, fmtTemp, kindName, tempWord } from './text';
+import { FACTOR_KEYS, factorName, fmtAge, fmtPop, fmtTemp, kindName, tempWord } from './text';
 
 const KIND_DOT: Record<string, string> = {
   gas: 'radial-gradient(circle at 35% 35%, #f3d9a8, #b98455 60%, #6d4426)',
@@ -370,11 +372,38 @@ export class Inspector {
       const next = l.stage < STAGE_TIME.length ? `<div class="stat"${tipAttr('<b>Evolución</b><br>Cuánto le falta para la siguiente etapa. Avanza sola mientras el mundo siga habitable y la vida sana.', '<b>Evolution</b><br>How far it is from the next stage. It moves on by itself while the world stays habitable and life healthy.')}><span>${tr('Hacia', 'Towards')} ${pick(STAGE_NAMES[Math.min(5, l.stage + 1)]).toLowerCase()}</span><span>${pct(l.progress)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(l.progress * 100)}%"></i></div>` : '';
       const lp = l.stage >= 2 ? peopleById(s, l.people) : undefined;
       const sp = lp ? ` · ${tr('los', 'the')} ${pName(lp)}` : '';
+      // How many of them there are, and whether that is enough to hold on to their stage.
+      let popHtml = '';
+      if (l.stage >= 2 && l.pop !== undefined) {
+        const cap = nativeCap(w, st);
+        popHtml = `<div class="stat" style="margin-top:6px"${tipAttr(
+          `<b>Población</b><br>Cuántos son. Crece despacio hacia lo que el mundo puede alimentar (${fmtPop(cap)}). Los impactos, las guerras, las plagas, la ocupación y tu ira la diezman; si cae demasiado, el pueblo retrocede una etapa.`,
+          `<b>Population</b><br>How many of them there are. It grows slowly towards what the world can feed (${fmtPop(cap)}). Impacts, wars, plagues, occupation and your wrath thin it out; if it falls too low, the people falls back a stage.`,
+        )}><span>${tr('Población', 'Population')}</span><span class="moss">${fmtPop(l.pop)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(Math.min(1, l.pop / Math.max(1e-6, cap)) * 100)}%"></i></div>`;
+      }
+      // Life of its own under someone else's colony.
+      let under = '';
+      if (coexists(w)) {
+        const settlers = peopleById(s, w.owner);
+        const press = settlers ? pressureOn(w, ethosOf(settlers)) : 0;
+        const word = press > 0.6 ? tr('muy dura', 'very hard') : press > 0.3 ? tr('dura', 'hard') : press > 0.1 ? tr('llevadera', 'bearable') : tr('leve', 'light');
+        const order = w.natives === 'protect' ? tr(' Están protegidos: tienen una reserva.', ' They are protected: they have a reserve.') : w.natives === 'purge' ? tr(' Los colonos los están exterminando.', ' The settlers are wiping them out.') : '';
+        under = `<div class="advice ${press > 0.3 ? 'warn' : ''}">${
+          settlers
+            ? tr(
+                `Viven bajo la colonia de los ${pTag(settlers)}: la presión es ${word}.${order} Si sobreviven hasta construir ciudades, recuperarán su mundo o se mezclarán con los colonos.`,
+                `They live under the colony of the ${pTag(settlers)}: the pressure is ${word}.${order} If they survive to build cities, they will take their world back or blend with the settlers.`,
+              )
+            : ''
+        }</div>`;
+      }
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3>
         <div class="stat"${tipAttr('<b>Etapa de la vida</b><br>Microbios → vida compleja → inteligencia → civilización → era espacial → era interplanetaria.', '<b>Stage of life</b><br>Microbes → complex life → intelligence → civilization → space age → interplanetary age.')}><span>${tr('Etapa', 'Stage')}</span><span class="moss">${stage}${sp}</span></div>
         ${next}
         <div class="stat" style="margin-top:6px"${tipAttr('<b>Salud de la vida</b><br>Si llega a cero, se extingue. La bajan los impactos, las llamaradas, los climas extremos y las guerras; se recupera con el tiempo.', '<b>Health of life</b><br>If it reaches zero, it dies out. Impacts, flares, extreme climates and wars lower it; it recovers over time.')}><span>${tr('Salud', 'Health')}</span><span>${pct(Math.max(0, l.health))}</span></div>
         <div class="vessel thin ${l.health > 0.5 ? 'moss' : ''}"><i style="--v:${Math.round(Math.max(0, l.health) * 100)}%"></i></div>
+        ${popHtml}
+        ${under}
       </section>`;
     } else if (w.spark > 0.5) {
       html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round((w.spark / 30) * 100)}%"></i></div></section>`;
@@ -406,6 +435,10 @@ export class Inspector {
       html += `<section><h3>${tr('PUEBLO', 'PEOPLE')}</h3>
         <div class="people-row big"><i style="background:${hsl(people.hue)};color:${hsl(people.hue)}"></i><span>${home ? tr(`Hogar de los ${pName(people)}`, `Home of the ${pName(people)}`) : tr(`Colonia de los ${pName(people)}`, `Colony of the ${pName(people)}`)}</span><em>${pick(STAGE_NAMES[info.stage])}</em></div>
         <div class="small muted" style="margin-top:4px">${origin} ${tr(`Viven en ${where}.`, `They live on ${where}.`)}</div>
+        ${(() => {
+          const e = ETHOS_INFO[ethosOf(people)];
+          return `<div class="small ethos" style="margin-top:4px"${tipAttr(`<b>Carácter</b><br>${e.desc.es}`, `<b>Character</b><br>${e.desc.en}`)}><span class="gold">${e.icon} ${tr(`Pueblo ${e.name.es}`, `A ${e.name.en} people`)}</span> · <span class="muted">${pick(e.desc)}</span></div>`;
+        })()}
         ${rels ? `<div class="rel-list">${rels}</div>` : ''}
         <div class="small muted" style="margin-top:6px">${tr('Viven a su manera: tú solo observas. Cuando la tensión crece, puedes intervenir con la luz de la estrella.', 'They live their own way: you only watch. When tension grows, you may step in with the light of the star.')}</div>
       </section>`;
@@ -414,18 +447,40 @@ export class Inspector {
       const role = roleOf(w, st);
       const settled = isSettled(w);
       const jewel = role === 'science' && parent && parent.gas / Math.max(1e-6, massOf(parent)) > 0.3;
+      // What the settlers made of it (or what it would most naturally become).
+      const use = w.colony > 0 && w.use ? w.use : !settled && !w.guest && !(w.life?.people && w.life.stage >= 2) ? naturalUse(w, st) : undefined;
+      const useHtml = use
+        ? `<div class="use-line"${tipAttr(`<b>${USE_INFO[use].name.es}</b><br>${USE_INFO[use].desc.es}`, `<b>${USE_INFO[use].name.en}</b><br>${USE_INFO[use].desc.en}`)}><span class="ui">${USE_INFO[use].icon}</span><span><b>${pick(USE_INFO[use].name)}</b>${settled ? '' : tr(' (lo más probable: cada pueblo decide según su carácter)', ' (most likely: each people decides by its character)')}</span></div>`
+        : '';
       html += `<section><h3>${settled ? tr('APORTA', 'CONTRIBUTES') : tr('SI SE COLONIZA, APORTARÁ', 'IF SETTLED, IT WILL GIVE')}</h3>
+        ${useHtml}
         <div class="role ${ROLE_RES[role]}"${tipAttr('<b>Recurso</b><br>Lo que este mundo aporta a los pueblos del sistema cuando alguien vive en él. Con ellos se pagan las grandes obras.', '<b>Resource</b><br>What this world gives the peoples of the system once someone lives on it. They pay for the great works.')}><span class="ri">${RES_ICON[ROLE_RES[role]]}</span><span>${roleText(role)}</span></div>
         ${jewel ? `<div class="small gold" style="margin-top:4px">${tr('Luna viva de un gigante: su ciencia vale el doble.', 'Living moon of a giant: its science is worth double.')}</div>` : ''}
         ${w.guest ? `<div class="small water" style="margin-top:4px">${tr(`Hogar de los ${w.guest}, refugiados de otra estrella.`, `Home of the ${capName(w.guest)}, refugees from another star.`)}</div>` : ''}
       </section>`;
     }
     if (w.colony > 0 || w.terra > 0 || w.sats > 0) {
+      const cap = colonyCap(w);
+      const settlersHtml =
+        w.colony >= 1 && w.cpop !== undefined && cap > 0
+          ? `<div class="stat" style="margin-top:6px"${tipAttr(
+              '<b>Colonos</b><br>Cuántos viven en la colonia. Crece con el desarrollo y, en los jardines, con la terraformación. Las incursiones, las plagas, los bombardeos y tu ira la diezman; una colonia diezmada aporta menos.',
+              '<b>Settlers</b><br>How many live in the colony. It grows with development and, on gardens, with terraforming. Raids, plagues, bombardments and your wrath thin it out; a decimated colony gives less.',
+            )}><span>${tr('Colonos', 'Settlers')}</span><span>${fmtPop(w.cpop)}</span></div>` +
+            `<div class="stat" style="margin-top:6px"${tipAttr('<b>Desarrollo</b><br>Cuánto han crecido sus pueblos, minas o bases. Rinde más cuanto más desarrollado.', '<b>Development</b><br>How far its towns, mines or bases have grown. The more developed, the more it yields.')}><span>${tr('Desarrollo', 'Development')}</span><span>${pct(w.dev ?? 0)}</span></div><div class="vessel thin gold"><i style="--v:${Math.round((w.dev ?? 0) * 100)}%"></i></div>`
+          : '';
       html += `<section><h3>${tr('CIVILIZACIÓN', 'CIVILIZATION')}</h3>
+        ${settlersHtml}
         ${w.colony > 0 ? `<div class="stat"${tipAttr('<b>Colonia</b><br>Llega con naves colonas; cada nave suma una parte hasta establecerla. Las incursiones y los invasores la desgastan.', '<b>Colony</b><br>It arrives on colony ships; each ship adds a share until it is established. Raids and invaders wear it down.')}><span>${w.colony >= 1 ? tr('Colonia establecida', 'Colony established') : tr('Colonos en camino', 'Settlers arriving')}</span><span>${pct(Math.min(1, w.colony))}</span></div><div class="vessel thin gold"><i style="--v:${Math.round(Math.min(1, w.colony) * 100)}%"></i></div>` : ''}
         ${w.terra > 0 ? `<div class="stat" style="margin-top:6px"${tipAttr('<b>Terraformación</b><br>Los colonos vuelven el mundo templado y con agua, poco a poco. Gasta agua de los mundos helados.', '<b>Terraforming</b><br>The settlers slowly make the world mild and wet. It uses water from the icy worlds.')}><span>${tr('Terraformación', 'Terraforming')}</span><span>${pct(w.terra)}</span></div><div class="vessel thin moss"><i style="--v:${Math.round(w.terra * 100)}%"></i></div>` : ''}
         ${w.sats > 0 ? `<div class="stat" style="margin-top:6px"${tipAttr('<b>Satélites</b><br>Los lanza la era espacial. Las superllamaradas y las supernovas los derriban.', '<b>Satellites</b><br>Launched in the space age. Superflares and supernovae knock them out.')}><span>${tr('Satélites en órbita', 'Satellites in orbit')}</span><span>${w.sats}</span></div>` : ''}
       </section>`;
+    }
+    if (w.plague) {
+      html += `<section><h3 class="ember">${tr('PLAGA', 'PLAGUE')}</h3><div class="advice warn">${tr(
+        `Una plaga se extiende por ${w.name}: mata a parte de la población cada día y puede viajar a otros mundos en sus naves. Remitirá en ${Math.ceil(w.plague)} s.`,
+        `A plague is spreading across ${w.name}: it kills part of the population every day and may travel to other worlds aboard their ships. It will subside in ${Math.ceil(w.plague)}s.`,
+      )}</div></section>`;
     }
     if (w.invaded > 0.02) {
       const al = pick(((n) => ({ es: n[0], en: n[1] }))(invaderNames(s.alienSpecies)));
@@ -570,7 +625,10 @@ export class Ledger {
         const where = parent ? tr(`Luna de ${parent.name}`, `Moon of ${parent.name}`) : tr(`${num(w.a, 2)} UA de la estrella`, `${num(w.a, 2)} AU from the star`);
         const life = w.life ? `${tr('Vida', 'Life')}: ${pick(STAGE_NAMES[w.life.stage]).toLowerCase()}` : tr('Sin vida', 'No life');
         const who = pp ? ` · ${w.life?.people === pp.id ? tr('hogar de', 'home of') : tr('colonia de', 'colony of')} ${tr('los', 'the')} ${pName(pp)}` : '';
-        const tip = `<b>${w.name}</b> · ${kindName(st.kind)}<br>${where} · ${tr('habitabilidad', 'habitability')} ${Math.round(st.H * 100)} %<br>${life}${who}`;
+        const pop = (w.life?.pop ?? 0) + (w.cpop ?? 0);
+        const popTxt = pop > 0.0005 ? `<br>${tr('Población', 'Population')}: ${fmtPop(pop)}` : '';
+        const useTxt = w.colony > 0 && w.use ? ` · ${USE_INFO[w.use].icon} ${pick(USE_INFO[w.use].name).toLowerCase()}` : '';
+        const tip = `<b>${w.name}</b> · ${kindName(st.kind)}<br>${where} · ${tr('habitabilidad', 'habitability')} ${Math.round(st.H * 100)} %<br>${life}${who}${useTxt}${popTxt}`;
         // On the whole row (the icons and the bar keep their own, more precise tooltips).
         if (r.row.dataset.tip !== tip) r.row.dataset.tip = tip;
       }
@@ -588,8 +646,11 @@ export class Ledger {
       } else if (w.guest) f += flag('water', '', '⌂', tr(`<b>Refugiados</b>: los ${w.guest}, llegados de otra estrella`, `<b>Refugees</b>: the ${capName(w.guest)}, from another star`));
       if (isSettled(w)) {
         const res = ROLE_RES[roleOf(w, st)];
-        f += flag(`role-dot ${res}`, '', RES_ICON[res], tr(`Aporta <b>${resWord(res)}</b> a los pueblos del sistema`, `Gives <b>${resWord(res)}</b> to the peoples of the system`));
+        const use = w.colony > 0 ? w.use : undefined;
+        const what = use ? `<b>${pick(USE_INFO[use].name)}</b><br>` : '';
+        f += flag(`role-dot ${res}`, '', use ? USE_INFO[use].icon : RES_ICON[res], `${what}${tr(`Aporta <b>${resWord(res)}</b> a los pueblos del sistema`, `Gives <b>${resWord(res)}</b> to the peoples of the system`)}`);
       }
+      if (w.plague) f += flag('ember', '', '☣', tr('<b>Plaga</b>: diezma a quienes viven aquí.', '<b>Plague</b>: it is thinning out whoever lives here.'));
       if (pp && (s.relations ?? []).some((x) => x.state === 'war' && (x.a === pp.id || x.b === pp.id))) f += flag('rel war', '', '⚔', tr(`Los ${pName(pp)} están en guerra`, `The ${pName(pp)} are at war`));
       if (w.invaded > 0.3) {
         const [ies, ien] = invaderNames(s.alienSpecies);
@@ -607,8 +668,9 @@ export class Ledger {
       for (const p of alive) {
         const info = peopleInfo(s, p);
         const stageTxt = pick(STAGE_NAMES[info.stage]);
-        const tip = `<b>${tr('Los', 'The')} ${pName(p)}</b><br>${stageTxt} · ${tr(`${info.worlds.length} ${info.worlds.length === 1 ? 'mundo' : 'mundos'}`, `${info.worlds.length} ${info.worlds.length === 1 ? 'world' : 'worlds'}`)}: ${info.worlds.map((x) => x.name).join(', ')}`;
-        ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:${hsl(p.hue)};color:${hsl(p.hue)}"></i><span>${tr('Los', 'The')} ${pName(p)}</span><em>${info.worlds.length} ⌂</em></div>`;
+        const e = ETHOS_INFO[ethosOf(p)];
+        const tip = `<b>${tr('Los', 'The')} ${pName(p)}</b> · ${e.icon} ${tr(`pueblo ${e.name.es}`, `${e.name.en} people`)}<br>${stageTxt} · ${tr(`${info.worlds.length} ${info.worlds.length === 1 ? 'mundo' : 'mundos'}`, `${info.worlds.length} ${info.worlds.length === 1 ? 'world' : 'worlds'}`)}: ${info.worlds.map((x) => x.name).join(', ')}<br><i>${pick(e.desc)}</i>`;
+        ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:${hsl(p.hue)};color:${hsl(p.hue)}"></i><span>${tr('Los', 'The')} ${pName(p)} <small class="muted">${e.icon}</small></span><em>${info.worlds.length} ⌂</em></div>`;
       }
       let chips = '';
       for (const r of s.relations ?? []) {
