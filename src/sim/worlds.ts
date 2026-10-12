@@ -148,3 +148,5 @@ export function makeWorlds(bodies: Body[], rng: Rng, nextId: () => number): Worl
 
 /** Worlds that count for "your species reached every world". */
 export const colonizable = (w: World) => solidsOf(w) + w.gas > 0.003;
+/** Worlds the star ark waits for: big enough to matter (the specks left by impacts do not). */
+export const arkWorld = (w: World) => colonizable(w) && massOf(w) >= 0.01;

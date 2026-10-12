@@ -1,6 +1,6 @@
 import { far, massOf, sysAU, sysWorld, type CivState, type Decision, type GameState, type Resources, type Ship, type World } from '../core/state';
 import { Rng, TAU, clamp } from '../util';
-import { colonizable, isGiantStuff, type WorldStats } from './worlds';
+import { arkWorld, colonizable, isGiantStuff, type WorldStats } from './worlds';
 import { travel, worldXZ } from '../render/layout';
 import { MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectId } from '../content/projects';
 import { FLAVOR } from '../content/flavor';
@@ -73,7 +73,7 @@ export interface CivHost {
 }
 
 export type CivFx =
-  | { kind: 'laser'; ship: number; world: number }
+  | { kind: 'laser'; ship: number; world: number; wings?: boolean }
   | { kind: 'boom'; ship: number; big: boolean }
   | { kind: 'shieldHit'; world: number; threat: number }
   | { kind: 'warpOut'; x: number; z: number; dx: number; dz: number; count: number; tint: 'own' | 'alien' | 'patrol' | 'wings'; people?: number }
@@ -84,6 +84,18 @@ export type CivFx =
   | { kind: 'rogueCaught'; world: number };
 
 const has = (r: Resources, c: Partial<Resources>) => RES_KEYS.every((k) => r[k] >= (c[k] ?? 0));
+/** A fraction of a cost. */
+const share = (c: Partial<Resources>, f: number) => {
+  const out: Partial<Resources> = {};
+  for (const k of RES_KEYS) if (c[k]) out[k] = (c[k] ?? 0) * f;
+  return out;
+};
+/** Companies emergency Space Patrols can reach without any relic. */
+export const EMERGENCY_CAP = 2;
+/** Fuel each ice well cracks from its ice per second (before moons, development and people). */
+const ICE_FUEL = 0.12;
+/** Share of a great work's cost paid when it starts (the rest, while it is built). */
+export const UPFRONT = 0.25;
 const pay = (r: Resources, c: Partial<Resources>) => RES_KEYS.forEach((k) => (r[k] -= c[k] ?? 0));
 const gain = (r: Resources, c: Partial<Resources>) => RES_KEYS.forEach((k) => (r[k] += c[k] ?? 0));
 
@@ -97,6 +109,8 @@ export class CivSim {
   private tmp = { x: 0, z: 0 };
   private freightT = new Map<number, number>();
   private minerT = 4;
+  /** Invaders the Freedom Wings have marked (their kills cost them a pilot now and then). */
+  private wingShots = new Set<number>();
   private byId = new Map<number, World>();
   rates: Resources = { metal: 0, fuel: 0, water: 0, science: 0 };
 
@@ -158,7 +172,6 @@ export class CivSim {
     this.armada(civ, dt);
     this.flotillas(civ);
     this.defend(civ, dt);
-    this.decisions(civ, dt);
     this.rogue(civ, dt);
     this.events(civ, dt);
     this.flavor(civ);
@@ -198,6 +211,9 @@ export class CivSim {
           ? { es: 'Necesita la gran obra «Escudo planetario».', en: 'Needs the great work “Planetary shield”.' }
           : { es: 'Aún no existen: la Orden de la Estrella puede forjarlos con reliquias de los Precursores (o los pueblos los fundan de urgencia si los invasores dominan varios mundos).', en: 'They do not exist yet: the Order of the Star can forge them with the Precursors’ relics (or the peoples raise them in a hurry if invaders hold several worlds).' };
     if (lvl >= MAX_LEVEL) return { es: 'Nivel máximo.', en: 'Maximum level.' };
+    // Raised in a hurry, without the Precursors' technology, the Patrols cannot grow far.
+    if (id === 'patrol' && s.patrol?.origin !== 'faith' && lvl >= EMERGENCY_CAP && (s.faith?.relics ?? 0) < 1)
+      return { es: `Sin reliquias de los Precursores, los Patrols de urgencia no pasan de ${EMERGENCY_CAP} compañías.`, en: `Without the Precursors’ relics, emergency Patrols cannot grow past ${EMERGENCY_CAP} companies.` };
     if (!has(civ.res, upgradeCost(id, lvl))) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
     return null;
   }
@@ -244,7 +260,11 @@ export class CivSim {
         if (st.kind === 'icegiant') r.water += 0.2;
       } else if (use === 'mine') r.metal += (0.38 + 0.5 * (w.metal / m) + (st.kind === 'lava' ? 0.15 : 0) + 0.2 * Math.min(1, Math.max(0, (st.T - 330) / 190))) * moon * grown * (ethos === 'industry' ? 1.15 : 1);
       else if (use === 'fort') r.metal += 0.15 * moon * grown;
-      else if (use === 'ice') r.water += (0.35 + 0.4 * Math.min(1, (w.water / m) * 2)) * moon * grown * (ethos === 'industry' ? 1.15 : 1);
+      else if (use === 'ice') {
+        r.water += (0.35 + 0.4 * Math.min(1, (w.water / m) * 2)) * moon * grown * (ethos === 'industry' ? 1.15 : 1);
+        // Deuterium cracked from the ice: a little fuel, even in a system without giants.
+        r.fuel += ICE_FUEL * moon * grown;
+      }
       else if (use === 'lab') r.science += 0.28 * moon * jewel * grown * (ethos === 'science' ? 1.15 : 1);
       else if (use === 'garden') r.science += 0.45 * (0.35 + 0.65 * w.terra) * moon * jewel * grown * (ethos === 'science' ? 1.15 : 1);
       else if (role === 'water') r.water += 0.45 * moon;
@@ -284,23 +304,58 @@ export class CivSim {
       return { es: 'Necesita una colonia en un gigante gaseoso o de hielo.', en: 'Needs a colony on a gas or ice giant.' };
     if (id === 'mining' && !s.belts.length) return { es: 'Tu sistema no tiene cinturones de asteroides.', en: 'Your system has no asteroid belts.' };
     if (id === 'armada' && !civ.done.fleet) return { es: 'Necesita la flota de defensa.', en: 'Needs the defence fleet.' };
-    if (id === 'ark' && !s.worlds.filter(colonizable).every((w) => isSettled(w)))
+    if (id === 'ark' && !s.worlds.filter(arkWorld).every((w) => isSettled(w)))
       return { es: 'Todos los mundos deben estar habitados por algún pueblo.', en: 'Every world must be home to some people.' };
     if (id === 'ark' && this.h.peoples.wars().length) return { es: 'No puede partir con el sistema en guerra.', en: 'It cannot leave while the system is at war.' };
     if (civ.building) return { es: 'Ya hay una gran obra en marcha.', en: 'A great work is already under way.' };
     return null;
   }
 
+  /** Everything the star ark needs, ticked or not (for Projects and the top slab). */
+  arkNeeds(): { es: string; en: string; ok: boolean }[] {
+    const civ = this.civ;
+    const s = this.h.s;
+    const all = s.worlds.filter(arkWorld);
+    const settled = all.filter((w) => isSettled(w)).length;
+    const def = PROJECTS.find((p) => p.id === 'ark')!;
+    const wars = this.h.peoples.wars().length;
+    return [
+      { es: 'Motor de curvatura', en: 'Warp drive', ok: !!civ?.done.warp },
+      { es: `Mundos habitados: ${settled} de ${all.length}`, en: `Worlds settled: ${settled} of ${all.length}`, ok: settled >= all.length },
+      { es: wars ? `Sin guerras (hay ${wars})` : 'Sin guerras', en: wars ? `No wars (${wars} going on)` : 'No wars', ok: !wars },
+      { es: 'Ninguna otra obra en marcha', en: 'No other work under way', ok: !civ?.building || civ.building.id === 'ark' },
+      { es: 'Recursos para empezar (25 %)', en: 'Resources to start (25%)', ok: this.canAfford(this.upfront(def.cost)) },
+    ];
+  }
+
   canAfford(c: Partial<Resources>) {
     return !!this.civ && has(this.civ.res, c);
+  }
+
+  /** What starting a great work takes: only the first installment, a quarter of its cost. */
+  upfront(c: Partial<Resources>) {
+    return share(c, UPFRONT);
+  }
+
+  /** What the great work under way still needs for its next few seconds (to tell why it is stalled). */
+  shortfall(): Partial<Resources> | null {
+    const civ = this.civ;
+    const b = civ?.building;
+    const def = b ? PROJECTS.find((p) => p.id === b.id) : undefined;
+    if (!civ || !b || !def || !b.stalled) return null;
+    const due = share(def.cost, ((1 - UPFRONT) * 1) / b.dur);
+    const out: Partial<Resources> = {};
+    for (const k of RES_KEYS) if ((due[k] ?? 0) > civ.res[k]) out[k] = Math.ceil((due[k] ?? 0) - civ.res[k]);
+    return out;
   }
 
   start(id: ProjectId) {
     const civ = this.civ;
     const def = PROJECTS.find((p) => p.id === id);
-    if (!civ || !def || this.lock(id) || !has(civ.res, def.cost)) return false;
-    pay(civ.res, def.cost);
-    civ.building = { id, t: 0, dur: def.time };
+    if (!civ || !def || this.lock(id) || !has(civ.res, this.upfront(def.cost))) return false;
+    // A quarter now; the rest is paid as the work rises (nobody has to hoard for it).
+    pay(civ.res, this.upfront(def.cost));
+    civ.building = { id, t: 0, dur: def.time, paid: UPFRONT };
     const sn = this.leaderName();
     this.h.news(def.icon, `Inspirados por la estrella, los ${sn} comienzan una gran obra: ${def.name.es.toLowerCase()}.`, `Inspired by the star, the ${capName(sn)} begin a great work: ${def.name.en.toLowerCase()}.`, 'info');
     return true;
@@ -309,6 +364,19 @@ export class CivSim {
   private build(civ: CivState, dt: number) {
     const b = civ.building;
     if (!b) return;
+    const work = PROJECTS.find((p) => p.id === b.id);
+    if (work && b.paid !== undefined && b.paid < 1) {
+      // Each second of work costs its share of the rest; without it, the work waits.
+      const step = Math.min(1 - b.paid, ((1 - UPFRONT) * dt) / b.dur);
+      const due = share(work.cost, step);
+      if (!has(civ.res, due)) {
+        b.stalled = true;
+        return;
+      }
+      pay(civ.res, due);
+      b.paid += step;
+      b.stalled = false;
+    }
     b.t += dt;
     if (b.t < b.dur) return;
     civ.building = null;
@@ -706,14 +774,15 @@ export class CivSim {
     const F = defLevel(s, 'fleet');
     // Fortress worlds fire at intruders on their own, even before there is a defence fleet.
     const forts = this.settled().filter((w) => w.use === 'fort' && w.colony >= 1);
-    if (!F && !forts.length) return;
+    // The Freedom Wings at home hunt looters and bombers (those that come for the stores and the cities).
+    const wings = s.wings && s.wings.units > 0 ? s.wings : null;
+    const base = wings ? this.home() : null;
+    const rateW = wings && base ? Math.min(0.05, wings.units * 0.002) : 0;
     // With a fleet, every settled world, whatever its people, shoots at intruders.
     const guards = F ? this.settled() : forts;
-    if (!guards.length) return;
     // A fleet that keeps up with the threat catches nearly every intruder on its way in; one left
-    // behind lets more and more of them through.
+    // behind lets more and more of them through. Fortresses help, but a handful is all that counts.
     const L = threatOf(s);
-    // Fortresses help, but a handful is all that counts: the fleet does the real work.
     const rate = (F ? -Math.log(1 - fleetCatch(F, L)) / 13 : 0) + Math.min(4, forts.length) * 0.01;
     for (const sh of [...s.ships]) {
       if (!sh.alien) continue;
@@ -730,18 +799,29 @@ export class CivSim {
         s.ships.splice(s.ships.indexOf(sh), 1);
         this.h.shipDown(sh);
         civ.stats.battles++;
-        if (civ.stats.battles === 1 || civ.stats.battles % 6 === 0) {
+        if (this.wingShots.delete(sh.id) && wings) {
+          // Every kill has its price: now and then a pilot does not come back.
+          if (this.h.rng.next() < 0.1) wings.units = Math.max(0, wings.units - 1);
+          wings.shot = (wings.shot ?? 0) + 1;
+          if (wings.shot === 1 || wings.shot % 10 === 0)
+            this.h.news('✈', `Las Freedom Wings derriban ${sh.kind === 'bomber' ? 'un bombardero' : 'un saqueador'} sobre el sistema. Ya van ${wings.shot}.`, `The Freedom Wings shoot down ${sh.kind === 'bomber' ? 'a bomber' : 'a looter'} over the system. ${wings.shot} so far.`, 'good');
+        } else if (civ.stats.battles === 1 || civ.stats.battles % 6 === 0) {
           const [al, AL] = invaderNames(s.alienSpecies);
           if (F) this.h.news('⟁', `La flota de defensa intercepta a los ${al}. Ya van ${civ.stats.battles} naves derribadas.`, `The defence fleet intercepts the ${AL}. ${civ.stats.battles} ships brought down so far.`, 'good');
-          else this.h.news('♜', `Las fortalezas derriban naves de los ${al}. Ya van ${civ.stats.battles}.`, `The fortresses shoot down ${AL} ships. ${civ.stats.battles} so far.`, 'good');
+          else if (forts.length) this.h.news('♜', `Las fortalezas derriban naves de los ${al}. Ya van ${civ.stats.battles}.`, `The fortresses shoot down ${AL} ships. ${civ.stats.battles} so far.`, 'good');
         }
         continue;
       }
       const k = sh.t / sh.dur;
-      if (k > 0.3 && k < 0.92 && this.h.rng.next() < dt * rate) {
+      if (k <= 0.3 || k >= 0.92) continue;
+      if (guards.length && this.h.rng.next() < dt * rate) {
         sh.doom = 1.1;
         const shooter = forts.length && this.h.rng.next() < 0.5 ? this.h.rng.pick(forts) : this.h.rng.pick(guards);
         this.h.fx({ kind: 'laser', ship: sh.id, world: shooter.id });
+      } else if (base && (sh.kind === 'looter' || sh.kind === 'bomber') && this.h.rng.next() < dt * rateW) {
+        sh.doom = 1.1;
+        this.wingShots.add(sh.id);
+        this.h.fx({ kind: 'laser', ship: sh.id, world: base.id, wings: true });
       }
     }
     if (F) for (const w of s.worlds) if (w.invaded > 0) w.invaded = Math.max(0, w.invaded - dt * 0.004 * clamp(1 - 0.12 * (L - F), 0.3, 1.3));
@@ -828,13 +908,17 @@ export class CivSim {
     s.ships.push({ id: this.h.nid(), from: w.id, to: -1, t: 0, dur: 13, alien: false, kind: 'trader', tx: Math.cos(a) * far(125), tz: Math.sin(a) * far(125) });
   }
 
-  private decisions(civ: CivState, dt: number) {
+  /**
+   * The choices waiting for the player count down in real seconds while the game runs (at any
+   * speed), so a card lasts as long at ×4 as at ×1. One left to run out is a "no": silence is an
+   * answer too.
+   */
+  tickDecisions(realDt: number) {
+    const civ = this.civ;
+    if (!civ) return;
     for (const d of [...civ.decisions]) {
-      d.left -= dt;
-      if (d.left > 0) continue;
-      // Leaving a prayer unanswered is an answer too.
-      if (d.kind === 'plea' || d.kind === 'sign') this.h.expire(d);
-      else this.decide(d.id, false);
+      d.left -= realDt;
+      if (d.left <= 0) this.h.expire(d);
     }
   }
 

@@ -9,6 +9,7 @@ import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
 import { ETHOS_INFO, USE_INFO, ethosOf, naturalUse } from '../sim/uses';
 import { coexists, colonyCap, nativeCap, pressureOn } from '../sim/population';
 import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
+import { CONDENSE } from '../sim/system';
 
 const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
 const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
@@ -254,7 +255,13 @@ export function advice(w: World, st: WorldStats): { text: string; warn: boolean 
     case 'atm':
       return st.atm < 0.4
         ? L('Su aire es muy tenue. Despierta sus <b>volcanes</b> o atrae cometas nitrogenados.', 'Its air is very thin. Wake its <b>volcanoes</b> or bring in nitrogen-rich comets.')
-        : L('Su atmósfera es asfixiante. Las <b>llamaradas</b> la adelgazan poco a poco, y alejarlo de la estrella también ayuda.', 'Its atmosphere is stifling. <b>Flares</b> thin it out little by little, and moving it farther from the star also helps.');
+        : w.life || w.colony > 0 || w.guest
+          ? // Someone lives there: a flare would hurt them.
+            L(
+              'Su atmósfera es asfixiante. Aléjalo de la estrella con <b>Migrar</b> o baja el brillo de la estrella. Las llamaradas también la adelgazan, pero hieren a quien vive allí.',
+              'Its atmosphere is stifling. Move it away from the star with <b>Migrate</b> or lower the star’s brightness. Flares thin it too, but they hurt whoever lives there.',
+            )
+          : L('Su atmósfera es asfixiante. Las <b>llamaradas</b> la adelgazan poco a poco, y alejarlo de la estrella también ayuda.', 'Its atmosphere is stifling. <b>Flares</b> thin it out little by little, and moving it farther from the star also helps.');
     case 'org':
       return L('Faltan moléculas orgánicas, los ladrillos de la vida. Atrae <b>cometas</b> carbonáceos.', 'It lacks organic molecules, the building blocks of life. Bring in carbon-rich <b>comets</b>.');
     case 'mag':
@@ -288,6 +295,8 @@ export interface InspectorHandlers {
   rename(target: number | 'star'): void;
   focus(id: number | 'star'): void;
   dial(v: number): void;
+  /** Condense starlight into fuel at the star. */
+  condense(): void;
 }
 
 /** Side panel with everything about the selected world (or the star). */
@@ -298,6 +307,7 @@ export class Inspector {
   private body: HTMLElement;
   private extra: HTMLElement;
   private slider: HTMLInputElement | null = null;
+  private condenseBtn: HTMLButtonElement | null = null;
   private html = '';
   target: number | 'star' | null = null;
 
@@ -576,7 +586,23 @@ export class Inspector {
           ),
         );
       }
+      this.condenseBtn = null;
     }
+    // Once the peoples have an economy, spare light can be condensed into fuel.
+    if (s.phase === 'system' && s.civ && !this.condenseBtn) {
+      const btn = h('button', { class: 'btn small', onclick: () => this.on.condense() }, tr(`Condensar luz en combustible: ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`, `Condense light into fuel: ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`)) as HTMLButtonElement;
+      this.condenseBtn = btn;
+      this.extra.append(
+        h(
+          'section',
+          null,
+          h('h3', null, tr('COMBUSTIBLE', 'FUEL')),
+          h('div', { class: 'small muted', style: 'margin-bottom:6px' }, tr('La estrella puede condensar parte de su luz en combustible para los pueblos: nunca se agota, aunque no haya gigantes.', 'The star can condense some of its light into fuel for the peoples: it never runs out, even without giants.')),
+          btn,
+        ),
+      );
+    }
+    if (this.condenseBtn) this.condenseBtn.disabled = s.energy < CONDENSE.light;
   }
 }
 

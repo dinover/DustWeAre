@@ -257,7 +257,7 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives' | 'sign';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives' | 'sign' | 'prayer';
   /** Distant star involved (outpost and annex). */
   star?: number;
   /** Legacy: rival people involved. */
@@ -271,6 +271,14 @@ export interface Decision {
   give?: Partial<Resources>;
   get?: Partial<Resources>;
   species?: string;
+  /** A people's prayer: what they ask the star for, who prays, and what it was like when they started. */
+  goal?: 'warm' | 'cool' | 'deflect';
+  people?: number;
+  threat?: number;
+  dial0?: number;
+  a0?: number;
+  /** The star already did what they asked (woke the volcanoes, blessed them). */
+  done?: boolean;
 }
 
 export interface Mission {
@@ -286,7 +294,11 @@ export interface Mission {
 export interface CivState {
   res: Resources;
   done: Record<string, boolean>;
-  building: { id: string; t: number; dur: number } | null;
+  /**
+   * The great work under way. `paid` is the share of its cost already paid (old saves paid it all
+   * up front); `stalled` while the next installment cannot be paid.
+   */
+  building: { id: string; t: number; dur: number; paid?: number; stalled?: boolean } | null;
   missions: Mission[];
   decisions: Decision[];
   armada: { phase: 'rally' | 'hold' | 'away' | 'battle' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean; vsRival?: number; crew?: number[] } | null;
@@ -346,6 +358,8 @@ export interface WingsState {
   lost: number;
   /** Batches of ships bought with science (each one dearer). */
   bought?: number;
+  /** Looters and bombers shot down at home. */
+  shot?: number;
   sorties: { id: number; star: number; size: WingSize; units: number; t: number; dur: number }[];
 }
 
@@ -493,7 +507,8 @@ export interface GameState {
   worlds: World[];
   ships: Ship[];
   threats: Threat[];
-  belts: { r: number; th: number; s: number }[];
+  /** Asteroid belts; debris left by impacts and collisions carries the time it was made, and fades. */
+  belts: { r: number; th: number; s: number; born?: number }[];
   species: Species | null;
   alienSpecies: Species | null;
   invasion: { next: number; waves: number; signal: number };
@@ -518,6 +533,10 @@ export interface GameState {
   threat?: { level: number; power: number };
   /** Faith in the star. */
   faith?: FaithState;
+  /** When the worlds settled (system time): the clock for the late invasions. */
+  sysStart?: number;
+  /** Why faith and fear changed lately (the last few reasons, newest last). */
+  moral?: { t: number; sign: 1 | -1; es: string; en: string }[];
   peoples?: People[];
   relations?: Relation[];
   /** Legacy. */

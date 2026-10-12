@@ -43,7 +43,10 @@ export const USE_INFO: Record<Use, { icon: string; name: Bi; desc: Bi }> = {
   ice: {
     icon: '❄',
     name: { es: 'Pozos de hielo', en: 'Ice wells' },
-    desc: { es: 'Perforan el hielo y los mares: agua para terraformar jardines y mantener colonias.', en: 'They drill the ice and the seas: water to terraform gardens and keep colonies alive.' },
+    desc: {
+      es: 'Perforan el hielo y los mares: agua para terraformar jardines y mantener colonias, y algo de combustible (deuterio) aunque no haya gigantes.',
+      en: 'They drill the ice and the seas: water to terraform gardens and keep colonies alive, and a little fuel (deuterium) even without giants.',
+    },
   },
   gas: {
     icon: '◍',

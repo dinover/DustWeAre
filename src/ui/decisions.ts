@@ -3,18 +3,30 @@ import type { Decision, GameState, Resources, Risk, WingSize } from '../core/sta
 import { capName, invaderNames } from '../content/names';
 import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
-import { PATROL_COST, companiesFor, strikeCost, troubleRisk, type PatrolSim } from '../sim/patrols';
+import { PATROL_COST, casualtyRisk, companiesFor, strikeCost, troubleRisk, type PatrolSim } from '../sim/patrols';
+import { threatOf } from '../sim/threat';
 import { WING_SIZES, WING_UNITS, wingOdds, type WingsSim } from '../sim/wings';
 import type { DecisionView } from './Hud';
 import { resName } from './Projects';
 import { NATIVE_COST, STAGE_NAMES } from '../sim/system';
 import { USE_INFO } from '../sim/uses';
 import { SIGN_COST } from '../sim/faith';
+import { PLEA } from '../sim/voices';
+import { worldStats } from '../sim/worlds';
 
 const list = (r: Partial<Resources> | undefined) =>
   RES_KEYS.filter((k) => r?.[k])
     .map((k) => `<b>${RES_ICON[k]} ${int(r![k]!)}</b> ${resName(k)}`)
     .join(', ');
+
+/** What sending companies of Space Patrols means: a victory, perhaps at a price. */
+export function patrolTip(need: number, s: GameState) {
+  const p = Math.round(casualtyRisk(threatOf(s), need) * 100);
+  const who = tr(need === 2 ? 'Dos compañías' : 'Una compañía', need === 2 ? 'Two companies' : 'One company');
+  return p
+    ? tr(`${who} de los Space Patrols: vencen siempre, pero con esta amenaza pueden volver con bajas (${p} %: se pierde una compañía).`, `${who} of the Space Patrols: they always win, but with this threat they may come back with losses (${p}%: a company is lost).`)
+    : tr(`${who} de los Space Patrols: vencen siempre, sin bajas a este nivel de amenaza.`, `${who} of the Space Patrols: they always win, with no losses at this threat level.`);
+}
 
 /** A trouble's risk, as a coloured word. */
 export const riskText = (r: Risk, cap = false) => {
@@ -120,7 +132,7 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
           ok: !lock,
           tip: lock
             ? pick(lock)
-            : tr(`${need === 2 ? 'Dos compañías' : 'Una compañía'} de los Space Patrols: vencen seguro.`, `${need === 2 ? 'Two companies' : 'One company'} of the Space Patrols: a sure victory.`),
+            : patrolTip(need, s),
         });
       }
       if (st && forces && s.wings)
@@ -157,8 +169,12 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
           : dom
             ? tr(`Desde los dominios llega una súplica que nadie se atreve a firmar: que los dejen volver a ser libres.`, `From the dominions comes a plea no one dares to sign: to be allowed to be free again.`)
             : tr(`Los pueblos tienen miedo de su propia estrella. Rezan para que su luz vuelva a ser mansa.`, `The peoples fear their own star. They pray for its light to be gentle again.`),
-        yes: wars ? tr('Concederles la paz · ☀ 60', 'Grant them peace · ☀ 60') : dom ? tr('Liberar los dominios', 'Free the dominions') : tr('Escucharlos', 'Listen to them'),
-        yesOk: wars ? s.energy >= 60 : true,
+        yes: wars
+          ? tr(`Concederles la paz · ☀ ${PLEA.cost}`, `Grant them peace · ☀ ${PLEA.cost}`)
+          : dom
+            ? tr('Liberar los dominios', 'Free the dominions')
+            : tr(`Escucharlos · ☀ ${PLEA.listen}`, `Listen to them · ☀ ${PLEA.listen}`),
+        yesOk: wars ? s.energy >= PLEA.cost : dom ? true : s.energy >= PLEA.listen,
         no: tr('Seguir mirando', 'Keep watching'),
       };
     }
@@ -243,6 +259,47 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
           },
         ],
         no: tr('Que convivan como puedan', 'Let them get along'),
+      };
+    }
+    // A people struck by a catastrophe prays for something concrete.
+    case 'prayer': {
+      const who = nameOf(d.people);
+      const W = capName(who);
+      const T = w ? Math.round(worldStats(w, s.worlds, s.L * s.dial).T - 273) : 0;
+      const look = {
+        warm: {
+          icon: '☀',
+          title: tr(`Calor para ${wn}`, `Warmth for ${wn}`),
+          body: tr(
+            `Los ${who} de ${wn} rezan: la era glacial los está matando de frío (ahora ${T} °C). Despierta sus volcanes, bendícelos, sube el brillo de la estrella o acerca el mundo a ella.`,
+            `The ${W} of ${wn} pray: the ice age is freezing them to death (now ${T} °C). Wake its volcanoes, bless them, raise the star’s brightness or bring the world closer to it.`,
+          ),
+        },
+        cool: {
+          icon: '❄',
+          title: tr(`Frescor para ${wn}`, `Coolness for ${wn}`),
+          body: tr(
+            `Los ${who} de ${wn} rezan: el calor los está ahogando (ahora ${T} °C). Bendícelos, baja el brillo de la estrella o aleja el mundo de ella.`,
+            `The ${W} of ${wn} pray: the heat is choking them (now ${T} °C). Bless them, lower the star’s brightness or move the world away from it.`,
+          ),
+        },
+        deflect: {
+          icon: '☄',
+          title: tr(`Desvía la roca de ${wn}`, `Turn the rock from ${wn}`),
+          body: tr(
+            `Un asteroide cae hacia ${wn}. Los ${who} rezan para que la estrella lo desvíe: una llamarada sobre el mundo o sobre la roca.`,
+            `An asteroid is falling towards ${wn}. The ${W} pray for the star to turn it aside: a flare on the world or on the rock.`,
+          ),
+        },
+      }[d.goal ?? 'deflect'];
+      return {
+        ...base,
+        icon: look.icon,
+        title: look.title,
+        body: `${look.body} <i>${tr('Si la estrella responde, creerán más en ella.', 'If the star answers, they will believe in it more.')}</i>`,
+        yes: tr('Ir a verlo', 'Go and see'),
+        yesOk: true,
+        no: tr('No escuchar', 'Do not listen'),
       };
     }
     // The Order of the Star asks for a sign.

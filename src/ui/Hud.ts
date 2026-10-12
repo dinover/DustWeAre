@@ -147,6 +147,8 @@ export interface FaithInfo {
   tierName: { es: string; en: string };
   gift: { es: string; en: string } | null;
   order: boolean;
+  /** The latest reasons faith rose (+1) or fear grew (−1), newest last. */
+  moral: { sign: 1 | -1; es: string; en: string }[];
 }
 
 export interface LateInfo {
@@ -160,6 +162,8 @@ export interface LateInfo {
   threat: number;
   /** How tempting the system looks to raiders (worlds and stores). */
   allure: number;
+  /** What the star ark still needs (from the warp drive on). */
+  ark?: { es: string; en: string; ok: boolean }[];
   def: Record<'fleet' | 'shield' | 'patrol', number>;
 }
 
@@ -172,6 +176,7 @@ export class Hud {
   private progBar = h('div', { class: 'vessel' }, h('i'));
   private row2 = h('div', { class: 'row2' });
   private settleBtn: HTMLButtonElement;
+  private progSlab!: HTMLElement;
   private subHtml = '';
   private energyVal = h('b');
   private energyBar = h('div', { class: 'vessel' }, h('i'));
@@ -183,7 +188,7 @@ export class Hud {
   private toolEls = new Map<string, HTMLElement>();
   private newsEl: HTMLElement;
   private hintEl: HTMLElement | null = null;
-  private hintQueue: { id: string; glyph: string; html: () => string }[] = [];
+  private hintQueue: { id: string; glyph: string; html: () => string; prio: number; onShow?: () => void }[] = [];
   private hintTimer = 0;
   private banner: HTMLElement | null = null;
   tagEl: HTMLElement;
@@ -218,6 +223,7 @@ export class Hud {
     tablet.dataset.tip = tr('<b>El sistema</b><br>Toca para ver la estrella y ajustar su brillo. ✎ para ponerle nombre.', '<b>The system</b><br>Tap to see the star and adjust its brightness. ✎ to name it.');
     tablet.addEventListener('click', () => this.on.star());
     const prog = stone('progress-slab', this.progLabel, this.progBar, this.row2, this.settleBtn);
+    this.progSlab = prog;
     const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar, this.faithEl);
     const speeds: [number, string][] = [
       [0, '❚❚'],
@@ -413,11 +419,18 @@ export class Hud {
     let fh = '';
     if (f && f.believers > 0.5) {
       const tierName = f.tier ? pick(f.tierName) : tr('sin bendiciones', 'no blessings yet');
+      const why = f.moral.length
+        ? `<br><br><b>${tr('Últimos motivos', 'Latest reasons')}</b><br>${[...f.moral]
+            .reverse()
+            .map((m) => `<span style="color:${m.sign > 0 ? '#b8e08a' : '#ff8a6a'}">${m.sign > 0 ? '+' : '−'}</span> ${tr(m.es, m.en)}`)
+            .join('<br>')}`
+        : '';
+      const fear = f.dread > 0.05 ? ` · <span class="ember">☠ ${Math.round(f.dread * 100)} %</span>` : '';
       const tip = tr(
         `<b>Fe en la estrella</b><br>Creyentes: ${f.believersTxt.es}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)} % por miedo` : ''}.<br>Nivel: <b>${tierName}</b>${f.gift ? ` · ${f.gift.es}` : ''}<br>Sube al salvarlos (llamaradas contra asteroides e invasores), bendecirlos, proteger a los nativos, imponer treguas y escuchar sus plegarias. La crueldad la vuelve miedo.${f.order ? '<br><b>La Orden de la Estrella</b> existe: ábrela en Proyectos.' : ''}`,
         `<b>Faith in the star</b><br>Believers: ${f.believersTxt.en}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)}% out of fear` : ''}.<br>Tier: <b>${tierName}</b>${f.gift ? ` · ${f.gift.en}` : ''}<br>It rises when you save them (flares against asteroids and invaders), bless them, shelter natives, force truces and hear their prayers. Cruelty turns it into fear.${f.order ? '<br><b>The Order of the Star</b> exists: open it in Projects.' : ''}`,
       );
-      fh = `<span data-tip="${tip.replace(/"/g, '&quot;')}"><i>❂</i> ${tr(f.believersTxt.es, f.believersTxt.en)} · <b>${tierName}</b></span>`;
+      fh = `<span data-tip="${(tip + why).replace(/"/g, '&quot;')}"><i>❂</i> ${tr(f.believersTxt.es, f.believersTxt.en)} · <b>${tierName}</b>${fear}</span>`;
     }
     if (fh !== this.faithHtml) {
       this.faithEl.innerHTML = this.faithHtml = fh;
@@ -464,6 +477,13 @@ export class Hud {
         this.row2.innerHTML = `<span>${tr('Mundos habitados', 'Worlds settled')}</span><div class="vessel thin moss"><i style="--v:${Math.round((reached / Math.max(1, total)) * 100)}%"></i></div><span>${reached}/${total}</span>`;
         this.row2.style.display = '';
       }
+    }
+    // From the warp drive on, the top slab tells what the star ark still needs.
+    const ark = s.phase === 'system' ? info.late?.ark : undefined;
+    const arkTip = ark ? `<b>${tr('Arca estelar', 'Star ark')}</b><br>${ark.map((n) => `${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}`).join('<br>')}` : '';
+    if ((this.progSlab.dataset.tip ?? '') !== arkTip) {
+      if (arkTip) this.progSlab.dataset.tip = arkTip;
+      else delete this.progSlab.dataset.tip;
     }
     // Resources of the civilization.
     const late = s.phase === 'system' ? info.late : null;
@@ -521,7 +541,7 @@ export class Hud {
   showDecisions(list: DecisionView[]) {
     // Newest first: it is shown in full, older ones fold into a single line.
     list = [...list].reverse();
-    const key = list.map((d) => `${d.id}:${d.yesOk}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
+    const key = list.map((d) => `${d.id}:${d.yesOk}:${d.body}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
     if (key !== this.decisionKey) {
       this.decisionKey = key;
       clear(this.decisionsEl);
@@ -542,7 +562,7 @@ export class Hud {
                 })
               : [h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes)]),
           ),
-          h('div', { class: 'vessel thin gold d-timer' }, h('i')),
+          h('div', { class: 'vessel thin gold d-timer', 'data-tip': tr(`Si no decides: «${d.no}»`, `If you do not decide: “${d.no}”`) }, h('i')),
         );
         card.dataset.id = String(d.id);
         this.decisionsEl.append(card);
@@ -555,17 +575,24 @@ export class Hud {
   }
 
   // ------------------------------------------------------------------ hints
-  hint(id: string, glyph: string, html: () => string) {
+  /**
+   * Queues a hint. The most urgent one is shown first (2 urgent · 1 how things work · 0 a tip),
+   * the oldest among equals; `onShow` runs when it actually appears.
+   */
+  hint(id: string, glyph: string, html: () => string, prio = 1, onShow?: () => void) {
     if (this.hintQueue.some((q) => q.id === id) || this.hintEl?.dataset.id === id) return;
-    this.hintQueue.push({ id, glyph, html });
+    this.hintQueue.push({ id, glyph, html, prio, onShow });
   }
 
   private openHint() {
-    const q = this.hintQueue.shift()!;
+    let i = 0;
+    for (let k = 1; k < this.hintQueue.length; k++) if (this.hintQueue[k].prio > this.hintQueue[i].prio) i = k;
+    const q = this.hintQueue.splice(i, 1)[0];
+    q.onShow?.();
     const el = stone('hint', h('span', { class: 'glyph' }, q.glyph), h('div', { html: q.html() }), h('button', { class: 'x', title: tr('Entendido', 'Got it'), onclick: () => this.closeHint() }, '✕'));
     el.dataset.id = q.id;
     this.hintEl = el;
-    this.hintTimer = 18;
+    this.hintTimer = q.prio >= 2 ? 18 : 14;
     this.root.append(el);
   }
 

@@ -1,12 +1,12 @@
-import { int, pick, tr } from '../i18n';
+import { int, num, pick, tr } from '../i18n';
 import type { Resources } from '../core/state';
 import { ERA_NAMES, MISSION_COST, PROJECTS, TECHS, researchCost, type ProjectDef, type ProjectId } from '../content/projects';
-import { RES_ICON, RES_KEYS, type CivSim } from '../sim/civ';
+import { RES_ICON, RES_KEYS, UPFRONT, type CivSim } from '../sim/civ';
 import { FORT_MAX, STAR_INCOME, companiesFor, fortCost, fortRepel, strikeCost, strikeRisk, troubleRisk, type PatrolSim } from '../sim/patrols';
 import { BUY_SHIPS, WINGS_TECH, WING_COST, WING_SIZES, WING_UNITS, buyCost, type WingsSim } from '../sim/wings';
-import { riskText, wingForecast } from './decisions';
+import { patrolTip, riskText, wingForecast } from './decisions';
 import type { WingSize } from '../core/state';
-import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, lanceSpeed, nextAt, podsPerWave, shieldStop, threatOf, upgradeCost, type DefenceId } from '../sim/threat';
+import { DEFENCES, MAX_LEVEL, TECH_POWER, WORK_POWER, defLevel, fleetCatch, lanceSpeed, levelFor, nextAt, podsPerWave, shieldStop, threatOf, upgradeCost, type DefenceId } from '../sim/threat';
 import { clamp } from '../util';
 import { DIG_COST, DIG_TIME, FAITH_TIERS, FORGE_COST, RELICS, RELICS_NEEDED, STUDY_COST, dreadOf, faithOf, popOf, type FaithSim } from '../sim/faith';
 import { fmtPop } from './text';
@@ -25,6 +25,10 @@ export function costChips(cost: Partial<Resources>, have: Resources | null) {
 interface CardRefs {
   def: ProjectDef;
   el: HTMLElement;
+  /** How much threat it would add. */
+  warn: HTMLElement;
+  /** Everything it needs, ticked (the star ark). */
+  checks: HTMLElement | null;
   cost: HTMLElement;
   btn: HTMLButtonElement;
   note: HTMLElement;
@@ -37,7 +41,7 @@ export class ProjectsPanel {
   private cards: CardRefs[] = [];
   private res = h('div', { class: 'proj-res' });
   private mission: { kind: 'expedition' | 'armada'; btn: HTMLButtonElement; note: HTMLElement; cost: HTMLElement }[] = [];
-  private research: { btn: HTMLButtonElement; note: HTMLElement; cost: HTMLElement; title: HTMLElement; bar: HTMLElement } | null = null;
+  private research: { btn: HTMLButtonElement; note: HTMLElement; cost: HTMLElement; title: HTMLElement; bar: HTMLElement; warn: HTMLElement } | null = null;
   private closeFn: () => void = () => {};
   private beyond = h('div', { class: 'beyond' });
   private beyondHtml = '';
@@ -93,6 +97,8 @@ export class ProjectsPanel {
       for (const def of PROJECTS.filter((p) => p.era === era)) {
         const cost = h('div', { class: 'costs' });
         const note = h('div', { class: 'note small' });
+        const warn = h('div', { class: 'small threat-note' });
+        const checks = def.id === 'ark' ? h('ul', { class: 'checks ark-checks' }) : null;
         const bar = h('div', { class: 'vessel thin gold' }, h('i'));
         const btn = h('button', { class: 'btn small primary', onclick: () => this.on.start(def.id) }, tr('Construir', 'Build')) as HTMLButtonElement;
         const el = h(
@@ -101,13 +107,15 @@ export class ProjectsPanel {
           h('div', { class: 'proj-head' }, h('span', { class: 'proj-ico' }, def.icon), h('b', null, pick(def.name))),
           h('div', { class: 'small muted' }, pick(def.desc)),
           h('div', { class: 'small gold', style: 'margin-top:4px' }, pick(def.effect)),
+          checks,
+          warn,
           cost,
           note,
           bar,
           btn,
         );
         grid.append(el);
-        this.cards.push({ def, el, cost, btn, note, bar });
+        this.cards.push({ def, el, warn, checks, cost, btn, note, bar });
       }
     }
     // Missions beyond the system, and research that never ends.
@@ -116,6 +124,7 @@ export class ProjectsPanel {
       const cost = h('div', { class: 'costs' });
       const note = h('div', { class: 'note small' });
       const title = h('b');
+      const warn = h('div', { class: 'small threat-note' });
       const bar = h('div', { class: 'vessel thin moss' }, h('i'));
       const btn = h('button', { class: 'btn small primary', onclick: () => this.on.research() }, tr('Investigar', 'Research')) as HTMLButtonElement;
       grid.append(
@@ -124,13 +133,14 @@ export class ProjectsPanel {
           { class: 'proj mission research' },
           h('div', { class: 'proj-head' }, h('span', { class: 'proj-ico' }, '⚗'), title),
           h('div', { class: 'small muted' }, tr('Cada tecnología nueva hace que todo el sistema produzca un 10 % más.', 'Each new technology makes the whole system produce 10% more.')),
+          warn,
           cost,
           note,
           bar,
           btn,
         ),
       );
-      this.research = { btn, note, cost, title, bar };
+      this.research = { btn, note, cost, title, bar, warn };
     }
     this.el.append(h('h3', { class: 'proj-era' }, tr('Misiones', 'Missions')), grid);
     const mk = (kind: 'expedition' | 'armada', icon: string, name: string, desc: string, label: string, fire: () => void) => {
@@ -185,6 +195,15 @@ export class ProjectsPanel {
     this.refresh();
   }
 
+  /** "⚠ +1,5 de poder de amenaza (sube la amenaza a nivel 4)". */
+  private threatNote(add: number) {
+    const s = this.civ.state;
+    const L = threatOf(s);
+    const after = levelFor((s.threat?.power ?? 0) + add);
+    const n = num(add, 1);
+    return after > L ? tr(`⚠ +${n} de poder de amenaza (sube la amenaza a nivel ${after})`, `⚠ +${n} threat power (raises the threat to level ${after})`) : tr(`⚠ +${n} de poder de amenaza`, `⚠ +${n} threat power`);
+  }
+
   /** The threat level, and one card per defence with its level and what the next one costs. */
   private defencesView() {
     const s = this.civ.state;
@@ -216,8 +235,8 @@ export class ProjectsPanel {
         effect: (n) => {
           const pods = podsPerWave(n);
           return tr(
-            `${n} ${n === 1 ? 'compañía' : 'compañías'}, una barcaza de batalla cada una: pueden defender varias estrellas a la vez (1 compañía por riesgo bajo o medio, 2 por riesgo alto) y siempre vencen. Las que quedan en casa lanzan ${pods} cápsulas por oleada y su lanza dispara ×${lanceSpeed(n).toFixed(1).replace('.', ',')}.`,
-            `${n} ${n === 1 ? 'company' : 'companies'}, one battle barge each: they can defend several stars at once (1 company for a low or medium risk, 2 for a high risk) and always win. Those at home drop ${pods} pods per wave and their lance fires ×${lanceSpeed(n).toFixed(1)}.`,
+            `${n} ${n === 1 ? 'compañía' : 'compañías'}, una barcaza de batalla cada una: pueden defender varias estrellas a la vez (1 compañía por riesgo bajo o medio, 2 por riesgo alto) y siempre vencen, aunque con amenaza alta pueden volver con bajas. Las que quedan en casa lanzan ${pods} cápsulas por oleada y su lanza dispara ×${lanceSpeed(n).toFixed(1).replace('.', ',')}.`,
+            `${n} ${n === 1 ? 'company' : 'companies'}, one battle barge each: they can defend several stars at once (1 company for a low or medium risk, 2 for a high risk) and always win, though with a high threat they may come back with losses. Those at home drop ${pods} pods per wave and their lance fires ×${lanceSpeed(n).toFixed(1)}.`,
           );
         },
       },
@@ -464,7 +483,7 @@ export class ProjectsPanel {
       const helped = !!st.strike || !!st.wing;
       if (st.trouble && p && !helped) {
         const need = companiesFor(strikeRisk(st, false));
-        btns += btn('help', 'primary', `⛨ ×${need} ${costChips(strikeCost(st, false), res)}`, helpLock ? pick(helpLock) : tr(`${need === 2 ? 'Dos compañías' : 'Una compañía'} de los Space Patrols saltan a defender la colonia: vencen seguro.`, `${need === 2 ? 'Two companies' : 'One company'} of the Space Patrols jump to defend the colony: a sure victory.`), !!helpLock);
+        btns += btn('help', 'primary', `⛨ ×${need} ${costChips(strikeCost(st, false), res)}`, helpLock ? pick(helpLock) : patrolTip(need, s), !!helpLock);
       }
       if (st.trouble && this.wings?.wings && risk && !helped)
         for (const z of WING_SIZES) {
@@ -510,16 +529,36 @@ export class ProjectsPanel {
       const done = !!civ.done[c.def.id];
       const building = civ.building?.id === c.def.id;
       const lock = this.civ.lock(c.def.id);
-      const html = costChips(c.def.cost, civ.res);
+      // Chips turn red only when even the first installment (25 %) cannot be paid.
+      const html = costChips(c.def.cost, { metal: civ.res.metal / UPFRONT, fuel: civ.res.fuel / UPFRONT, water: civ.res.water / UPFRONT, science: civ.res.science / UPFRONT });
       if (c.cost.innerHTML !== html) c.cost.innerHTML = html;
       c.el.classList.toggle('done', done);
       c.el.classList.toggle('locked', !done && !building && !!lock);
       c.bar.style.display = building ? '' : 'none';
       if (building) (c.bar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round((civ.building!.t / civ.building!.dur) * 100)}%`);
-      const short = !this.civ.canAfford(c.def.cost);
+      // Only the first installment is needed to start.
+      const short = !this.civ.canAfford(this.civ.upfront(c.def.cost));
       c.btn.disabled = done || building || !!lock || short;
       c.btn.textContent = done ? tr('Completado ✓', 'Completed ✓') : building ? tr('En construcción…', 'Under construction…') : tr('Construir', 'Build');
-      c.note.textContent = done || building ? '' : lock ? pick(lock) : short ? tr('Faltan recursos.', 'Not enough resources.') : '';
+      const missing = building ? this.civ.shortfall() : null;
+      c.note.textContent = done
+        ? ''
+        : building
+          ? missing
+            ? tr(`Esperando recursos: falta ${RES_KEYS.filter((k) => missing[k]).map((k) => `${RES_ICON[k]} ${missing[k]}`).join(' ')}`, `Waiting for resources: missing ${RES_KEYS.filter((k) => missing[k]).map((k) => `${RES_ICON[k]} ${missing[k]}`).join(' ')}`)
+            : ''
+          : lock
+            ? pick(lock)
+            : short
+              ? tr('Faltan recursos para empezar (el 25 %).', 'Not enough resources to start (25%).')
+              : tr('25 % al empezar, el resto mientras se construye.', '25% to start, the rest while it is built.');
+      if (c.checks) {
+        const html = done ? '' : this.civ.arkNeeds().map((n) => `<li class="${n.ok ? 'ok' : ''}">${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}</li>`).join('');
+        if (c.checks.innerHTML !== html) c.checks.innerHTML = html;
+      }
+      // What it would add to the threat, before it is built.
+      const warn = done || building ? '' : this.threatNote(WORK_POWER);
+      if (c.warn.textContent !== warn) c.warn.textContent = warn;
     }
     if (this.research) {
       const R = this.research;
@@ -534,6 +573,8 @@ export class ProjectsPanel {
       R.btn.disabled = !!lock;
       R.btn.textContent = civ.research ? tr('Investigando…', 'Researching…') : tr('Investigar', 'Research');
       R.note.textContent = civ.research ? '' : lock ? pick(lock) : tr(`Tecnologías dominadas: ${lvl}`, `Technologies mastered: ${lvl}`);
+      const warn = civ.research ? '' : this.threatNote(TECH_POWER);
+      if (R.warn.textContent !== warn) R.warn.textContent = warn;
     }
     for (const m of this.mission) {
       const lock = this.civ.missionLock(m.kind);

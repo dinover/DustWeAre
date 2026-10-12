@@ -5,7 +5,7 @@ import { far, massOf, solidsOf, toWorld, habZone, view, type Body, type GameStat
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
 import { SystemSim, COST, WRATHS, WRATH_COST, type Fx, type Wrath } from '../sim/system';
-import { isGiantStuff, makeWorlds, worldStats, colonizable, type WorldStats } from '../sim/worlds';
+import { isGiantStuff, makeWorlds, worldStats, colonizable, arkWorld, type WorldStats } from '../sim/worlds';
 import { Stage } from '../render/Stage';
 import { Star } from '../render/Star';
 import { Guides } from '../render/Guides';
@@ -39,6 +39,9 @@ import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
 
 type Sel = number | 'star' | null;
+
+/** How urgent each hint is: 2 something is happening right now · 1 how things work · 0 a tip. */
+const HINT_PRIO: Record<string, number> = { 'f.start': 2, 's.start': 2, 's.alien': 2, 's.threat': 2, 's.decision': 2, 's.names': 0, 's.star': 0 };
 
 /** Space Patrol blue. */
 const PATROL = 0x6f9bff;
@@ -128,6 +131,15 @@ export class Game {
         sound.click();
         // Negative ids are collision alerts (not choices for the peoples).
         if (id < 0) return this.encounterChoice(-id, accept);
+        // A prayer's "go and see": the camera goes to the world and the prayer stays open.
+        const d = this.s?.civ?.decisions.find((x) => x.id === id);
+        if (d?.kind === 'prayer' && accept) {
+          if (d.world !== undefined && this.s?.worlds.some((w) => w.id === d.world)) {
+            this.select(d.world);
+            this.focus(d.world, true);
+          }
+          return;
+        }
         this.sim?.decide(id, accept, choice);
       },
       renameSystem: () => this.rename('star'),
@@ -138,6 +150,12 @@ export class Game {
       focus: (id) => this.focus(id, true),
       dial: (v) => {
         if (this.s) this.s.dial = v;
+      },
+      condense: () => {
+        if (this.sim?.condense()) {
+          sound.chime('good');
+          this.panelT = 0;
+        }
       },
     });
     this.ledger = new Ledger(this.ui, { select: (id) => (this.select(id), this.focus(id, true)) });
@@ -307,10 +325,18 @@ export class Game {
   // ------------------------------------------------------------------ formation → system
   private confirmSettle() {
     if (!this.formation || this.settling) return;
+    // Without a giant there will be little fuel: say so while it can still be helped.
+    const giants = this.formation.bodies.some((b) => isGiantStuff(b));
+    const warn = giants
+      ? ''
+      : tr(
+          ' Ningún cuerpo es un gigante: el combustible será escaso (lo darán los pozos de hielo y la luz condensada en la estrella).',
+          ' No body is a giant: fuel will be scarce (ice wells and light condensed at the star will provide it).',
+        );
     confirmBox(
       this.ui,
       tr('Asentar el sistema', 'Settle the system'),
-      tr('Los cuerpos que has formado se convertirán en planetas y lunas. El polvo suelto quedará como cinturones de asteroides.', 'The bodies you have formed will become planets and moons. Loose dust will remain as asteroid belts.'),
+      tr('Los cuerpos que has formado se convertirán en planetas y lunas. El polvo suelto quedará como cinturones de asteroides.', 'The bodies you have formed will become planets and moons. Loose dust will remain as asteroid belts.') + warn,
       tr('Asentar', 'Settle'),
       () => this.finishFormation(),
     );
@@ -365,6 +391,7 @@ export class Game {
     s.bodies = [];
     s.disk = null;
     s.phase = 'system';
+    s.sysStart = s.time;
     s.age = Math.max(s.age, 100);
     s.energy = 70;
     s.nextEvent = s.time + 140;
@@ -526,11 +553,13 @@ export class Game {
       this.hint('s.alien', '⚠', () => tr('Llegan visitantes de otra estrella. Pulsa <b>Llamarada</b> y elige sus naves o los mundos que ocupan.', 'Visitors from another star are arriving. Press <b>Flare</b> and pick their ships or the worlds they occupy.'));
   }
 
+  /** A hint is only marked as seen once it is on screen: one still waiting in the queue is never lost. */
   private hint(id: string, glyph: string, html: () => string) {
     const s = this.s;
     if (!s || s.tutorials[id]) return;
-    s.tutorials[id] = true;
-    this.hud.hint(id, glyph, html);
+    this.hud.hint(id, glyph, html, HINT_PRIO[id] ?? 1, () => {
+      if (this.s) this.s.tutorials[id] = true;
+    });
   }
 
   /** Last known position of a ship (it may already be gone from the simulation). */
@@ -682,7 +711,7 @@ export class Game {
       case 'laser': {
         const from = this.worldGetter(f.world);
         const to = this.shipGetter(f.ship);
-        const c = worldTone(f.world);
+        const c = f.wings ? WINGS : worldTone(f.world);
         this.fx.laser(from, to, c);
         setTimeout(() => this.fx.laser(from, to, c), 260);
         sound.laser();
@@ -1007,7 +1036,10 @@ export class Game {
     if (a === 'bless') {
       const lock = sim.blessLock(w);
       if (lock) return say(lock.es, lock.en);
-      if (sim.bless(w)) sound.chime('good');
+      if (sim.bless(w)) {
+        sound.chime('good');
+        s.tutorials.blessUsed = true;
+      }
       return;
     }
     if (a === 'volcano') {
@@ -1603,6 +1635,13 @@ export class Game {
       if (s.time > 22) this.hint('f.snow', '❄', () => tr('El anillo punteado es la <b>línea de nieve</b>: más allá, el hielo se suma a la roca y los cuerpos crecen deprisa. Allí nacen los gigantes.', 'The dotted ring is the <b>snow line</b>: beyond it, ice joins the rock and bodies grow fast. That is where giants are born.'));
       if (s.time > 45) this.hint('f.tools', '♨', () => tr('Prueba <b>Calentar</b> para empujar el gas y el polvo ligero hacia afuera, y <b>Enfriar</b> para que el polvo se condense en piedras nuevas.', 'Try <b>Heat</b> to push gas and light dust outwards, and <b>Cool</b> to make dust condense into new pebbles.'));
       if (s.time > 70) this.hint('f.hz', '❀', () => tr('La franja verde es la <b>zona habitable</b>: ahí un mundo rocoso podría tener mares de agua líquida.', 'The green band is the <b>habitable zone</b>: there a rocky world could have seas of liquid water.'));
+      if (f.progress >= 0.6 && !f.bodies.some((b) => isGiantStuff(b)))
+        this.hint('f.nogiant', '◍', () =>
+          tr(
+            'Aún no hay ningún gigante. Más allá de la línea de nieve, reúne mucho material para que atrape gas: los gigantes darán combustible.',
+            'There is no giant yet. Beyond the snow line, gather a lot of material so it catches gas: giants will give fuel.',
+          ),
+        );
       if (f.gasLeft < 0.45) this.hint('f.gas', '☁', () => tr('La luz de tu estrella está dispersando el gas. Los gigantes deben atraparlo antes de que se acabe.', 'Your star’s light is blowing the gas away. Giants must catch it before it runs out.'));
     } else if (s && this.sim) {
       let left = dt * speed;
@@ -1611,6 +1650,8 @@ export class Game {
         this.sim.update(step);
         left -= step;
       }
+      // Choices count down in real time while the game runs, whatever its speed.
+      if (speed > 0) this.sim.civ.tickDecisions(dt);
       if (s.threats.some((t) => !t.storm)) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
       if (s.time > 110)
         this.hint('s.names', '✎', () =>
@@ -1672,7 +1713,7 @@ export class Game {
         }
       } else if (this.sim) {
         const sim = this.sim;
-        const all = s.worlds.filter(colonizable);
+        const all = s.worlds.filter(arkWorld);
         const reached = all.filter((w) => w.colony >= 1 || (w.life?.origin && w.life.stage >= 2)).length;
         const reachedAll = all.filter((w) => isSettled(w) || (w.life?.origin && w.life.stage >= 2)).length;
         this.hud.update(
@@ -1719,6 +1760,14 @@ export class Game {
             ),
           );
         if (sim.topStage >= 3)
+          this.hint('s.bless', '❂', () =>
+            tr(
+              'Tus pueblos ya construyen ciudades. La <b>Bendición</b> (tecla 6) cura un mundo habitado, termina sus plagas y calma su clima: los pueblos que la estrella cuida <b>creen en ella</b>, y su fe da dones.',
+              'Your peoples now build cities. The <b>Blessing</b> (key 6) heals a peopled world, ends its plagues and calms its climate: the peoples the star looks after <b>believe in it</b>, and their faith brings gifts.',
+            ),
+          );
+        // The darker path is suggested only once the kinder one is known (or cruelty has already begun).
+        if (sim.topStage >= 3 && (s.tutorials.blessUsed || (s.harm ?? 0) > 10))
           this.hint('s.wrath', '⚡', () =>
             tr(
               'Si quieres ser temido, la <b>Ira</b> (tecla 5) desata plagas, meteoritos, inviernos, discordia u ofrendas sobre un mundo. Los pueblos lo recordarán, pero su miedo aviva tu luz estelar.',
@@ -1786,13 +1835,19 @@ export class Game {
     const L = threatOf(s);
     const lv = { fleet: defLevel(s, 'fleet'), shield: defLevel(s, 'shield'), patrol: defLevel(s, 'patrol') };
     // A defence behind the threat that can be raised right now also lights the Projects button.
-    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
+    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(sim.civ.upfront(p.cost))) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
     return {
       threat: L,
       allure: allureOf(s, sim.civ.settled().length),
+      ark: civ.done.warp && !civ.done.ark ? sim.civ.arkNeeds() : undefined,
       def: lv,
       era: tr(ERA_NAMES[era].es, ERA_NAMES[era].en),
-      label: def && b ? tr(`Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %`, `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%`) : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
+      label: def && b
+        ? tr(
+            `Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %${b.stalled ? ' (en pausa: faltan recursos)' : ''}`,
+            `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%${b.stalled ? ' (paused: not enough resources)' : ''}`,
+          )
+        : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
       v: b ? b.t / b.dur : done.length / PROJECTS.length,
       res: civ.res,
       rates: sim.civ.rates,
@@ -1813,6 +1868,7 @@ export class Game {
       tierName: t?.name ?? { es: '', en: '' },
       gift: t?.gift ?? null,
       order: !!f.order,
+      moral: this.s.moral ?? [],
     };
   }
 

@@ -95,6 +95,13 @@ export function addFaith(s: GameState, who: number[] | 'all', n: number) {
   }
 }
 
+/** Remembers why faith rose (+1) or fear grew (−1), for the player to read (the last 8 reasons). */
+export function note(s: GameState, sign: 1 | -1, es: string, en: string) {
+  const m = (s.moral ??= []);
+  m.push({ t: s.time, sign, es, en });
+  if (m.length > 8) m.splice(0, m.length - 8);
+}
+
 /** How much of the peoples' belief has turned to dread (0..1): cruelty poisons faith. */
 export const dreadOf = (s: GameState) => clamp(((s.harm ?? 0) - 15) / 45);
 
@@ -266,6 +273,7 @@ export class FaithSim {
     if (accept && s.energy >= SIGN_COST) {
       s.energy -= SIGN_COST;
       addFaith(s, members, 0.08);
+      note(s, 1, 'Una señal para la Orden', 'A sign for the Order');
       if (f.study) f.study.t = Math.min(f.study.dur, f.study.t + f.study.dur * 0.25);
       if (f.forge) f.forge.t = Math.min(f.forge.dur, f.forge.t + f.forge.dur * 0.25);
       const lead = this.h.peoples.get(members[0]);
@@ -274,6 +282,7 @@ export class FaithSim {
       this.h.news('❂', 'Un halo dorado rodea la estrella durante una noche entera. La Orden lo toma como una señal y trabaja con más fervor.', 'A golden halo rings the star for a whole night. The Order takes it as a sign and works with greater fervour.', 'good');
     } else {
       addFaith(s, members, -0.05);
+      note(s, -1, 'Silencio ante la Orden', 'Silence before the Order');
       this.h.news('❂', 'La estrella guarda silencio. En los templos de la Orden, alguien empieza a dudar.', 'The star keeps silent. In the Order’s temples, someone begins to doubt.', 'info');
     }
   }
@@ -451,6 +460,7 @@ export class FaithSim {
     const r = RELICS[f.relics % RELICS.length];
     f.relics++;
     addFaith(s, 'all', 0.06);
+    note(s, 1, `Reliquia hallada en ${w.name}`, `Relic found on ${w.name}`);
     this.h.fx({ kind: 'relic', world: w.id });
     this.h.news('◬', `¡Una reliquia! En ${w.name}, los peregrinos desentierran ${r.name.es}: ${r.desc.es}.`, `A relic! On ${w.name}, the pilgrims unearth ${r.name.en}: ${r.desc.en}.`, 'good');
     // Once the Space Patrols exist, every relic arms one more company.

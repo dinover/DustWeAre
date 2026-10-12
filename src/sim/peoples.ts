@@ -6,7 +6,7 @@ import { travel, worldXZ } from '../render/layout';
 import type { CivFx } from './civ';
 import { addHarm } from './voices';
 import { ETHOS, USE_INFO, ethosOf } from './uses';
-import { FAITH_START, addFaith, faithOf, inOrder } from './faith';
+import { FAITH_START, addFaith, faithOf, inOrder, note } from './faith';
 
 /** What the peoples simulation needs from the system. */
 export interface PeopleHost {
@@ -451,6 +451,7 @@ export class PeopleSim {
         r.ignored = true;
         addHarm(s, 5);
         addFaith(s, [r.a, r.b], -0.06);
+        if (a && b) note(s, -1, `Dejaste correr la guerra entre los ${a.name} y los ${b.name}`, `You let the war between the ${capName(a.name)} and the ${capName(b.name)} run`);
       } else addHarm(s, 1.5);
     }
     if (r && accept) addHarm(s, d.kind === 'war' ? -5 : -2);
@@ -459,11 +460,13 @@ export class PeopleSim {
       s.energy -= 25;
       r.mood = clamp(r.mood + 0.35, -1, 1);
       addFaith(s, [a.id, b.id], 0.05);
+      note(s, 1, `Calmaste a los ${a.name} y los ${b.name}`, `You calmed the ${capName(a.name)} and the ${capName(b.name)}`);
       this.h.news('☀', `Una aurora inesperada ilumina a los ${a.name} y los ${b.name}. Lo toman como una señal y se calman.`, `An unexpected aurora lights up the ${capName(a.name)} and the ${capName(b.name)}. They take it as a sign and calm down.`, 'good');
     } else if (d.kind === 'war' && s.energy >= 40 && r.state === 'war') {
       s.energy -= 40;
       this.peace(r, a, b, true);
       addFaith(s, [a.id, b.id], 0.08);
+      note(s, 1, `Tregua entre los ${a.name} y los ${b.name}`, `Truce between the ${capName(a.name)} and the ${capName(b.name)}`);
     }
   }
 

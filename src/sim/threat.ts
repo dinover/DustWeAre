@@ -27,6 +27,10 @@ export function upgradeCost(id: DefenceId, level: number): Partial<Resources> {
   return out;
 }
 
+/** Threat power each great work and each technology adds. */
+export const WORK_POWER = 1.5;
+export const TECH_POWER = 0.6;
+
 /** How strong the system looks from outside. */
 export function powerOf(s: GameState, settled: number) {
   const civ = s.civ;
@@ -34,7 +38,7 @@ export function powerOf(s: GameState, settled: number) {
   const works = Object.values(civ.done).filter(Boolean).length;
   const stars = s.stars ?? [];
   const dom = stars.filter((x) => x.mode === 'dominion').length;
-  return settled + works * 1.5 + (civ.tech ?? 0) * 0.6 + (stars.length - dom) + dom * 2.5;
+  return settled + works * WORK_POWER + (civ.tech ?? 0) * TECH_POWER + (stars.length - dom) + dom * 2.5;
 }
 
 /**

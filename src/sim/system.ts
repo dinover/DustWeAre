@@ -6,7 +6,7 @@ import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from 
 import { PatrolSim, type PatrolFx } from './patrols';
 import { OrbitSim, type OrbitFx } from './orbits';
 import { VoicesSim, addHarm } from './voices';
-import { DISCOUNT, FaithSim, addFaith, dreadOf, faithOf, faithTier, type FaithFx } from './faith';
+import { DISCOUNT, FaithSim, addFaith, dreadOf, faithOf, faithTier, note, type FaithFx } from './faith';
 import { WingsSim } from './wings';
 import { allureOf, defLevel, shieldSlow, threatOf } from './threat';
 import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
@@ -31,6 +31,13 @@ const AGE_RATE = [12, 5, 0.6, 0.002, 0.0005, 0.0003];
 
 export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate: 35, wrath: 0, bless: 20 };
 export type CostKey = keyof typeof COST;
+/** Starlight condensed into fuel at the star: how much light, for how much fuel. */
+export const CONDENSE = { light: 25, fuel: 30 };
+
+/** Seconds impact debris lasts in the belts, and the most belt points kept. */
+const DEBRIS_LIFE = 900;
+const MAX_BELTS = 3000;
+
 /** Seconds before the same world can be blessed again. */
 export const BLESS_WAIT = 120;
 
@@ -73,6 +80,10 @@ export class SystemSim {
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
+  private beltT = 10;
+  /** Looters' thefts of the last few seconds, told as one raid. */
+  private raid: { until: number; total: number; worlds: string[] } | null = null;
+  private recovered: { until: number; total: number; n: number } | null = null;
   /** When each people was last blessed (blessings in a row count less). */
   private blessedAt = new Map<number, number>();
   private wildT = 140;
@@ -122,6 +133,9 @@ export class SystemSim {
     } else if (d.kind === 'sign') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.faith.decide(d, accept);
+    } else if (d.kind === 'prayer') {
+      // "Go and see" is the interface's business; anything else is turning away.
+      if (!accept) this.prayerResult(d, false);
     } else this.civ.decide(id, accept);
   }
 
@@ -234,6 +248,24 @@ export class SystemSim {
     this.updateInvasion(dt);
     this.updateEvents(dt);
     this.wildImpacts(dt);
+    this.tidyBelts(dt);
+    this.raidNews();
+    this.prayers();
+  }
+
+  /** Debris from impacts and collisions fades after a while, and the belts never grow past a limit (the disk's own belts stay). */
+  private tidyBelts(dt: number) {
+    this.beltT -= dt;
+    if (this.beltT > 0) return;
+    this.beltT = 10;
+    const s = this.s;
+    let belts = s.belts.filter((b) => b.born === undefined || s.time - b.born < DEBRIS_LIFE);
+    if (belts.length > MAX_BELTS) {
+      const debris = belts.filter((b) => b.born !== undefined).sort((a, b) => a.born! - b.born!);
+      const drop = new Set(debris.slice(0, belts.length - MAX_BELTS));
+      belts = belts.filter((b) => !drop.has(b));
+    }
+    if (belts.length !== s.belts.length) s.belts = belts;
   }
 
   /** Starlight gained per second. The peoples' fear feeds the star too — and their faith. */
@@ -518,10 +550,12 @@ export class SystemSim {
       addHarm(s, -2);
       addFaith(s, w.life.people ? [w.life.people] : [], 0.12);
       if (w.owner) addFaith(s, [w.owner], 0.04);
+      note(s, 1, `Nativos de ${w.name} protegidos`, `Natives of ${w.name} protected`);
       this.news('☀', `La luz de la estrella cae sobre los nativos de ${w.name}: los ${sn} lo entienden y les dejan una reserva.`, `The star's light falls on the natives of ${w.name}: the ${SN} understand, and leave them a reserve.`, 'good');
     } else if (accept && choice === 2) {
       w.natives = 'purge';
       addHarm(s, 8);
+      note(s, -1, `Exterminio en ${w.name} (temor)`, `Extermination on ${w.name} (fear)`);
       w.life.health -= 0.55;
       const dead = w.life.pop ? this.kill(w, 0.75) : 0;
       w.dev = Math.min(1, (w.dev ?? 0) + 0.25);
@@ -624,6 +658,8 @@ export class SystemSim {
       const w = this.world(th.target);
       if (!w) continue;
       this.onFx({ kind: 'impact', world: w.id });
+      const prayer = s.civ?.decisions.find((d) => d.kind === 'prayer' && d.goal === 'deflect' && d.threat === th.id);
+      if (prayer) this.prayerResult(prayer, false);
       w.ocean = clamp(w.ocean + 0.04);
       w.organics = clamp(w.organics + 0.05);
       const dead = this.kill(w, th.storm ? 0.35 : (w.life?.stage ?? 0) >= 3 ? 0.22 : 0.3);
@@ -636,7 +672,9 @@ export class SystemSim {
         this.news('☄', `Un meteorito de tu lluvia cae sobre ${w.name}.${des}`, `A meteor of your storm falls on ${w.name}.${den}`, 'warn');
       } else if (w.life) {
         // The star saw it coming and did nothing: faith suffers.
-        addFaith(s, this.peoplesOn(w).map((p) => p.id), -0.04);
+        const hurt = this.peoplesOn(w).map((p) => p.id);
+        addFaith(s, hurt, -0.04);
+        if (hurt.length) note(s, -1, `El asteroide golpeó ${w.name} y la estrella no hizo nada`, `The asteroid struck ${w.name} and the star did nothing`);
         w.life.health -= w.life.stage >= 3 ? 0.2 : 0.35;
         this.news('☄', `Un asteroide golpeó ${w.name}. La vida resiste como puede.${des}`, `An asteroid struck ${w.name}. Life holds on as best it can.${den}`, 'warn');
       } else this.news('☄', `Un asteroide cayó sobre ${w.name} y dejó agua y compuestos orgánicos.${des}`, `An asteroid fell on ${w.name}, leaving water and organic compounds.${den}`, 'info');
@@ -691,7 +729,7 @@ export class SystemSim {
       s.worlds.push(moon);
       this.news('☾', `De los restos del choque se forma una pequeña luna: ${moon.name}.`, `A small moon gathers from the impact debris: ${moon.name}.`, 'good');
     } else if (roll < 0.8 && planet.parent === null) {
-      for (let i = 0; i < 46; i++) s.belts.push({ r: planet.a * (1 + rng.gauss(0, 0.012)), th: planet.th - 0.05 - rng.range(0, 0.9), s: 0.0005 });
+      for (let i = 0; i < 46; i++) s.belts.push({ r: planet.a * (1 + rng.gauss(0, 0.012)), th: planet.th - 0.05 - rng.range(0, 0.9), s: 0.0005, born: s.time });
       this.news('⁘', `Una estela de escombros sigue a ${planet.name} por su órbita.`, `A trail of debris follows ${planet.name} along its orbit.`, 'info');
     }
   }
@@ -718,7 +756,10 @@ export class SystemSim {
   private updateInvasion(dt: number) {
     const s = this.s;
     const inv = s.invasion;
-    const trigger = this.topStage >= 3 || s.time > 1500;
+    // The galaxy notices the system once some people reaches space, or its first great work stands,
+    // or the system has simply been there long enough (counted from when the worlds settled).
+    const works = Object.values(s.civ?.done ?? {}).filter(Boolean).length;
+    const trigger = this.topStage >= 4 || works >= 1 || s.time - (s.sysStart ?? 0) > 1500;
     if (!inv.signal && trigger) {
       inv.signal = 1;
       inv.next = s.time + 50;
@@ -849,8 +890,32 @@ export class SystemSim {
     if (!total) return;
     const a = this.rng.range(0, Math.PI * 2);
     s.ships.push({ id: this.nid(), from: w.id, to: -1, t: 0, dur: 14, alien: true, kind: 'looter', back: true, loot, tx: Math.cos(a) * far(125), tz: Math.sin(a) * far(125) });
-    const [al, AL] = invaderNames(s.alienSpecies);
-    this.news('⚠', `Saqueadores ${al} asaltan los depósitos de ${w.name} y huyen con ${total} de recursos. Si los derriban antes de que salten, el botín vuelve.`, `${AL} looters raid the stores of ${w.name} and flee with ${total} resources. If they are shot down before they jump, the loot comes back.`, 'alien');
+    // One piece of news per raid, not one per ship: thefts a few seconds apart add up.
+    const r = (this.raid ??= { until: s.time + 6, total: 0, worlds: [] });
+    r.total += total;
+    if (!r.worlds.includes(w.name)) r.worlds.push(w.name);
+  }
+
+  /** Tells, once, what a raid of looters carried off — and what was won back. */
+  private raidNews() {
+    const back = this.recovered;
+    if (back && this.s.time >= back.until) {
+      this.recovered = null;
+      if (back.total >= 10)
+        this.news(
+          '⟁',
+          back.n > 1 ? `${back.n} saqueadores caen antes de saltar: se recuperan ${back.total} de recursos.` : `Un saqueador cae antes de saltar: se recuperan ${back.total} de recursos.`,
+          back.n > 1 ? `${back.n} looters go down before they can jump: ${back.total} resources are recovered.` : `A looter goes down before it can jump: ${back.total} resources are recovered.`,
+          'good',
+        );
+    }
+    const r = this.raid;
+    if (!r || this.s.time < r.until) return;
+    this.raid = null;
+    const [al, AL] = invaderNames(this.s.alienSpecies);
+    const es = r.worlds.length > 1 ? `${r.worlds.slice(0, -1).join(', ')} y ${r.worlds[r.worlds.length - 1]}` : r.worlds[0];
+    const en = r.worlds.length > 1 ? `${r.worlds.slice(0, -1).join(', ')} and ${r.worlds[r.worlds.length - 1]}` : r.worlds[0];
+    this.news('⚠', `Saqueadores ${al} asaltan los depósitos de ${es} y huyen con ${r.total} de recursos. Si los derriban antes de que salten, el botín vuelve.`, `${AL} looters raid the stores of ${en} and flee with ${r.total} resources. If they are shot down before they jump, the loot comes back.`, 'alien');
   }
 
   /** Bombers reach a peopled world: fire from orbit. */
@@ -877,7 +942,10 @@ export class SystemSim {
       total += sh.loot[k] ?? 0;
     }
     sh.loot = undefined;
-    if (total >= 10) this.news('⟁', `Un saqueador cae antes de saltar: se recuperan ${total} de recursos.`, `A looter goes down before it can jump: ${total} resources are recovered.`, 'good');
+    // Told together with the others shot down in the same few seconds.
+    const r = (this.recovered ??= { until: this.s.time + 6, total: 0, n: 0 });
+    r.total += total;
+    r.n++;
   }
 
   private alienArrives(w: World, mother = false) {
@@ -912,16 +980,86 @@ export class SystemSim {
     if (roll < 0.3) {
       w.climate -= 28;
       this.news('❄', `Comienza una era glacial en ${w.name}. Un poco más de luz o de atmósfera ayudaría.`, `An ice age begins on ${w.name}. A little more light or atmosphere would help.`, 'warn');
+      if (this.stats(w).T < 273) this.pray(w, 'warm');
     } else if (roll < 0.55) {
       w.climate += 26;
       this.news('☀', `${w.name} se calienta: el efecto invernadero se intensifica.`, `${w.name} is warming up: its greenhouse effect is growing stronger.`, 'warn');
+      if (this.stats(w).T > 312) this.pray(w, 'cool');
     } else if (roll < 0.75) {
       w.climate -= 14;
       w.atm += 0.08;
       this.news('⛰', `Grandes erupciones en ${w.name}: la ceniza oscurece el cielo durante siglos.`, `Huge eruptions on ${w.name}: ash darkens the sky for centuries.`, 'warn');
     } else {
-      s.threats.push({ id: this.nid(), target: w.id, t: 0, dur: 45, angle: this.rng.range(0, Math.PI * 2) });
+      const id = this.nid();
+      s.threats.push({ id, target: w.id, t: 0, dur: 45, angle: this.rng.range(0, Math.PI * 2) });
       this.news('☄', `Un asteroide se dirige hacia ${w.name}. Una llamarada solar puede desviarlo.`, `An asteroid is heading for ${w.name}. A solar flare can deflect it.`, 'warn');
+      this.pray(w, 'deflect', id);
+    }
+  }
+
+  // ------------------------------------------------------------------ prayers
+  /** A people struck by a catastrophe prays to the star for something concrete. */
+  private pray(w: World, goal: 'warm' | 'cool' | 'deflect', threat?: number) {
+    const s = this.s;
+    const civ = s.civ;
+    if (!civ || civ.decisions.length >= 3 || civ.decisions.some((d) => d.kind === 'prayer' && d.world === w.id)) return;
+    if ((w.life?.pop ?? 0) + (w.cpop ?? 0) < 0.5) return;
+    const natives = w.life?.people && w.life.stage >= 2 ? this.peoples.get(w.life.people) : undefined;
+    const p = natives ?? this.peoplesOn(w)[0];
+    if (!p) return;
+    const planet = w.parent === null ? w : this.world(w.parent);
+    civ.decisions.push({ id: this.nid(), kind: 'prayer', world: w.id, goal, people: p.id, threat, dial0: s.dial, a0: planet?.a ?? w.a, left: 60, dur: 60 });
+  }
+
+  /** The star did something a prayer asked for. */
+  private prayerAct(w: World, act: 'volcano' | 'bless') {
+    for (const d of this.s.civ?.decisions ?? []) {
+      if (d.kind !== 'prayer' || d.world !== w.id) continue;
+      if (act === 'bless' ? d.goal !== 'deflect' : d.goal === 'warm') d.done = true;
+    }
+  }
+
+  /** Answered prayers: a blessing or a volcano, the star's brightness, a world moved, a rock turned aside. */
+  private prayers() {
+    const s = this.s;
+    for (const d of [...(s.civ?.decisions ?? [])]) {
+      if (d.kind !== 'prayer') continue;
+      const w = d.world !== undefined ? this.world(d.world) : undefined;
+      if (!w) {
+        s.civ!.decisions.splice(s.civ!.decisions.indexOf(d), 1);
+        continue;
+      }
+      const planet = w.parent === null ? w : this.world(w.parent);
+      const a = planet?.a ?? w.a;
+      const ok =
+        d.goal === 'deflect'
+          ? !s.threats.some((t) => t.id === d.threat)
+          : d.goal === 'warm'
+            ? !!d.done || s.dial >= (d.dial0 ?? s.dial) + 0.05 || a < (d.a0 ?? a) - 0.01
+            : !!d.done || s.dial <= (d.dial0 ?? s.dial) - 0.05 || a > (d.a0 ?? a) + 0.01;
+      if (ok) this.prayerResult(d, true);
+    }
+  }
+
+  /** A prayer heard — or one nobody answered. */
+  private prayerResult(d: Decision, ok: boolean) {
+    const s = this.s;
+    const civ = s.civ;
+    if (!civ) return;
+    const i = civ.decisions.indexOf(d);
+    if (i >= 0) civ.decisions.splice(i, 1);
+    const p = this.peoples.get(d.people);
+    const w = d.world !== undefined ? this.world(d.world) : undefined;
+    if (!p || !w) return;
+    const P = capName(p.name);
+    if (ok) {
+      addFaith(s, [p.id], 0.1);
+      note(s, 1, `Plegaria atendida en ${w.name}`, `Prayer answered on ${w.name}`);
+      this.news('❂', `Los ${p.name} de ${w.name} dan gracias: la estrella escuchó.`, `The ${P} of ${w.name} give thanks: the star listened.`, 'good');
+    } else {
+      addFaith(s, [p.id], -0.06);
+      note(s, -1, `Plegaria desatendida en ${w.name}`, `Prayer unanswered on ${w.name}`);
+      this.news('❝', `Los ${p.name} de ${w.name} rezaron y nadie respondió.`, `The ${P} of ${w.name} prayed, and nobody answered.`, 'voice');
     }
   }
 
@@ -960,6 +1098,7 @@ export class SystemSim {
     if (had < 0.3 && !s.threats.some((t) => t.target === w.id)) {
       if (peopleOf(w)) addHarm(s, 4);
       else if (w.life) addHarm(s, 1);
+      if (peopleOf(w) || w.life) note(s, -1, `Llamarada sobre ${w.name} (temor)`, `Flare on ${w.name} (fear)`);
       const dead = this.kill(w, 0.12);
       const [des, den] = this.deaths(dead);
       if (des) this.news('☀', `Tu llamarada arrasa ${w.name}.${des}`, `Your flare sweeps over ${w.name}.${den}`, 'warn');
@@ -971,8 +1110,13 @@ export class SystemSim {
     for (const t of threats) s.threats.splice(s.threats.indexOf(t), 1);
     s.ships = s.ships.filter((sh) => !(sh.alien && sh.to === w.id && sh.t / sh.dur > 0.6));
     // A people saved by the star's light believes in it a little more.
-    if (threats.some((t) => !t.storm)) addFaith(s, here, 0.08);
-    else if (had >= 0.3 && w.invaded < 0.3) addFaith(s, here, 0.06);
+    if (threats.some((t) => !t.storm)) {
+      addFaith(s, here, 0.08);
+      if (here.length) note(s, 1, `Salvaste ${w.name} de un asteroide`, `You saved ${w.name} from an asteroid`);
+    } else if (had >= 0.3 && w.invaded < 0.3) {
+      addFaith(s, here, 0.06);
+      if (here.length) note(s, 1, `Expulsaste a los invasores de ${w.name}`, `You drove the invaders off ${w.name}`);
+    }
     if (threats.length) this.news('☀', `Tu llamarada desvió el asteroide que amenazaba ${w.name}.`, `Your flare deflected the asteroid threatening ${w.name}.`, 'good');
     else if (had >= 0.3 && w.invaded < 0.3) this.news('☀', `La llamarada expulsó a los visitantes de ${w.name}.`, `The flare drove the visitors away from ${w.name}.`, 'good');
     return true;
@@ -994,6 +1138,7 @@ export class SystemSim {
     this.s.energy -= this.cost('volcano');
     if (w.life && w.life.stage >= 3) addHarm(this.s, 1);
     this.kill(w, 0.02);
+    this.prayerAct(w, 'volcano');
     w.volcanoCd = 25;
     w.atm += 0.25 * smoothstep(0.03, 1, m) + 0.04;
     w.organics = clamp(w.organics + 0.03);
@@ -1012,6 +1157,15 @@ export class SystemSim {
 
   private inhabited(w: World) {
     return (w.life?.pop ?? 0) + (w.cpop ?? 0) > 0.0005;
+  }
+
+  /** Starlight condensed into fuel at the star: a source that never runs dry, and a use for spare light. */
+  condense() {
+    const s = this.s;
+    if (!s.civ || s.energy < CONDENSE.light) return false;
+    s.energy -= CONDENSE.light;
+    s.civ.res.fuel += CONDENSE.fuel;
+    return true;
   }
 
   /** Peoples on this world who believe deeply while the faith is strong (tier 3+): their world heals faster. */
@@ -1037,6 +1191,7 @@ export class SystemSim {
     if (this.blessLock(w)) return false;
     s.energy -= this.cost('bless');
     w.blessed = s.time + BLESS_WAIT;
+    this.prayerAct(w, 'bless');
     if (w.life) w.life.health = Math.min(1, w.life.health + 0.15);
     const cured = !!w.plague;
     w.plague = 0;
@@ -1048,6 +1203,7 @@ export class SystemSim {
       addFaith(s, [p.id], s.time - (this.blessedAt.get(p.id) ?? -1e9) < 60 ? 0.02 : 0.07);
       this.blessedAt.set(p.id, s.time);
     }
+    note(s, 1, `Bendición sobre ${w.name}`, `Blessing on ${w.name}`);
     this.fx({ kind: 'bless', world: w.id });
     const who = here.map((p) => p.name).join(' y ');
     const WHO = here.map((p) => capName(p.name)).join(' and ');
@@ -1093,6 +1249,8 @@ export class SystemSim {
     s.energy -= WRATH_COST[k];
     const lives = this.inhabited(w) || !!w.life;
     const here = this.peoplesOn(w);
+    const what = { plague: ['plaga', 'plague'], storm: ['meteoritos', 'meteors'], winter: ['invierno', 'winter'], discord: ['discordia', 'discord'], tithe: ['ofrendas', 'offerings'] }[k];
+    if (lives) note(s, -1, `Ira sobre ${w.name}: ${what[0]} (temor)`, `Wrath on ${w.name}: ${what[1]} (fear)`);
     const who = here.map((p) => p.name).join(' y ');
     const WHO = here.map((p) => capName(p.name)).join(' and ');
     if (k === 'plague') {

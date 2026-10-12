@@ -10,9 +10,9 @@ import { Rng, TAU, easeInOut } from '../util';
 import { ShipHulls, type Hull } from './Ships';
 import { BARGE_Y } from '../sim/patrols';
 
-const MAX_SHIPS = 96;
+const MAX_SHIPS = 140;
 /** Ships plus armada formation slots plus patrols. */
-const MAX_POINTS = 220;
+const MAX_POINTS = 280;
 const TRAIL = 12;
 const MAX_SATS = 220;
 const DYSON = 900;
@@ -455,7 +455,11 @@ export class SystemView {
     this.hulls.begin();
     let n = 0;
     const civ = s.civ;
-    for (const sh of s.ships) {
+    // Invaders first, then the Space Patrols' craft: when there are too many ships to draw, the ones
+    // the player must see (and target) are never the ones left out.
+    const rank = (x: Ship) => (x.alien ? 0 : x.kind === 'pod' || x.kind === 'gunship' ? 1 : 2);
+    const ships = s.ships.length > MAX_SHIPS ? [...s.ships].sort((a, b) => rank(a) - rank(b)) : s.ships;
+    for (const sh of ships) {
       if (n >= MAX_SHIPS) break;
       const k = sh.t / sh.dur;
       if (k < 0) continue;

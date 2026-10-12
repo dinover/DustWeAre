@@ -250,7 +250,7 @@ export class OrbitSim {
       big.ring = true;
       big.debrisRing = !giant;
     }
-    for (let i = 0; i < 60; i++) s.belts.push({ r: a * (1 + rng.gauss(0, 0.02)), th: big.th - 0.05 - rng.range(0, 1.4), s: 0.0006 });
+    for (let i = 0; i < 60; i++) s.belts.push({ r: a * (1 + rng.gauss(0, 0.02)), th: big.th - 0.05 - rng.range(0, 1.4), s: 0.0006, born: s.time });
     // The largest fragment may escape and gather into a new world of its own.
     let fresh: World | null = null;
     if (ms > 0.05 && rng.next() < 0.45) fresh = this.fragment(big, ms, rng);

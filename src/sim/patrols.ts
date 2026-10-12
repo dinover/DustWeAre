@@ -1,5 +1,5 @@
 import { far, type Decision, type GameState, type OuterStar, type PatrolState, type Resources, type Risk, type Ship, type World, type WingSize } from '../core/state';
-import { Rng, TAU, easeInOut } from '../util';
+import { Rng, TAU, clamp, easeInOut } from '../util';
 import { travel, worldRadius, worldXZ } from '../render/layout';
 import { capName, worldName, invaderName, invaderNames } from '../content/names';
 import type { Bi } from '../i18n';
@@ -61,6 +61,11 @@ export const fortCost = (level: number): Partial<Resources> => {
 };
 /** Chance that a colony's defences beat off an attack on their own. */
 export const fortRepel = (level: number) => 0.13 * level;
+/**
+ * Chance a strike at another star costs a company: they always win, but a strong threat met with
+ * few companies leaves its mark (threat 7 with one company: 50 %; threat 3 with two: none).
+ */
+export const casualtyRisk = (threat: number, companies: number) => clamp(0.1 + 0.08 * (threat - 2 * companies), 0, 0.6);
 /** The Space Patrols settle any fight with two companies at most: two for a high risk, one otherwise. */
 export const companiesFor = (risk: Risk) => (risk === 'high' ? 2 : 1);
 /** How dangerous a colony's trouble is (old saves had none: guessed from its kind). */
@@ -576,12 +581,21 @@ export class PatrolSim {
     const len = Math.hypot(p.x, p.z) || 1;
     this.h.fx({ kind: 'warpIn', x: p.x, z: p.z, dx: -p.x / len, dz: -p.z / len, count: d.companies, tint: 'patrol' });
     const st = this.star(d.star);
-    if (st) this.strikeResult(p, st, d.conquer);
+    if (st) this.strikeResult(p, st, d.conquer, d.companies);
   }
 
   /** With enough companies, the Space Patrols always prevail. */
-  private strikeResult(p: PatrolState, st: OuterStar, conquer: boolean) {
+  private strikeResult(p: PatrolState, st: OuterStar, conquer: boolean, companies = 1) {
     const rng = this.h.rng;
+    const s = this.h.s;
+    // They always win — but against a strong threat with few companies, not everyone comes back.
+    if (rng.next() < casualtyRisk(threatOf(s), companies) && s.civ) {
+      const lvl = defLevel(s, 'patrol');
+      if (lvl > 1) {
+        (s.civ.def ??= {}).patrol = lvl - 1;
+        this.h.news('⛨', `La compañía vuelve de ${st.name} diezmada: hará falta reclutar otra.`, `The company comes back from ${st.name} decimated: another one will have to be raised.`, 'warn');
+      }
+    }
     st.strike = null;
     const kind = st.trouble?.kind;
     p.kills += rng.int(4, 12);
