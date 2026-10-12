@@ -4,7 +4,7 @@ import type { WorldStats } from '../sim/worlds';
 import { STAGE_NAMES, STAGE_TIME, sparkNeed } from '../sim/system';
 import { HEIRLOOMS, starOf } from '../content/stars';
 import { capName, invaderNames } from '../content/names';
-import { h, stone, clear } from './dom';
+import { h, stone, clear, setHtml, setText } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
 import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
 import { ETHOS_INFO, USE_INFO, ethosOf, naturalUse } from '../sim/uses';
@@ -337,7 +337,6 @@ export class Inspector {
   private extra: HTMLElement;
   private slider: HTMLInputElement | null = null;
   private condenseBtn: HTMLButtonElement | null = null;
-  private html = '';
   target: number | 'star' | null = null;
 
   constructor(
@@ -391,13 +390,13 @@ export class Inspector {
         h('div', { style: 'display:flex;justify-content:center;margin-top:12px' }, h('button', { class: 'btn small', onclick: () => this.on.focus(w.id) }, tr('◎ Seguir con la cámara', '◎ Follow with camera'))),
       );
     }
-    this.title.textContent = w.name;
+    setText(this.title, w.name);
     const where = parent
       ? tr(`Luna de ${parent.name}`, `Moon of ${parent.name}`)
       : tr(`${num(w.a, 2)} UA de la estrella`, `${num(w.a, 2)} AU from the star`);
-    this.kind.textContent = `${kindName(st.kind)} · ${where}`;
+    setText(this.kind, `${kindName(st.kind)} · ${where}`);
     const ol = orbitLine(w, s);
-    if (this.orbit.innerHTML !== ol) this.orbit.innerHTML = ol;
+    setHtml(this.orbit, ol);
     this.orbit.style.display = ol ? '' : 'none';
     const m = massOf(w);
     const parts: [number, string, string][] = [
@@ -571,23 +570,25 @@ export class Inspector {
         <div class="advice warn">${tr('Una <b>llamarada</b> solar los expulsa, aunque también castiga un poco la atmósfera.', 'A solar <b>flare</b> drives them out, though it also batters the atmosphere a little.')} ${s.patrol ? tr('Los <b>Space Patrols</b> también vendrán a purgarlos.', 'The <b>Space Patrols</b> will also come to purge them.') : tr('Si llegan a dominar varios mundos, los pueblos fundarán los <b>Space Patrols</b>.', 'If they come to hold several worlds, the peoples will found the <b>Space Patrols</b>.')}</div>
       </section>`;
     }
-    // Only touch the DOM when something changed (keeps hover and tooltips steady).
-    if (html !== this.html) this.body.innerHTML = this.html = html;
+    // Patched in place, and only when something changed: a rebuild restarted the vessels and the
+    // tooltips' hover a few times a second.
+    setHtml(this.body, html);
   }
 
   showStar(s: GameState, energyRate: number) {
     const fresh = this.target !== 'star';
     this.target = 'star';
-    this.html = '';
     this.el.style.display = '';
     if (fresh) this.el.scrollTop = 0;
     this.orbit.style.display = 'none';
-    this.title.textContent = s.name;
+    setText(this.title, s.name);
     const type = starOf(s);
-    this.kind.textContent = s.phase === 'formation' ? tr(`${type.name.es} recién nacida`, `Newborn ${type.name.en.toLowerCase()}`) : pick(type.name);
+    setText(this.kind, s.phase === 'formation' ? tr(`${type.name.es} recién nacida`, `Newborn ${type.name.en.toLowerCase()}`) : pick(type.name));
     const L = s.L * s.dial;
     const [a, b] = habZone(L);
-    this.body.innerHTML = `
+    setHtml(
+      this.body,
+      `
       <section><h3>${tr('LA ESTRELLA', 'THE STAR')}</h3>
         <div class="stat"${tipAttr(`<b>${type.name.es}</b><br>${type.desc.es}`, `<b>${type.name.en}</b><br>${type.desc.en}`)}><span>${tr('Tipo', 'Type')}</span><span class="gold">${pick(type.name)}</span></div>
         ${s.heirloom ? `<div class="stat"${tipAttr(`<b>${HEIRLOOMS[s.heirloom].name.es}</b><br>${HEIRLOOMS[s.heirloom].desc.es}`, `<b>${HEIRLOOMS[s.heirloom].name.en}</b><br>${HEIRLOOMS[s.heirloom].desc.en}`)}><span>${tr('Legado', 'Heirloom')}</span><span class="fa">${HEIRLOOMS[s.heirloom].icon} ${pick(HEIRLOOMS[s.heirloom].name)}</span></div>` : ''}
@@ -596,7 +597,8 @@ export class Inspector {
         <div class="stat"><span>${tr('Zona habitable', 'Habitable zone')}</span><span>${num(a, 2)}–${num(b, 2)} UA</span></div>
         <div class="stat"><span>${tr('Línea de nieve', 'Snow line')}</span><span>${num(snowLine(L), 1)} UA</span></div>
         <div class="stat"><span>${tr('Luz estelar', 'Starlight')}</span><span>+${num(energyRate, 1)} / s</span></div>
-      </section>${faithSection(s)}`;
+      </section>${faithSection(s)}`,
+    );
     if (fresh) {
       clear(this.extra);
       if (s.phase === 'system') {
@@ -656,9 +658,7 @@ export class Ledger {
   el: HTMLElement;
   private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; flags: HTMLElement; dot: HTMLElement; name: HTMLElement; f: string }>();
   // Last markup written, so the DOM (and any hover on it) is only touched when something changed.
-  private peoplesHtml = '';
   private headHtml = '';
-  private legendHtml = '';
   private list: HTMLElement;
   private head: HTMLElement;
   private order = '';
@@ -691,7 +691,7 @@ export class Ledger {
     const key = ordered.map((w) => w.id).join(',');
     const head = `<span>${tr('MUNDOS', 'WORLDS')} · ${planets.length}</span><span class="muted">${this.el.classList.contains('collapsed') ? '▸' : '▾'}</span>`;
     if (head !== this.headHtml) {
-      this.head.innerHTML = this.headHtml = head;
+      setHtml(this.head, (this.headHtml = head));
       this.head.dataset.tip = tr('<b>Mundos del sistema</b><br>Toca un mundo para ver su ficha. Toca aquí para plegar o desplegar la lista.', '<b>Worlds of the system</b><br>Tap a world to see its card. Tap here to fold or unfold the list.');
     }
     if (key !== this.order) {
@@ -761,7 +761,7 @@ export class Ledger {
         f += flag('violet', '', '⚠', tr(`<b>Ocupado</b> por los ${ies}, invasores de otra estrella. Una llamarada los expulsa.`, `<b>Occupied</b> by the ${ien}, invaders from another star. A flare drives them out.`));
       }
       if (threatened.has(w.id)) f += flag('ember', '', '☄', tr('<b>Un asteroide</b> se dirige hacia aquí. Una llamarada puede desviarlo.', '<b>An asteroid</b> is heading here. A flare can deflect it.'));
-      if (r.f !== f) r.flags.innerHTML = r.f = f;
+      if (r.f !== f) setHtml(r.flags, (r.f = f));
       r.row.classList.toggle('sel', selected === w.id);
     }
     // The peoples of the system, all equal, and how they get along with each other.
@@ -827,7 +827,7 @@ export class Ledger {
       );
       ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:#e8d2a0;color:#e8d2a0"></i><span>${tr('Otras estrellas', 'Other stars')}</span><em>${stars.length} ✦${dom ? ` · ${dom} ⚑` : ''}${trouble ? ` · <b class="ember">${trouble} ⚠</b>` : ''}</em></div>`;
     }
-    if (this.peoplesHtml !== ph) this.peoplesEl.innerHTML = this.peoplesHtml = ph;
+    setHtml(this.peoplesEl, ph);
     // What the ship colours mean.
     let lg = '';
     if (alive.length || s.ships.length) {
@@ -841,6 +841,6 @@ export class Ledger {
       if (s.patrol) lg += `<span data-tip="${attr(tr('Space Patrols: barcazas de batalla (una por compañía), cápsulas de desembarco y cañoneras, en azul y oro', 'Space Patrols: battle barges (one per company), drop pods and gunships, in blue and gold'))}"><b style="color:#6f9bff">⛨</b> Space Patrols</span>`;
       if (s.wings) lg += `<span data-tip="${attr(tr('Freedom Wings: cazas de voluntarios que custodian el mundo natal', 'Freedom Wings: volunteer fighters guarding the home world'))}"><b style="color:#ffe1a0">✈</b> Freedom Wings</span>`;
     }
-    if (this.legendHtml !== lg) this.legend.innerHTML = this.legendHtml = lg;
+    setHtml(this.legend, lg);
   }
 }

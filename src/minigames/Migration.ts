@@ -1,5 +1,5 @@
 import { num, tr } from '../i18n';
-import { h, stone } from '../ui/dom';
+import { h, setHtml, stone } from '../ui/dom';
 import { clamp } from '../util';
 
 const ROUNDS = 5;
@@ -360,7 +360,7 @@ export function playMigration(
                     : tr(`Demasiado cerca de ${c.other}: chocarán`, `Too close to ${c.other}: they will collide`)
                 }</b>`;
     }
-    info.innerHTML = `${tr('Órbita', 'Orbit')}: <b class="gold">${num(o.a, 2)}</b> → <b class="gold">${num(aNow(), 2)} UA</b> · ${tr('temperatura', 'temperature')} <b>${Math.round(T0 - 273)} °C</b> → <b class="${Tn > 273 && Tn < 315 ? 'moss' : 'ember'}">${Math.round(Tn - 273)} °C</b>${safety ? ` · ${safety}` : ''}`;
+    setHtml(info, `${tr('Órbita', 'Orbit')}: <b class="gold">${num(o.a, 2)}</b> → <b class="gold">${num(aNow(), 2)} UA</b> · ${tr('temperatura', 'temperature')} <b>${Math.round(T0 - 273)} °C</b> → <b class="${Tn > 273 && Tn < 315 ? 'moss' : 'ember'}">${Math.round(Tn - 273)} °C</b>${safety ? ` · ${safety}` : ''}`);
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

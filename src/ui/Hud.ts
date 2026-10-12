@@ -3,7 +3,7 @@ import type { GameState, NewsItem, Resources } from '../core/state';
 import { RES_ICON, RES_KEYS } from '../sim/civ';
 import type { Tool } from '../sim/formation';
 import { COST, WRATH_COST } from '../sim/system';
-import { h, stone, clear, ICONS } from './dom';
+import { h, stone, clear, ICONS, morph, setHtml, setText } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
 import type { ProjTab } from './Projects';
@@ -181,9 +181,16 @@ export class Hud {
   root: HTMLElement;
   private name = h('div', { class: 'name' });
   private sub = h('div', { class: 'sub' });
-  private progLabel = h('div', { class: 'label' });
+  // The progress slab keeps its nodes and only changes their text and fill, every frame:
+  // rebuilding them restarted the vessels' flow and made the slab flicker.
+  private progName = h('span');
+  private progVal = h('b');
+  private progLabel = h('div', { class: 'label' }, this.progName, this.progVal);
   private progBar = h('div', { class: 'vessel' }, h('i'));
-  private row2 = h('div', { class: 'row2' });
+  private row2Name = h('span');
+  private row2Bar = h('div', { class: 'vessel thin' }, h('i'));
+  private row2Val = h('span');
+  private row2 = h('div', { class: 'row2' }, this.row2Name, this.row2Bar, this.row2Val);
   private settleBtn: HTMLButtonElement;
   private progSlab!: HTMLElement;
   private subHtml = '';
@@ -201,6 +208,9 @@ export class Hud {
   private hintTimer = 0;
   /** The pointer rests on the hint: it is being read, so it waits. */
   private hintHold = false;
+  /** How long the hint on screen lasts in all, and whether a decision or a banner hides it now. */
+  private hintLife = 0;
+  private hintCovered = false;
   /** Every pending decision is shown, not just the first three. */
   private decisionsOpen = false;
   private banner: HTMLElement | null = null;
@@ -208,7 +218,10 @@ export class Hud {
   private mode: 'formation' | 'system' | null = null;
   private resEl: HTMLElement;
   private decisionsEl: HTMLElement;
-  private decisionKey = '';
+  private cards = new Map<number, { el: HTMLElement; shape: string }>();
+  private moreBtn: HTMLButtonElement | null = null;
+  /** The language changed: every card is built again (without the entrance). */
+  private decisionsStale = false;
   private ageT = 0;
   private worksEl: HTMLElement | null = null;
   private tipTimer = 0;
@@ -373,7 +386,7 @@ export class Hud {
       if (t) t.textContent = name;
       el?.setAttribute('aria-label', name);
     }
-    this.decisionKey = '';
+    this.decisionsStale = true;
     const lbl = this.root.querySelector('.energy .lbl');
     if (lbl) lbl.textContent = tr('Luz estelar', 'Starlight');
     this.settleBtn.textContent = tr('Asentar el sistema', 'Settle the system');
@@ -408,6 +421,19 @@ export class Hud {
       b.classList.toggle('on', Number(b.dataset.v) === v);
       b.setAttribute('aria-pressed', String(Number(b.dataset.v) === v));
     }
+  }
+
+  /** Fills a vessel (0..1) and tints it, touching the style only when the reading changes. */
+  private fill(el: HTMLElement, v: number, cls: string) {
+    if (el.className !== cls) el.className = cls;
+    const w = `${Math.round(Math.max(0, Math.min(1, v)) * 1000) / 10}%`;
+    const i = el.firstChild as HTMLElement;
+    if (i.style.getPropertyValue('--v') !== w) i.style.setProperty('--v', w);
+  }
+
+  private show(el: HTMLElement, on: boolean) {
+    const d = on ? '' : 'none';
+    if (el.style.display !== d) el.style.display = d;
   }
 
   update(
@@ -451,7 +477,7 @@ export class Hud {
         ageTip = tr(`Años desde las primeras ciudades del sistema.<br>Edad del sistema: ${fmtAge(s.age)}`, `Years since the first cities of the system.<br>Age of the system: ${fmtAge(s.age)}`);
       }
       const html = `<span class="phase-chip">${phase}</span><span class="age-txt" data-tip="${ageTip}">${ageTxt}</span>`;
-      if (this.subHtml !== html) this.sub.innerHTML = this.subHtml = html;
+      if (this.subHtml !== html) morph(this.sub, (this.subHtml = html));
     }
     const e = Math.floor(s.energy);
     this.energyVal.textContent = `${e}`;
@@ -476,20 +502,26 @@ export class Hud {
       fh = `<span data-tip="${(tip + why).replace(/"/g, '&quot;')}"><i>❂</i> ${tr(f.believersTxt.es, f.believersTxt.en)} · <b>${tierName}</b>${fear}</span>`;
     }
     if (fh !== this.faithHtml) {
-      this.faithEl.innerHTML = this.faithHtml = fh;
+      morph(this.faithEl, (this.faithHtml = fh));
       this.faithEl.style.display = fh ? '' : 'none';
     }
+    // One reading of the slab per frame, written once at the end.
+    let name: string;
+    let val: string;
+    let fill: number;
+    let tone: string;
+    let row2: { name: string; val: string; fill: number; tone: string } | null = null;
+    let settle = false;
     if (s.phase === 'formation') {
       const p = info.progress ?? 0;
-      this.progLabel.innerHTML = `<span>${tr('Polvo convertido en mundos', 'Dust turned into worlds')}</span><b>${Math.round(p * 100)} %</b>`;
-      (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.min(100, (p / 0.97) * 100)}%`);
-      this.progBar.className = 'vessel gold';
+      name = tr('Polvo convertido en mundos', 'Dust turned into worlds');
+      val = `${Math.round(p * 100)} %`;
+      fill = Math.min(1, p / 0.97);
+      tone = 'gold';
       const g = info.gas ?? 1;
-      this.row2.innerHTML = `<span>${tr('Gas del disco', 'Disk gas')}</span><div class="vessel thin water"><i style="--v:${Math.round(g * 100)}%"></i></div><span>${Math.round(g * 100)} %</span>`;
-      this.row2.style.display = '';
-      this.settleBtn.style.display = info.canSettle ? '' : 'none';
+      row2 = { name: tr('Gas del disco', 'Disk gas'), val: `${Math.round(g * 100)} %`, fill: g, tone: 'water' };
+      settle = !!info.canSettle;
     } else {
-      this.settleBtn.style.display = 'none';
       const top = info.topStage ?? -1;
       const lifeTxt =
         top < 0
@@ -506,21 +538,30 @@ export class Hud {
       const total = info.total ?? 1;
       const ark = s.arkTimer > 0 && !s.won;
       const peoples = !!s.peoples?.length;
-      this.progLabel.innerHTML = `<span>${lifeTxt}</span><b>${ark ? tr('El arca se prepara', 'The ark is getting ready') : peoples ? tr(`${reached} de ${total} mundos habitados`, `${reached} of ${total} worlds settled`) : tr(`${info.living ?? 0} mundos con vida`, `${info.living ?? 0} living worlds`)}</b>`;
-      const v = ark ? Math.min(1, s.arkTimer / 60) : peoples ? reached / Math.max(1, total) : Math.min(1, (top + 1) / 6);
-      (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(v * 100)}%`);
-      this.progBar.className = ark ? 'vessel gold' : 'vessel moss';
-      this.row2.style.display = 'none';
+      name = lifeTxt;
+      val = ark ? tr('El arca se prepara', 'The ark is getting ready') : peoples ? tr(`${reached} de ${total} mundos habitados`, `${reached} of ${total} worlds settled`) : tr(`${info.living ?? 0} mundos con vida`, `${info.living ?? 0} living worlds`);
+      fill = ark ? Math.min(1, s.arkTimer / 60) : peoples ? reached / Math.max(1, total) : Math.min(1, (top + 1) / 6);
+      tone = ark ? 'gold' : 'moss';
       const late = info.late;
       if (late) {
         // The late game: the era, the great work under way, and how far the peoples have spread.
-        this.progLabel.innerHTML = `<span>${late.era}</span><b>${late.label}</b>`;
-        (this.progBar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round(late.v * 100)}%`);
-        this.progBar.className = 'vessel gold';
-        this.row2.innerHTML = `<span>${tr('Mundos habitados', 'Worlds settled')}</span><div class="vessel thin moss"><i style="--v:${Math.round((reached / Math.max(1, total)) * 100)}%"></i></div><span>${reached}/${total}</span>`;
-        this.row2.style.display = '';
+        name = late.era;
+        val = late.label;
+        fill = late.v;
+        tone = 'gold';
+        row2 = { name: tr('Mundos habitados', 'Worlds settled'), val: `${reached}/${total}`, fill: reached / Math.max(1, total), tone: 'moss' };
       }
     }
+    setText(this.progName, name);
+    setText(this.progVal, val);
+    this.fill(this.progBar, fill, `vessel ${tone}`);
+    if (row2) {
+      setText(this.row2Name, row2.name);
+      setText(this.row2Val, row2.val);
+      this.fill(this.row2Bar, row2.fill, `vessel thin ${row2.tone}`);
+    }
+    this.show(this.row2, !!row2);
+    this.show(this.settleBtn, settle);
     // From the warp drive on, the top slab tells what the star ark still needs.
     const ark = s.phase === 'system' ? info.late?.ark : undefined;
     const arkTip = ark ? `<b>${tr('Arca estelar', 'Star ark')}</b><br>${ark.map((n) => `${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}`).join('<br>')}` : '';
@@ -595,7 +636,15 @@ export class Hud {
     }
     // Hints rotate one at a time.
     if (this.hintEl) {
-      if (!this.hintHold) this.hintTimer -= dt;
+      // Hidden under a decision or a target banner, the hint waits (its thread of moss too)
+      // instead of running out unseen and coming back with a full thread.
+      const covered = this.decisionsEl.childElementCount > 0 || !!this.banner;
+      if (covered !== this.hintCovered) {
+        this.hintCovered = covered;
+        const life = this.hintEl.querySelector('.life') as HTMLElement | null;
+        if (!covered && life) life.style.animationDelay = `${(this.hintTimer - this.hintLife).toFixed(2)}s`;
+      }
+      if (!this.hintHold && !covered) this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.closeHint();
     } else if (this.hintQueue.length) this.openHint();
   }
@@ -629,56 +678,103 @@ export class Hud {
     if (list.length <= MAX_DECISIONS) this.decisionsOpen = false;
     const shown = this.decisionsOpen ? list : list.slice(0, MAX_DECISIONS);
     const hidden = list.length - shown.length;
-    const key = `${hidden}|` + shown.map((d) => `${d.id}:${d.yesOk}:${d.body}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
-    if (key !== this.decisionKey) {
-      this.decisionKey = key;
-      clear(this.decisionsEl);
-      shown.forEach((d, i) => {
-        const card = stone(
-          `decision veined ${i > 0 ? 'compact' : ''}${d.urgent ? ' urgent' : ''}`,
-          h('div', { class: 'd-head' }, h('span', { class: 'glyph' }, d.icon), h('b', null, d.title)),
-          h('div', { class: 'd-body', html: d.body }),
-          h(
-            'div',
-            { class: 'd-buttons' },
-            h('button', { class: 'btn small', onclick: () => this.on.decide(d.id, false) }, d.no),
-            ...(d.options
-              ? d.options.map((o) => {
-                  const b = h('button', { class: `btn small ${o.primary ? 'primary' : ''}`, disabled: !o.ok, onclick: () => this.on.decide(d.id, true, o.choice), html: o.label });
-                  // Disabled buttons take no pointer: the reason lives on a wrapper.
-                  return o.tip ? h('span', { class: 'bw', 'data-tip': o.tip }, b) : b;
-                })
-              : [h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes)]),
-          ),
-          h('div', { class: 'vessel thin gold d-timer', 'data-tip': tr(`Si no decides: «${d.no}»`, `If you do not decide: “${d.no}”`) }, h('i')),
-        );
-        if (d.urgent) card.append(h('div', { class: 'seam top' }));
-        card.dataset.id = String(d.id);
-        this.decisionsEl.append(card);
-      });
-      if (hidden > 0)
-        this.decisionsEl.append(
-          h(
-            'button',
-            {
-              class: 'btn small d-more',
-              onclick: () => {
-                this.decisionsOpen = true;
-                this.decisionKey = '';
-              },
-            },
-            tr(`+${hidden} ${hidden === 1 ? 'decisión más' : 'decisiones más'}`, `+${hidden} more ${hidden === 1 ? 'decision' : 'decisions'}`),
-          ),
-        );
+    // Each card is built once and then patched in place: rebuilding them all whenever a number in a
+    // text changed replayed their entrance and made them flicker. Only a card whose buttons change
+    // shape is rebuilt, and then without the entrance.
+    if (this.decisionsStale) {
+      for (const c of this.cards.values()) c.el.remove();
+      this.cards.clear();
     }
-    for (const d of shown) {
-      const bar = this.decisionsEl.querySelector(`[data-id="${d.id}"] .d-timer`) as HTMLElement | null;
-      if (!bar) continue;
-      const v = Math.max(0, d.left / d.dur);
-      (bar.firstChild as HTMLElement).style.setProperty('--v', `${v * 100}%`);
-      // The last quarter of the time burns.
-      bar.classList.toggle('low', v < 0.25);
+    const want: HTMLElement[] = [];
+    shown.forEach((d, i) => {
+      const shape = d.options ? d.options.map((o) => `${o.choice}${o.primary ? 'p' : ''}${o.tip ? 't' : ''}`).join(',') : 'yes';
+      let c = this.cards.get(d.id);
+      if (!c || c.shape !== shape) {
+        const el = this.decisionCard(d);
+        if (c || this.decisionsStale) el.classList.add('no-enter');
+        if (c) c.el.replaceWith(el);
+        c = { el, shape };
+        this.cards.set(d.id, c);
+      }
+      this.patchCard(c.el, d, i > 0);
+      want.push(c.el);
+    });
+    this.decisionsStale = false;
+    const ids = new Set(shown.map((d) => d.id));
+    for (const [id, c] of this.cards)
+      if (!ids.has(id)) {
+        c.el.remove();
+        this.cards.delete(id);
+      }
+    if (hidden > 0) {
+      this.moreBtn ??= h('button', { class: 'btn small d-more', onclick: () => (this.decisionsOpen = true) });
+      setText(this.moreBtn, tr(`+${hidden} ${hidden === 1 ? 'decisión más' : 'decisiones más'}`, `+${hidden} more ${hidden === 1 ? 'decision' : 'decisions'}`));
+      want.push(this.moreBtn);
+    } else this.moreBtn?.remove();
+    // Put them in order, moving only what is out of place (a moved card does not enter again).
+    want.forEach((el, i) => {
+      const at = this.decisionsEl.children[i];
+      if (at === el) return;
+      if (el.isConnected && el !== this.moreBtn) el.classList.add('no-enter');
+      this.decisionsEl.insertBefore(el, at ?? null);
+    });
+  }
+
+  private decisionCard(d: DecisionView) {
+    const card = stone(
+      'decision veined',
+      h('div', { class: 'd-head' }, h('span', { class: 'glyph' }), h('b')),
+      h('div', { class: 'd-body' }),
+      h(
+        'div',
+        { class: 'd-buttons' },
+        h('button', { class: 'btn small d-no', onclick: () => this.on.decide(d.id, false) }),
+        ...(d.options
+          ? d.options.map((o) => {
+              const b = h('button', { class: `btn small d-opt ${o.primary ? 'primary' : ''}`, onclick: () => this.on.decide(d.id, true, o.choice) });
+              // Disabled buttons take no pointer: the reason lives on a wrapper.
+              return o.tip ? h('span', { class: 'bw' }, b) : b;
+            })
+          : [h('button', { class: 'btn small primary d-yes', onclick: () => this.on.decide(d.id, true) })]),
+      ),
+      h('div', { class: 'vessel thin gold d-timer' }, h('i')),
+    );
+    card.dataset.id = String(d.id);
+    return card;
+  }
+
+  /** Brings a card in line with its decision, touching only what changed. */
+  private patchCard(card: HTMLElement, d: DecisionView, compact: boolean) {
+    card.classList.toggle('compact', compact);
+    card.classList.toggle('urgent', !!d.urgent);
+    let seam = card.querySelector(':scope > .seam.top');
+    if (d.urgent && !seam) card.append((seam = h('div', { class: 'seam top' })));
+    else if (!d.urgent) seam?.remove();
+    const q = (sel: string) => card.querySelector(sel) as HTMLElement;
+    setText(q('.d-head .glyph'), d.icon);
+    setText(q('.d-head b'), d.title);
+    const body = q('.d-body');
+    setHtml(body, d.body);
+    setText(q('.d-no'), d.no);
+    const yes = card.querySelector('.d-yes') as HTMLButtonElement | null;
+    if (yes) {
+      setText(yes, d.yes);
+      if (yes.disabled !== !d.yesOk) yes.disabled = !d.yesOk;
     }
+    const opts = card.querySelectorAll<HTMLButtonElement>('.d-opt');
+    d.options?.forEach((o, i) => {
+      const b = opts[i];
+      if (!b) return;
+      setHtml(b, o.label);
+      if (b.disabled !== !o.ok) b.disabled = !o.ok;
+      const w = b.parentElement;
+      if (o.tip && w?.classList.contains('bw') && w.dataset.tip !== o.tip) w.dataset.tip = o.tip;
+    });
+    const bar = q('.d-timer');
+    const tip = tr(`Si no decides: «${d.no}»`, `If you do not decide: “${d.no}”`);
+    if (bar.dataset.tip !== tip) bar.dataset.tip = tip;
+    const v = Math.max(0, d.left / d.dur);
+    this.fill(bar, v, `vessel thin gold d-timer${v < 0.25 ? ' low' : ''}`);
   }
 
   // ------------------------------------------------------------------ hints
@@ -696,7 +792,8 @@ export class Hud {
     for (let k = 1; k < this.hintQueue.length; k++) if (this.hintQueue[k].prio > this.hintQueue[i].prio) i = k;
     const q = this.hintQueue.splice(i, 1)[0];
     q.onShow?.();
-    this.hintTimer = q.prio >= 2 ? 18 : 14;
+    this.hintTimer = this.hintLife = q.prio >= 2 ? 18 : 14;
+    this.hintCovered = false;
     // A thread of moss along the bottom shows how long it stays; it waits while the pointer rests on it.
     const el = stone(
       'hint',

@@ -1,10 +1,12 @@
 import type { Stage } from '../render/Stage';
-import { h } from './dom';
+import { h, setHtml } from './dom';
 
 /** HTML labels that follow points in the 3D scene. */
 export class Labels {
   private pool = new Map<string, { el: HTMLElement; used: boolean }>();
   private p = { x: 0, y: 0, vis: false };
+  /** The host's box, read once a frame (reading it per label forced a layout for each one). */
+  private r: DOMRect | null = null;
 
   constructor(
     private host: HTMLElement,
@@ -12,6 +14,7 @@ export class Labels {
   ) {}
 
   begin() {
+    this.r = this.host.getBoundingClientRect();
     for (const v of this.pool.values()) v.used = false;
   }
 
@@ -24,17 +27,15 @@ export class Labels {
     }
     e.used = true;
     if (e.el.className !== cls) e.el.className = cls;
-    if (e.el.dataset.html !== html) {
-      e.el.innerHTML = html;
-      e.el.dataset.html = html;
-    }
+    // Patched in place: a blinking warning on a label keeps its rhythm when a number beside it changes.
+    setHtml(e.el, html);
     const p = this.stage.project(x, y, z, this.p);
-    const r = this.host.getBoundingClientRect();
+    const r = (this.r ??= this.host.getBoundingClientRect());
     if (!p.vis) {
-      e.el.style.display = 'none';
+      if (e.el.style.display !== 'none') e.el.style.display = 'none';
       return;
     }
-    e.el.style.display = '';
+    if (e.el.style.display) e.el.style.display = '';
     e.el.style.left = `${p.x - r.left}px`;
     e.el.style.top = `${p.y - r.top + dy}px`;
   }

@@ -10,7 +10,7 @@ import { DEFENCES, MAX_LEVEL, TECH_POWER, WORK_POWER, defLevel, fleetCatch, lanc
 import { clamp } from '../util';
 import { DIG_COST, DIG_TIME, FAITH_TIERS, FORGE_COST, RELICS, RELICS_NEEDED, STUDY_COST, dreadOf, faithOf, popOf, type FaithSim } from '../sim/faith';
 import { fmtPop } from './text';
-import { h, stone, clear } from './dom';
+import { h, stone, clear, setHtml, setText } from './dom';
 
 export const resName = (k: keyof Resources) =>
   ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
@@ -58,11 +58,8 @@ export class ProjectsPanel {
   private research: { btn: HTMLButtonElement; note: HTMLElement; cost: HTMLElement; title: HTMLElement; bar: HTMLElement; warn: HTMLElement } | null = null;
   private closeFn: () => void = () => {};
   private beyond = h('div', { class: 'beyond' });
-  private beyondHtml = '';
   private defences = h('div', { class: 'defences' });
-  private defHtml = '';
   private faithBox = h('div', { class: 'faith-box' });
-  private faithHtml = '';
   private tabBar = h('div', { class: 'proj-tabs', role: 'tablist' });
   private tabs = {} as Record<ProjTab, { btn: HTMLButtonElement; dot: HTMLElement; pane: HTMLElement }>;
   private tab: ProjTab = lastTab;
@@ -643,16 +640,17 @@ export class ProjectsPanel {
     // A tab that is not there yet (an old memory, or a tab asked for too soon) falls back to the works.
     if (!open[this.tab]) this.show('works');
     const r = this.civ.rates;
-    this.res.innerHTML = RES_KEYS.map(
-      (k) => `<span class="res-pill ${k}"><b>${RES_ICON[k]} ${int(civ.res[k])}</b><small>${resName(k)} · +${r[k].toFixed(1).replace('.', tr(',', '.'))}/s</small></span>`,
-    ).join('');
+    setHtml(
+      this.res,
+      RES_KEYS.map((k) => `<span class="res-pill ${k}"><b>${RES_ICON[k]} ${int(civ.res[k])}</b><small>${resName(k)} · +${r[k].toFixed(1).replace('.', tr(',', '.'))}/s</small></span>`).join(''),
+    );
     for (const c of this.cards) {
       const done = !!civ.done[c.def.id];
       const building = civ.building?.id === c.def.id;
       const lock = this.civ.lock(c.def.id);
       // Chips turn red only when even the first installment (25 %) cannot be paid.
       const html = costChips(c.def.cost, { metal: civ.res.metal / UPFRONT, fuel: civ.res.fuel / UPFRONT, water: civ.res.water / UPFRONT, science: civ.res.science / UPFRONT });
-      if (c.cost.innerHTML !== html) c.cost.innerHTML = html;
+      setHtml(c.cost, html);
       c.el.classList.toggle('done', done);
       c.el.classList.toggle('building', building);
       c.el.classList.toggle('locked', !done && !building && !!lock);
@@ -664,9 +662,11 @@ export class ProjectsPanel {
       const pct = building ? Math.round((civ.building!.t / civ.building!.dur) * 100) : 0;
       // The figure goes in the reading face: Cinzel's 1 looks like a Roman I.
       const label = done ? tr('Completado ✓', 'Completed ✓') : building ? tr(`En obra · <span class="num">${pct} %</span>`, `Under way · <span class="num">${pct}%</span>`) : tr('Construir', 'Build');
-      if (c.btn.innerHTML !== label) c.btn.innerHTML = label;
+      setHtml(c.btn, label);
       const missing = building ? this.civ.shortfall() : null;
-      c.note.textContent = done
+      setText(
+        c.note,
+        done
         ? ''
         : building
           ? missing
@@ -676,10 +676,11 @@ export class ProjectsPanel {
             ? pick(lock)
             : short
               ? tr('Faltan recursos para empezar (el 25 %).', 'Not enough resources to start (25%).')
-              : '';
+              : '',
+      );
       if (c.checks) {
         const html = done ? '' : this.civ.arkNeeds().map((n) => `<li class="${n.ok ? 'ok' : ''}">${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}</li>`).join('');
-        if (c.checks.innerHTML !== html) c.checks.innerHTML = html;
+        setHtml(c.checks, html);
       }
       // What it would add to the threat, before it is built.
       this.setWarn(c.warn, done || building ? null : this.threatNote(WORK_POWER));
@@ -688,29 +689,27 @@ export class ProjectsPanel {
       const R = this.research;
       const lvl = civ.tech ?? 0;
       const next = TECHS[lvl % TECHS.length];
-      R.title.textContent = `${tr('Investigación', 'Research')} · ${tr(next.es, next.en)}`;
+      setText(R.title, `${tr('Investigación', 'Research')} · ${tr(next.es, next.en)}`);
       const html = costChips(researchCost(lvl), civ.res);
-      if (R.cost.innerHTML !== html) R.cost.innerHTML = html;
+      setHtml(R.cost, html);
       R.bar.style.display = civ.research ? '' : 'none';
       if (civ.research) (R.bar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round((civ.research.t / civ.research.dur) * 100)}%`);
       const lock = this.civ.researchLock();
       R.btn.disabled = !!lock;
-      R.btn.textContent = civ.research ? tr('Investigando…', 'Researching…') : tr('Investigar', 'Research');
-      R.note.textContent = civ.research ? '' : lock ? pick(lock) : tr(`Tecnologías dominadas: ${lvl}`, `Technologies mastered: ${lvl}`);
+      setText(R.btn, civ.research ? tr('Investigando…', 'Researching…') : tr('Investigar', 'Research'));
+      setText(R.note, civ.research ? '' : lock ? pick(lock) : tr(`Tecnologías dominadas: ${lvl}`, `Technologies mastered: ${lvl}`));
       this.setWarn(R.warn, civ.research ? null : this.threatNote(TECH_POWER));
     }
     for (const m of this.mission) {
       const lock = this.civ.missionLock(m.kind);
       m.btn.disabled = !!lock;
-      m.note.textContent = lock ? pick(lock) : '';
+      setText(m.note, lock ? pick(lock) : '');
       const html = costChips(MISSION_COST[m.kind], civ.res);
-      if (m.cost.innerHTML !== html) m.cost.innerHTML = html;
+      setHtml(m.cost, html);
     }
-    const dh = this.defencesView();
-    if (dh !== this.defHtml) this.defences.innerHTML = this.defHtml = dh;
-    const fh = this.faithView();
-    if (fh !== this.faithHtml) this.faithBox.innerHTML = this.faithHtml = fh;
-    const bh = this.beyondView();
-    if (bh !== this.beyondHtml) this.beyond.innerHTML = this.beyondHtml = bh;
+    // Patched in place: rebuilding replayed the cards' entrance and dropped hover and focus.
+    setHtml(this.defences, this.defencesView());
+    setHtml(this.faithBox, this.faithView());
+    setHtml(this.beyond, this.beyondView());
   }
 }

@@ -30,6 +30,65 @@ export function clear(el: HTMLElement) {
   return el;
 }
 
+/** Sets a text only when it differs, so the node is left alone otherwise. */
+export function setText(el: Node, v: string) {
+  if (el.textContent !== v) el.textContent = v;
+}
+
+const scratch = document.createElement('template');
+
+/**
+ * Brings `el`'s content in line with `html` by patching only what differs: the same tag keeps its
+ * node (attributes and text are updated in place), so a refresh does not restart the CSS animations
+ * of what is already on screen (the flowing vessels, entrances) nor drop hover and focus.
+ */
+export function morph(el: Element, html: string) {
+  scratch.innerHTML = html;
+  patchChildren(el, scratch.content);
+}
+
+const shown = new WeakMap<Element, string>();
+
+/** Morphs `el` to `html` only when it differs from the last html given (the DOM is never read back). */
+export function setHtml(el: Element, html: string) {
+  if (shown.get(el) === html) return;
+  shown.set(el, html);
+  morph(el, html);
+}
+
+function patchChildren(to: Node, from: Node) {
+  let a = to.firstChild;
+  let b = from.firstChild;
+  while (b) {
+    const next = b.nextSibling;
+    if (!a) to.appendChild(b);
+    else if (a.nodeType === b.nodeType && a.nodeName === b.nodeName) {
+      patchNode(a, b);
+      a = a.nextSibling;
+    } else {
+      const after = a.nextSibling;
+      to.replaceChild(b, a);
+      a = after;
+    }
+    b = next;
+  }
+  while (a) {
+    const after = a.nextSibling;
+    to.removeChild(a);
+    a = after;
+  }
+}
+
+function patchNode(a: Node, b: Node) {
+  if (!(a instanceof Element) || !(b instanceof Element)) {
+    if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue;
+    return;
+  }
+  for (const at of Array.from(a.attributes)) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  for (const at of Array.from(b.attributes)) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  patchChildren(a, b);
+}
+
 /** Hand-drawn glyphs for the tools (stroked with currentColor). */
 export const ICONS = {
   gather: '<svg viewBox="0 0 32 32"><path d="M16 16m-2 0a2 2 0 1 0 4 0a4 4 0 1 0-8 0a6 6 0 1 0 12 0a8 8 0 1 0-16 0a10 10 0 0 0 10 10"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>',
