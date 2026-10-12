@@ -15,7 +15,9 @@ import { BodiesView } from '../render/BodiesView';
 import { SystemView } from '../render/SystemView';
 import { lookOfWorld } from '../render/Planet';
 import { worldRadius, worldXZ } from '../render/layout';
-import { Hud, type Action, type DecisionView } from '../ui/Hud';
+import { Hud, type Action, type DecisionView, type FaithInfo } from '../ui/Hud';
+import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
+import { fmtPopEn, fmtPopEs } from '../content/pop';
 import { Inspector, Ledger, kindDot } from '../ui/Panels';
 import { Labels } from '../ui/Labels';
 import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
@@ -825,6 +827,35 @@ export class Game {
         this.colonyHint();
         return;
       }
+      case 'bless': {
+        // A golden aurora over the world.
+        const w = s.worlds.find((x) => x.id === f.world);
+        const p = this.systemView.posOf(f.world);
+        if (w && p) {
+          const r = worldRadius(w);
+          this.fx.ring(p.x, p.z, 0xffe1a0, r * 3 + 2, 2.4);
+          setTimeout(() => this.fx.ring(p.x, p.z, 0xfff0c8, r * 5 + 3, 2.8, 0, true), 300);
+          this.fx.flash(p.x, 0, p.z, 0xffe6b0, r * 4 + 3, 1.8);
+        }
+        sound.chime('good');
+        return;
+      }
+      case 'relic': {
+        const p = this.systemView.posOf(f.world);
+        if (p) {
+          this.fx.flash(p.x, 0, p.z, 0x9fd4ff, 10, 2);
+          this.fx.ring(p.x, p.z, 0x6f9bff, 12, 2.6);
+          this.fx.ring(p.x, p.z, 0xffd27a, 7, 2);
+        }
+        sound.chime('good');
+        this.hint('s.relic', '◬', () =>
+          tr(
+            '¡Una reliquia de los Precursores! Con las suficientes, la Orden podrá <b>forjar los Space Patrols</b> desde <b>Proyectos → La fe</b>. Si los Patrols ya existen, cada reliquia arma una compañía más.',
+            'A relic of the Precursors! With enough of them, the Order can <b>forge the Space Patrols</b> from <b>Projects → Faith</b>. If the Patrols already exist, every relic arms one more company.',
+          ),
+        );
+        return;
+      }
       case 'rogueCaught': {
         const p = this.systemView.posOf(f.world) ?? new THREE.Vector3();
         this.fx.ring(p.x, p.z, 0xe8d2a0, 12, 2.4);
@@ -934,7 +965,14 @@ export class Game {
     this.targeting = a;
     this.hud.setActiveTool(a);
     if (!a) return this.hud.showBanner(null);
-    const name = { flare: tr('la llamarada', 'the flare'), volcano: tr('despertar volcanes', 'waking volcanoes'), comets: tr('la lluvia de cometas', 'the comet shower'), migrate: tr('la migración', 'the migration'), wrath: tr('la ira de la estrella', 'the wrath of the star') }[a];
+    const name = {
+      flare: tr('la llamarada', 'the flare'),
+      volcano: tr('despertar volcanes', 'waking volcanoes'),
+      comets: tr('la lluvia de cometas', 'the comet shower'),
+      migrate: tr('la migración', 'the migration'),
+      wrath: tr('la ira de la estrella', 'the wrath of the star'),
+      bless: tr('la bendición (un mundo habitado)', 'the blessing (a peopled world)'),
+    }[a];
     const extra = a === 'flare' ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)') : '';
     this.hud.showBanner(tr(`Elige un objetivo para ${name}${extra}.`, `Choose a target for ${name}${extra}.`));
   }
@@ -943,8 +981,8 @@ export class Game {
     const sim = this.sim;
     if (!sim) return;
     sound.click();
-    if (!sim.canAfford(COST[a])) {
-      this.hud.showTip(tr(`Necesitas <b>${COST[a]}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${COST[a]}</b> starlight. It refills on its own over time.`), 3.5);
+    if (!sim.canAfford(sim.cost(a))) {
+      this.hud.showTip(tr(`Necesitas <b>${sim.cost(a)}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${sim.cost(a)}</b> starlight. It refills on its own over time.`), 3.5);
       return;
     }
     if (typeof this.selected === 'number') {
@@ -960,12 +998,18 @@ export class Game {
     this.setTargeting(null);
     const st = sim.stats(w);
     const say = (es: string, en: string) => this.hud.showTip(tr(es, en), 3.8);
-    if (!sim.canAfford(COST[a])) return say(`Necesitas <b>${COST[a]}</b> de luz estelar.`, `You need <b>${COST[a]}</b> starlight.`);
+    if (!sim.canAfford(sim.cost(a))) return say(`Necesitas <b>${sim.cost(a)}</b> de luz estelar.`, `You need <b>${sim.cost(a)}</b> starlight.`);
     if (a === 'flare') {
       sim.flare(w);
       return;
     }
     if (a === 'wrath') return this.wrathMenu(w);
+    if (a === 'bless') {
+      const lock = sim.blessLock(w);
+      if (lock) return say(lock.es, lock.en);
+      if (sim.bless(w)) sound.chime('good');
+      return;
+    }
     if (a === 'volcano') {
       if (st.giant) return say('Un gigante gaseoso no tiene volcanes: no tiene suelo.', 'A gas giant has no volcanoes: it has no ground.');
       if (massOf(w) < 0.03) return say(`${w.name} es tan pequeño que su interior ya se enfrió.`, `${w.name} is so small its interior has already cooled.`);
@@ -976,7 +1020,7 @@ export class Game {
     }
     if (a === 'comets') {
       if (st.giant) return say('Los cometas se pierden en las nubes de un gigante. Elige un mundo rocoso o una luna.', 'Comets vanish into a giant’s clouds. Choose a rocky world or a moon.');
-      s.energy -= COST.comets;
+      s.energy -= sim.cost('comets');
       this.hold++;
       playComets(this.ui, w.name, lookOfWorld(w, st), (gain) => {
         this.hold = Math.max(0, this.hold - 1);
@@ -991,7 +1035,8 @@ export class Game {
     }
     if (a === 'migrate') {
       if (w.parent !== null) return say('Las lunas siguen a su planeta: migra el planeta entero.', 'Moons follow their planet: migrate the whole planet.');
-      s.energy -= COST.migrate;
+      const paid = sim.cost('migrate');
+      s.energy -= paid;
       this.hold++;
       const L = s.L * s.dial;
       playMigration(
@@ -1005,7 +1050,7 @@ export class Game {
         (factor) => {
           this.hold = Math.max(0, this.hold - 1);
           if (factor && Math.abs(factor - 1) > 1e-3) sim.migrate(w, factor, false);
-          else if (factor === null) s.energy += COST.migrate;
+          else if (factor === null) s.energy += paid;
           this.save();
         },
       );
@@ -1039,7 +1084,7 @@ export class Game {
       tithe: {
         icon: '✝',
         name: tr('Exigir ofrendas', 'Demand offerings'),
-        desc: tr('Te ofrecen vidas en sacrificio. Su fe aviva la estrella: ganas luz estelar, más cuanto más poblado sea el mundo.', 'They offer you lives in sacrifice. Their faith feeds the star: you gain starlight, more the more peopled the world.'),
+        desc: tr('Te ofrecen vidas en sacrificio. Su miedo aviva la estrella: ganas luz estelar, más cuanto más poblado sea el mundo (y lo pagas en fe, que se vuelve temor).', 'They offer you lives in sacrifice. Their fear feeds the star: you gain starlight, more the more peopled the world (and you pay for it in faith, which turns to dread).'),
       },
     };
     this.hold++;
@@ -1064,7 +1109,7 @@ export class Game {
           },
           h('span', { class: 'wo-ico' }, d.icon),
           h('span', { class: 'wo-text' }, h('b', null, d.name), h('small', null, lock ? pick(lock) : d.desc)),
-          h('span', { class: 'wo-cost' }, WRATH_COST[k] ? `☀ ${WRATH_COST[k]}` : tr('☀ +', '☀ +')),
+          h('span', { class: 'wo-cost' }, `☀ ${WRATH_COST[k]}`),
         ),
       );
     }
@@ -1156,9 +1201,9 @@ export class Game {
       return;
     }
     const n = Number(e.key);
-    if (n >= 1 && n <= 5) {
+    if (n >= 1 && n <= 6) {
       if (this.formation && n <= 4) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
-      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate', 'wrath'] as Action[])[n - 1]);
+      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate', 'wrath', 'bless'] as Action[])[n - 1]);
     }
     if (e.key === 'p' || e.key === 'P') this.openProjects();
     if (e.key === 'c' || e.key === 'C') this.openChronicle();
@@ -1632,7 +1677,7 @@ export class Game {
         const reachedAll = all.filter((w) => isSettled(w) || (w.life?.origin && w.life.stage >= 2)).length;
         this.hud.update(
           s,
-          { energyRate: rate, energyCap: sim.civ.energyCap, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached: Math.max(reached, reachedAll), total: all.length, late: this.lateInfo() },
+          { energyRate: rate, energyCap: sim.civ.energyCap, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached: Math.max(reached, reachedAll), total: all.length, late: this.lateInfo(), faith: this.faithInfo() },
           dt,
         );
         const civ = s.civ;
@@ -1657,6 +1702,20 @@ export class Game {
             tr(
               'Las <b>Freedom Wings</b> suman naves solas: más con cada mundo con vida y con la paz entre los pueblos (también se compran con ciencia, caras). Cuando una colonia lejana pida ayuda, elige el tamaño: <b>S</b> para riesgo bajo, <b>M</b> para medio y <b>L</b> para alto. Una flota chica contra un riesgo alto puede no volver.',
               'The <b>Freedom Wings</b> gather ships on their own: more with every living world and with peace between the peoples (they can also be bought with science, at a price). When a distant colony asks for help, pick the size: <b>S</b> for a low risk, <b>M</b> for medium and <b>L</b> for high. A small fleet against a high risk may never come back.',
+            ),
+          );
+        if (s.peoples?.some((p) => !p.gone && faithOf(p) >= 0.3))
+          this.hint('s.faith', '❂', () =>
+            tr(
+              'Los pueblos empiezan a <b>creer en la estrella</b> (❂ bajo la luz estelar). La fe crece cuando los salvas, los <b>bendices</b> (tecla 6), proteges a los nativos o impones treguas, y da luz estelar y otros dones. Si dos pueblos creen lo bastante, fundarán la <b>Orden de la Estrella</b>.',
+              'The peoples are beginning to <b>believe in the star</b> (❂ under the starlight). Faith grows when you save them, <b>bless</b> them (key 6), shelter natives or force truces, and it brings starlight and other gifts. If two peoples believe enough, they will found the <b>Order of the Star</b>.',
+            ),
+          );
+        if (s.faith?.order)
+          this.hint('s.order', '❂', () =>
+            tr(
+              'Nace la <b>Orden de la Estrella</b>. En <b>Proyectos → La fe</b> puede <b>leer los cielos</b> para encontrar yacimientos de los Precursores en las lunas, excavarlos con peregrinos y, con sus reliquias, <b>forjar los Space Patrols</b>.',
+              'The <b>Order of the Star</b> is born. In <b>Projects → Faith</b> it can <b>read the heavens</b> to find the Precursors’ sites on the moons, dig them with pilgrims and, with their relics, <b>forge the Space Patrols</b>.',
             ),
           );
         if (sim.topStage >= 3)
@@ -1687,8 +1746,8 @@ export class Game {
             this.projects.refresh();
           }
         }
-        const afford: Record<string, { ok: boolean; afford: boolean }> = {};
-        for (const a of ['flare', 'volcano', 'comets', 'migrate', 'wrath'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
+        const afford: Record<string, { ok: boolean; afford: boolean; cost?: number }> = {};
+        for (const a of ['flare', 'volcano', 'comets', 'migrate', 'wrath', 'bless'] as Action[]) afford[a] = { ok: true, afford: s.energy >= sim.cost(a), cost: COST[a] ? sim.cost(a) : undefined };
         this.hud.setActionState(afford);
         if (this.panelT <= 0) {
           this.panelT = 0.3;
@@ -1738,6 +1797,22 @@ export class Game {
       res: civ.res,
       rates: sim.civ.rates,
       canBuild,
+    };
+  }
+
+  /** Faith in the star, for the starlight slab. */
+  private faithInfo(): FaithInfo | null {
+    const f = this.s?.faith;
+    if (!f || !this.s) return null;
+    const t = f.tier ? FAITH_TIERS[f.tier - 1] : null;
+    return {
+      believers: f.believers,
+      believersTxt: { es: fmtPopEs(f.believers), en: fmtPopEn(f.believers) },
+      dread: dreadOf(this.s),
+      tier: f.tier,
+      tierName: t?.name ?? { es: '', en: '' },
+      gift: t?.gift ?? null,
+      order: !!f.order,
     };
   }
 
@@ -1793,8 +1868,20 @@ export class Game {
         if (sim.civ.upgrade(id)) sound.chime('good');
         panel.refresh();
       },
+      study: () => {
+        if (sim.faith.study()) sound.chime('good');
+        panel.refresh();
+      },
+      dig: (id) => {
+        if (sim.faith.dig(id)) sound.whoosh();
+        panel.refresh();
+      },
+      forge: () => {
+        if (sim.faith.forge()) sound.chime('good');
+        panel.refresh();
+      },
       close: () => {},
-    }, sim.patrols, sim.wings);
+    }, sim.patrols, sim.wings, sim.faith);
     this.projects = panel;
     const close = modal(this.ui, {
       title: tr('Grandes obras', 'Great works'),

@@ -191,34 +191,54 @@ export class PatrolSim {
     else if (p.phase === 'orbit' && s.time >= p.next) this.think(p);
   }
 
-  /** Invaders holding several worlds for a while: the peoples raise the Space Patrols. */
+  /**
+   * Invaders holding several worlds for a while: the peoples raise the Space Patrols in a hurry. Once
+   * the Order of the Star exists, that is their path to them (ancient relics and a forge), and only a
+   * true emergency — invaders on four worlds — makes the peoples raise them anyway.
+   */
   private watch(dt: number) {
     const s = this.h.s;
     const held = s.worlds.filter((w) => w.invaded >= 0.6).length;
     if (held >= 2) this.heldT += dt;
     else this.heldT = Math.max(0, this.heldT - dt * 0.5);
-    if (!s.patrol && s.civ && (held >= 3 || this.heldT > 90)) this.deploy();
+    const order = !!s.faith?.order;
+    if (!s.patrol && s.civ && (order ? held >= 4 : held >= 3 || this.heldT > 90)) this.raise('war');
   }
 
-  private deploy() {
+  /**
+   * The Space Patrols are founded: forged by the Order with the Precursors' technology (`faith`), or
+   * raised against the invaders (`war`). Returns false while no people can crew a battle barge.
+   */
+  raise(origin: 'faith' | 'war', companies = 1) {
     const s = this.h.s;
     const peoples = this.h.peoples;
     const lead = peoples.leader();
-    if (!lead || peoples.stage(lead) < 4) return;
+    if (!lead || peoples.stage(lead) < 4 || !s.civ) return false;
     const home = peoples.home(lead) ?? peoples.worldsOf(lead)[0];
-    if (!home) return;
+    if (!home) return false;
     const q = this.pos(home);
-    const barge = this.h.rng.pick(BARGES);
-    s.patrol = { barge, born: s.time, phase: 'rising', t: 0, x: q.x, y: 0, z: q.z, sx: q.x, sy: 0, sz: q.z, ang: Math.atan2(q.z, q.x), next: s.time + 16, lanceT: 4, kills: 0, purges: 0, wars: 0, strikes: 0 };
+    // «Unbroken Faith» is kept for the barge the Order forges.
+    const barge = origin === 'faith' ? BARGES[3] : this.h.rng.pick(BARGES.filter((b) => b !== BARGES[3]));
+    s.patrol = { barge, origin, born: s.time, phase: 'rising', t: 0, x: q.x, y: 0, z: q.z, sx: q.x, sy: 0, sz: q.z, ang: Math.atan2(q.z, q.x), next: s.time + 16, lanceT: 4, kills: 0, purges: 0, wars: 0, strikes: 0 };
+    if (companies > 1) (s.civ.def ??= {}).patrol = Math.max(s.civ.def.patrol ?? 1, companies);
     this.h.fx({ kind: 'deploy', world: home.id });
     const [al, AL] = invaderNames(s.alienSpecies);
-    this.h.news(
-      '⛨',
-      `Ante la amenaza de los ${al}, los pueblos del sistema fundan los Space Patrols: guerreros acorazados que juran proteger la estrella. No conocerán el miedo.`,
-      `Facing the threat of the ${AL}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They shall know no fear.`,
-      'good',
-    );
+    if (origin === 'faith')
+      this.h.news(
+        '⛨',
+        'Con la tecnología de los Precursores, la Orden de la Estrella arma a sus mejores: guerreros con armadura azul y oro, los Space Patrols. No conocerán el miedo.',
+        'With the Precursors’ technology, the Order of the Star arms its finest: warriors in blue and gold armour, the Space Patrols. They shall know no fear.',
+        'good',
+      );
+    else
+      this.h.news(
+        '⛨',
+        `Ante la amenaza de los ${al}, los pueblos del sistema fundan los Space Patrols: guerreros acorazados que juran proteger la estrella. No conocerán el miedo.`,
+        `Facing the threat of the ${AL}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They shall know no fear.`,
+        'good',
+      );
     this.h.news('⛨', `La barcaza de batalla «${barge.es}» se eleva desde ${home.name}. ¡Por la Estrella!`, `The battle barge “${barge.en}” rises from ${home.name}. For the Star!`, 'good');
+    return true;
   }
 
   // ------------------------------------------------------------------ the barge

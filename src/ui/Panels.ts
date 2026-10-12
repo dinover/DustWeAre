@@ -8,6 +8,7 @@ import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
 import { RELATION_ICON, RELATION_TEXT, peopleOf } from '../sim/peoples';
 import { ETHOS_INFO, USE_INFO, ethosOf, naturalUse } from '../sim/uses';
 import { coexists, colonyCap, nativeCap, pressureOn } from '../sim/population';
+import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
 
 const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
 const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
@@ -265,6 +266,23 @@ export function advice(w: World, st: WorldStats): { text: string; warn: boolean 
   }
 }
 
+/** What the peoples believe about the star (on the star's own card). */
+function faithSection(s: GameState) {
+  const f = s.faith;
+  if (!f || f.believers < 0.5) return '';
+  const now = f.tier ? FAITH_TIERS[f.tier - 1] : null;
+  const dread = dreadOf(s);
+  const fear = Math.round(dread * 100);
+  return `<section><h3 class="fa">${tr('LA FE', 'FAITH')}</h3>
+    <div class="stat"><span>${tr('Creyentes', 'Believers')}</span><span>${fmtPop(f.believers)}</span></div>
+    <div class="stat"><span>${tr('Por amor', 'Out of love')}</span><span>${fmtPop(f.devout)}</span></div>
+    ${fear > 5 ? `<div class="stat"><span>${tr('Por miedo', 'Out of fear')}</span><span class="ember">${fear} %</span></div>` : ''}
+    <div class="stat"><span>${tr('Dones', 'Gifts')}</span><span class="fa">${now ? pick(now.name) : '—'}</span></div>
+    ${now ? `<div class="small gold">${pick(now.gift)}</div>` : ''}
+    ${f.order ? `<div class="small muted" style="margin-top:4px">${tr('La Orden de la Estrella vela por esta fe.', 'The Order of the Star keeps this faith.')}</div>` : ''}
+  </section>`;
+}
+
 export interface InspectorHandlers {
   close(): void;
   rename(target: number | 'star'): void;
@@ -436,6 +454,15 @@ export class Inspector {
         <div class="people-row big"><i style="background:${hsl(people.hue)};color:${hsl(people.hue)}"></i><span>${home ? tr(`Hogar de los ${pName(people)}`, `Home of the ${pName(people)}`) : tr(`Colonia de los ${pName(people)}`, `Colony of the ${pName(people)}`)}</span><em>${pick(STAGE_NAMES[info.stage])}</em></div>
         <div class="small muted" style="margin-top:4px">${origin} ${tr(`Viven en ${where}.`, `They live on ${where}.`)}</div>
         ${(() => {
+          const v = faithOf(people);
+          const fear = dreadOf(s) > 0.3;
+          const member = !!s.faith?.order?.members.includes(people.id);
+          return `<div class="small" style="margin-top:4px"${tipAttr(
+            '<b>Fe en la estrella</b><br>Sube cuando la estrella los salva, los bendice o escucha sus plegarias. Si la estrella es cruel, creen igual… pero por miedo.',
+            '<b>Faith in the star</b><br>It rises when the star saves them, blesses them or hears their prayers. If the star is cruel, they still believe… but out of fear.',
+          )}><span class="fa">❂ ${tr(`Fe ${Math.round(v * 100)} %`, `Faith ${Math.round(v * 100)}%`)}</span> · <span class="muted">${fear ? tr('por miedo', 'out of fear') : tr('por amor', 'out of love')}${member ? tr(' · miembros de la Orden de la Estrella', ' · members of the Order of the Star') : ''}</span></div>`;
+        })()}
+        ${(() => {
           const e = ETHOS_INFO[ethosOf(people)];
           return `<div class="small ethos" style="margin-top:4px"${tipAttr(`<b>Carácter</b><br>${e.desc.es}`, `<b>Character</b><br>${e.desc.en}`)}><span class="gold">${e.icon} ${tr(`Pueblo ${e.name.es}`, `A ${e.name.en} people`)}</span> · <span class="muted">${pick(e.desc)}</span></div>`;
         })()}
@@ -476,6 +503,14 @@ export class Inspector {
         ${w.sats > 0 ? `<div class="stat" style="margin-top:6px"${tipAttr('<b>Satélites</b><br>Los lanza la era espacial. Las superllamaradas y las supernovas los derriban.', '<b>Satellites</b><br>Launched in the space age. Superflares and supernovae knock them out.')}><span>${tr('Satélites en órbita', 'Satellites in orbit')}</span><span>${w.sats}</span></div>` : ''}
       </section>`;
     }
+    const site = s.faith?.sites.find((x) => x.world === w.id);
+    if (site) {
+      html += `<section><h3 class="fa">${tr('YACIMIENTO', 'ANCIENT SITE')}</h3><div class="small">${
+        site.state === 'done'
+          ? tr('Los peregrinos de la Orden ya hallaron aquí una reliquia de los Precursores.', 'The Order’s pilgrims have already found a relic of the Precursors here.')
+          : tr('Los astrónomos de la Orden vieron aquí huellas de los Precursores. Se puede excavar desde <b>Proyectos → La fe</b>.', 'The Order’s astronomers saw traces of the Precursors here. It can be dug from <b>Projects → Faith</b>.')
+      }</div></section>`;
+    }
     if (w.plague) {
       html += `<section><h3 class="ember">${tr('PLAGA', 'PLAGUE')}</h3><div class="advice warn">${tr(
         `Una plaga se extiende por ${w.name}: mata a parte de la población cada día y puede viajar a otros mundos en sus naves. Remitirá en ${Math.ceil(w.plague)} s.`,
@@ -510,7 +545,7 @@ export class Inspector {
         <div class="stat"><span>${tr('Zona habitable', 'Habitable zone')}</span><span>${num(a, 2)}–${num(b, 2)} UA</span></div>
         <div class="stat"><span>${tr('Línea de nieve', 'Snow line')}</span><span>${num(snowLine(L), 1)} UA</span></div>
         <div class="stat"><span>${tr('Luz estelar', 'Starlight')}</span><span>+${num(energyRate, 1)} / s</span></div>
-      </section>`;
+      </section>${faithSection(s)}`;
     if (fresh) {
       clear(this.extra);
       if (s.phase === 'system') {
@@ -650,6 +685,8 @@ export class Ledger {
         const what = use ? `<b>${pick(USE_INFO[use].name)}</b><br>` : '';
         f += flag(`role-dot ${res}`, '', use ? USE_INFO[use].icon : RES_ICON[res], `${what}${tr(`Aporta <b>${resWord(res)}</b> a los pueblos del sistema`, `Gives <b>${resWord(res)}</b> to the peoples of the system`)}`);
       }
+      const site = s.faith?.sites.find((x) => x.world === w.id && x.state !== 'done');
+      if (site) f += flag('fa', '', '◬', tr('<b>Yacimiento de los Precursores</b>: se puede excavar desde Proyectos → La fe.', '<b>Precursor site</b>: it can be dug from Projects → Faith.'));
       if (w.plague) f += flag('ember', '', '☣', tr('<b>Plaga</b>: diezma a quienes viven aquí.', '<b>Plague</b>: it is thinning out whoever lives here.'));
       if (pp && (s.relations ?? []).some((x) => x.state === 'war' && (x.a === pp.id || x.b === pp.id))) f += flag('rel war', '', '⚔', tr(`Los ${pName(pp)} están en guerra`, `The ${pName(pp)} are at war`));
       if (w.invaded > 0.3) {
@@ -681,6 +718,16 @@ export class Ledger {
         chips += `<span class="rel-chip ${r.state}" data-tip="${attr(`<b>${tr(rel.es, rel.en)}</b><br>${relationSentence(r.state, a, b)}`)}"><i style="background:${hsl(a.hue)}"></i>${RELATION_ICON[r.state]}<i style="background:${hsl(b.hue)}"></i></span>`;
       }
       if (chips) ph += `<div class="rel-chips">${chips}</div>`;
+    }
+    const order = s.faith?.order;
+    if (order) {
+      const names = order.members.map((id) => peopleById(s, id)).filter((p): p is People => !!p).map(pName);
+      const f = s.faith!;
+      const tip = tr(
+        `<b>La Orden de la Estrella</b><br>${names.length ? `Sus fieles: los ${names.join(', los ')}.` : 'Calla: a sus pueblos les falta fe.'}<br>Reliquias de los Precursores: ${f.relics}${f.read ? ` de ${f.need ?? 3}` : ''}. Gestiónala en <b>Proyectos → La fe</b>.`,
+        `<b>The Order of the Star</b><br>${names.length ? `Its faithful: the ${names.join(', the ')}.` : 'Silent: its peoples lack faith.'}<br>Precursor relics: ${f.relics}${f.read ? ` of ${f.need ?? 3}` : ''}. Manage it in <b>Projects → Faith</b>.`,
+      );
+      ph += `<div class="people-row" data-tip="${attr(tip)}"><i style="background:#ffe1a0;color:#ffe1a0"></i><span>${tr('Orden de la Estrella', 'Order of the Star')}</span><em>${names.length} ❂ · ${f.relics} ◬</em></div>`;
     }
     const pt = s.patrol;
     if (pt) {

@@ -6,6 +6,7 @@ import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from 
 import { PatrolSim, type PatrolFx } from './patrols';
 import { OrbitSim, type OrbitFx } from './orbits';
 import { VoicesSim, addHarm } from './voices';
+import { DISCOUNT, FaithSim, addFaith, dreadOf, faithOf, faithTier, type FaithFx } from './faith';
 import { WingsSim } from './wings';
 import { allureOf, defLevel, shieldSlow, threatOf } from './threat';
 import { capName, moonName, speciesName, invaderName, invaderNames } from '../content/names';
@@ -28,12 +29,17 @@ export const STAGE_NAMES = [
 /** System age advances faster while nothing is alive, slower as history gets busy (millions of years per second). */
 const AGE_RATE = [12, 5, 0.6, 0.002, 0.0005, 0.0003];
 
-export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate: 35, wrath: 0 };
+export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate: 35, wrath: 0, bless: 20 };
+export type CostKey = keyof typeof COST;
+/** Seconds before the same world can be blessed again. */
+export const BLESS_WAIT = 120;
 
 /** The star's cruelty: what it can unleash on a world, and the starlight each one takes. */
 export type Wrath = 'plague' | 'storm' | 'discord' | 'winter' | 'tithe';
 export const WRATHS: Wrath[] = ['plague', 'storm', 'winter', 'discord', 'tithe'];
-export const WRATH_COST: Record<Wrath, number> = { plague: 25, storm: 45, discord: 20, winter: 30, tithe: 0 };
+export const WRATH_COST: Record<Wrath, number> = { plague: 25, storm: 45, discord: 20, winter: 30, tithe: 10 };
+/** Seconds a world needs before it can be made to offer lives again. */
+export const TITHE_WAIT = 240;
 /** Starlight it takes to shelter natives from the settlers. */
 export const NATIVE_COST = { protect: 15 };
 
@@ -42,6 +48,7 @@ export type Fx =
   | PeopleFx
   | PatrolFx
   | OrbitFx
+  | FaithFx
   | { kind: 'flare'; world: number }
   | { kind: 'flareShip'; x: number; z: number }
   | { kind: 'impact'; world: number }
@@ -60,11 +67,14 @@ export class SystemSim {
   peoples: PeopleSim;
   patrols: PatrolSim;
   wings: WingsSim;
+  faith: FaithSim;
   orbits: OrbitSim;
   voices: VoicesSim;
   private shipTimers = new Map<number, number>();
   private alienTimers = new Map<number, number>();
   private factT = 40;
+  /** When each people was last blessed (blessings in a row count less). */
+  private blessedAt = new Map<number, number>();
   private wildT = 140;
 
   constructor(public s: GameState) {
@@ -74,16 +84,22 @@ export class SystemSim {
     this.peoples = new PeopleSim(this);
     this.patrols = new PatrolSim(this);
     this.wings = new WingsSim(this);
+    this.faith = new FaithSim(this);
     this.orbits = new OrbitSim(this);
     this.voices = new VoicesSim(this);
   }
 
-  fx(f: CivFx | PeopleFx | PatrolFx | OrbitFx) {
+  fx(f: CivFx | PeopleFx | PatrolFx | OrbitFx | FaithFx) {
     this.onFx(f);
   }
 
   foundStar(name: string, people: number, ang: number) {
     this.patrols.found(name, people, ang);
+  }
+
+  /** A choice nobody made in time: routed as a refusal. */
+  expire(d: Decision) {
+    this.decide(d.id, false);
   }
 
   /** A choice made by the player on one of the pending decisions. */
@@ -103,6 +119,9 @@ export class SystemSim {
     } else if (d.kind === 'natives') {
       civ.decisions.splice(civ.decisions.indexOf(d), 1);
       this.nativesChoice(d, accept, choice);
+    } else if (d.kind === 'sign') {
+      civ.decisions.splice(civ.decisions.indexOf(d), 1);
+      this.faith.decide(d, accept);
     } else this.civ.decide(id, accept);
   }
 
@@ -173,6 +192,7 @@ export class SystemSim {
       }
     }
     s.encounters = (s.encounters ?? []).filter((e) => e.a !== id && e.b !== id);
+    this.faith.drop(id);
   }
 
   /** Highest life stage reached anywhere (−1: lifeless). */
@@ -208,6 +228,7 @@ export class SystemSim {
     this.patrols.update(dt);
     this.wings.update(dt);
     this.voices.update(dt);
+    this.faith.update(dt);
     this.updateShips(dt);
     this.updateThreats(dt);
     this.updateInvasion(dt);
@@ -215,14 +236,20 @@ export class SystemSim {
     this.wildImpacts(dt);
   }
 
-  /** Starlight gained per second. The peoples' fear feeds the star too. */
+  /** Starlight gained per second. The peoples' fear feeds the star too — and their faith. */
   get energyRate() {
-    return 0.85 * this.s.dial * (this.s.civ?.done.dyson ? 3 : 1) * (1 + this.fear);
+    return 0.85 * this.s.dial * (this.s.civ?.done.dyson ? 3 : 1) * (1 + this.fear + this.faith.grace());
+  }
+
+  /** What one of the star's actions costs right now (deep faith makes them cheaper). */
+  cost(a: CostKey) {
+    return Math.round(COST[a] * (1 - DISCOUNT[faithTier(this.s)]));
   }
 
   /** How much the peoples' fear of their star adds to its light (0..0.5): cruelty pays, in its way. */
   get fear() {
-    return this.s.peoples?.some((p) => !p.gone) ? clamp((this.s.harm ?? 0) / 100, 0, 0.5) : 0;
+    // One axis with faith: the belief that cruelty turns into dread is what feeds the star's fear.
+    return this.s.peoples?.some((p) => !p.gone) ? 0.5 * dreadOf(this.s) : 0;
   }
 
   private updateWorlds(dt: number) {
@@ -230,7 +257,7 @@ export class SystemSim {
     for (const w of s.worlds) {
       // A plague burns itself out (it also eats at any invaders camped there).
       if (w.plague) {
-        w.plague = Math.max(0, w.plague - dt);
+        w.plague = Math.max(0, w.plague - dt * (this.faithful(w) ? 2 : 1));
         w.invaded = Math.max(0, w.invaded - dt * 0.01);
       }
       const st = this.stats(w);
@@ -294,7 +321,7 @@ export class SystemSim {
     }
     const life = w.life;
     const resilience = life.stage >= 3 ? 0.55 : 1;
-    if (H >= 0.5) life.health = Math.min(1, life.health + (0.02 + 0.03 * H) * dt);
+    if (H >= 0.5) life.health = Math.min(1, life.health + (0.02 + 0.03 * H) * dt * (this.faithful(w) ? 1.25 : 1));
     else life.health -= (0.5 - H) * 0.07 * dt * resilience;
     life.health -= w.invaded * 0.025 * dt * resilience;
     // Settlers sharing the world weigh on the life that was already there (or that rose among them).
@@ -489,6 +516,8 @@ export class SystemSim {
       s.energy -= NATIVE_COST.protect;
       w.natives = 'protect';
       addHarm(s, -2);
+      addFaith(s, w.life.people ? [w.life.people] : [], 0.12);
+      if (w.owner) addFaith(s, [w.owner], 0.04);
       this.news('☀', `La luz de la estrella cae sobre los nativos de ${w.name}: los ${sn} lo entienden y les dejan una reserva.`, `The star's light falls on the natives of ${w.name}: the ${SN} understand, and leave them a reserve.`, 'good');
     } else if (accept && choice === 2) {
       w.natives = 'purge';
@@ -551,6 +580,7 @@ export class SystemSim {
       if (this.peoples.arrive(sh)) continue;
       if (this.patrols.arrive(sh)) continue;
       if (this.civ.arrive(sh)) continue;
+      if (this.faith.arrive(sh)) continue;
       // A plague travels with the ships of a sick world.
       const from = sh.from >= 0 && !sh.alien ? this.world(sh.from) : undefined;
       const w = this.world(sh.to);
@@ -605,6 +635,8 @@ export class SystemSim {
         w.climate -= 6;
         this.news('☄', `Un meteorito de tu lluvia cae sobre ${w.name}.${des}`, `A meteor of your storm falls on ${w.name}.${den}`, 'warn');
       } else if (w.life) {
+        // The star saw it coming and did nothing: faith suffers.
+        addFaith(s, this.peoplesOn(w).map((p) => p.id), -0.04);
         w.life.health -= w.life.stage >= 3 ? 0.2 : 0.35;
         this.news('☄', `Un asteroide golpeó ${w.name}. La vida resiste como puede.${des}`, `An asteroid struck ${w.name}. Life holds on as best it can.${den}`, 'warn');
       } else this.news('☄', `Un asteroide cayó sobre ${w.name} y dejó agua y compuestos orgánicos.${des}`, `An asteroid fell on ${w.name}, leaving water and organic compounds.${den}`, 'info');
@@ -919,8 +951,9 @@ export class SystemSim {
 
   flare(w: World) {
     const s = this.s;
-    if (!this.canAfford(COST.flare)) return false;
-    s.energy -= COST.flare;
+    if (!this.canAfford(this.cost('flare'))) return false;
+    s.energy -= this.cost('flare');
+    const here = this.peoplesOn(w).map((p) => p.id);
     this.onFx({ kind: 'flare', world: w.id });
     const had = w.invaded;
     // Burning a world where people live (not to drive invaders out) is a cruelty they remember.
@@ -937,14 +970,19 @@ export class SystemSim {
     const threats = s.threats.filter((t) => t.target === w.id);
     for (const t of threats) s.threats.splice(s.threats.indexOf(t), 1);
     s.ships = s.ships.filter((sh) => !(sh.alien && sh.to === w.id && sh.t / sh.dur > 0.6));
+    // A people saved by the star's light believes in it a little more.
+    if (threats.some((t) => !t.storm)) addFaith(s, here, 0.08);
+    else if (had >= 0.3 && w.invaded < 0.3) addFaith(s, here, 0.06);
     if (threats.length) this.news('☀', `Tu llamarada desvió el asteroide que amenazaba ${w.name}.`, `Your flare deflected the asteroid threatening ${w.name}.`, 'good');
     else if (had >= 0.3 && w.invaded < 0.3) this.news('☀', `La llamarada expulsó a los visitantes de ${w.name}.`, `The flare drove the visitors away from ${w.name}.`, 'good');
     return true;
   }
 
   flareShip(sh: Ship) {
-    if (!sh.alien || !this.canAfford(COST.flareShip)) return false;
-    this.s.energy -= COST.flareShip;
+    if (!sh.alien || !this.canAfford(this.cost('flareShip'))) return false;
+    this.s.energy -= this.cost('flareShip');
+    const target = this.world(sh.to);
+    if (target) addFaith(this.s, this.peoplesOn(target).map((p) => p.id), 0.01);
     this.s.ships.splice(this.s.ships.indexOf(sh), 1);
     this.shipDown(sh);
     return true;
@@ -952,8 +990,8 @@ export class SystemSim {
 
   volcano(w: World) {
     const m = massOf(w);
-    if (isGiantStuff(w) || m < 0.03 || w.volcanoCd > 0 || !this.canAfford(COST.volcano)) return false;
-    this.s.energy -= COST.volcano;
+    if (isGiantStuff(w) || m < 0.03 || w.volcanoCd > 0 || !this.canAfford(this.cost('volcano'))) return false;
+    this.s.energy -= this.cost('volcano');
     if (w.life && w.life.stage >= 3) addHarm(this.s, 1);
     this.kill(w, 0.02);
     w.volcanoCd = 25;
@@ -974,6 +1012,52 @@ export class SystemSim {
 
   private inhabited(w: World) {
     return (w.life?.pop ?? 0) + (w.cpop ?? 0) > 0.0005;
+  }
+
+  /** Peoples on this world who believe deeply while the faith is strong (tier 3+): their world heals faster. */
+  private faithful(w: World) {
+    if (faithTier(this.s) < 3) return false;
+    return this.peoplesOn(w).some((p) => faithOf(p) >= 0.5);
+  }
+
+  /** Why the star cannot bless that world right now (null: it can). */
+  blessLock(w: World): Bi | null {
+    if (!this.peoplesOn(w).length) return { es: 'Ningún pueblo vive allí para recibir tu bendición.', en: 'No people lives there to receive your blessing.' };
+    if ((w.blessed ?? 0) > this.s.time) return { es: `Volverás a bendecir ${w.name} en ${Math.ceil((w.blessed ?? 0) - this.s.time)} s.`, en: `You can bless ${w.name} again in ${Math.ceil((w.blessed ?? 0) - this.s.time)}s.` };
+    if (!this.canAfford(this.cost('bless'))) return { es: `Necesitas ${this.cost('bless')} de luz estelar.`, en: `You need ${this.cost('bless')} starlight.` };
+    return null;
+  }
+
+  /**
+   * A blessing: a golden aurora over a peopled world. Life heals, plagues end, the climate calms
+   * down — and its peoples believe in the star a little more.
+   */
+  bless(w: World) {
+    const s = this.s;
+    if (this.blessLock(w)) return false;
+    s.energy -= this.cost('bless');
+    w.blessed = s.time + BLESS_WAIT;
+    if (w.life) w.life.health = Math.min(1, w.life.health + 0.15);
+    const cured = !!w.plague;
+    w.plague = 0;
+    w.climate *= 0.5;
+    addHarm(s, -1);
+    const here = this.peoplesOn(w);
+    // A people blessed again and again soon takes it for granted: the first blessing in a while counts most.
+    for (const p of here) {
+      addFaith(s, [p.id], s.time - (this.blessedAt.get(p.id) ?? -1e9) < 60 ? 0.02 : 0.07);
+      this.blessedAt.set(p.id, s.time);
+    }
+    this.fx({ kind: 'bless', world: w.id });
+    const who = here.map((p) => p.name).join(' y ');
+    const WHO = here.map((p) => capName(p.name)).join(' and ');
+    this.news(
+      '❂',
+      `Una aurora dorada cubre ${w.name}${cured ? ' y la plaga remite' : ''}. Los ${who} salen a las calles a mirarla.`,
+      `A golden aurora covers ${w.name}${cured ? ' and the plague fades' : ''}. The ${WHO} pour into the streets to watch it.`,
+      'good',
+    );
+    return true;
   }
 
   /** Why the star cannot unleash this on that world right now (null: it can). */
@@ -1036,18 +1120,18 @@ export class SystemSim {
       // Lives offered to the star: the more of them, the more their fear is worth.
       const pop = (w.life?.pop ?? 0) + (w.cpop ?? 0);
       const dead = this.kill(w, 0.05);
-      const gain = Math.round(Math.min(60, 15 + 10 * Math.log10(1 + pop)));
+      const gain = Math.round(Math.min(45, 10 + 8 * Math.log10(1 + pop)));
       s.energy = Math.min(this.civ.energyCap, s.energy + gain);
-      w.tithe = s.time + 120;
+      w.tithe = s.time + TITHE_WAIT;
       addHarm(s, 6);
       const [des, den] = this.deaths(dead);
-      this.news('✝', `Los ${who} de ${w.name} ofrecen sacrificios a la estrella.${des} Su fe la aviva: +${gain} de luz estelar.`, `The ${WHO} of ${w.name} offer sacrifices to the star.${den} Their faith feeds it: +${gain} starlight.`, 'voice');
+      this.news('✝', `Los ${who} de ${w.name} ofrecen sacrificios a la estrella.${des} Su miedo la aviva: +${gain} de luz estelar.`, `The ${WHO} of ${w.name} offer sacrifices to the star.${den} Their fear feeds it: +${gain} starlight.`, 'voice');
     }
     return true;
   }
 
   applyComets(w: World, d: { water: number; org: number; atm: number; metal: number }, cost = true) {
-    if (cost) this.s.energy -= COST.comets;
+    if (cost) this.s.energy -= this.cost('comets');
     w.ocean = clamp(w.ocean + d.water);
     w.water += d.water * massOf(w) * 0.05;
     w.organics = clamp(w.organics + d.org);
@@ -1057,7 +1141,7 @@ export class SystemSim {
   }
 
   migrate(w: World, factor: number, cost = true) {
-    if (cost) this.s.energy -= COST.migrate;
+    if (cost) this.s.energy -= this.cost('migrate');
     if (w.parent !== null) return;
     const before = w.a;
     w.a = clamp(w.a * factor, 0.3, 16);

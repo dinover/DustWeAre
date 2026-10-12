@@ -108,6 +108,8 @@ export interface People {
   nextShip: number;
   /** Their character: what they do with the worlds they settle and how they treat others. */
   ethos?: Ethos;
+  /** How much they believe in the star (0..1). */
+  faith?: number;
 }
 
 /** How two peoples get along. */
@@ -187,6 +189,8 @@ export interface World extends Stuff {
   natives?: 'asked' | 'protect' | 'purge';
   /** Earliest time the star may demand offerings here again. */
   tithe?: number;
+  /** Earliest time the star may bless this world again. */
+  blessed?: number;
 }
 
 export type ShipKind =
@@ -206,7 +210,8 @@ export type ShipKind =
   | 'pod'
   | 'gunship'
   | 'looter'
-  | 'bomber';
+  | 'bomber'
+  | 'pilgrim';
 
 export interface Ship {
   id: number;
@@ -252,7 +257,7 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives' | 'sign';
   /** Distant star involved (outpost and annex). */
   star?: number;
   /** Legacy: rival people involved. */
@@ -347,6 +352,8 @@ export interface WingsState {
 /** The Space Patrols: armoured warriors the peoples raise when invaders become a real threat. */
 export interface PatrolState {
   barge: { es: string; en: string };
+  /** How they were founded: forged by the Order of the Star with ancient technology, or raised in a hurry against invaders. */
+  origin?: 'faith' | 'war';
   born: number;
   /** rising from its shipyard · orbit · approach (to a target) · assault · return · away (at another star). */
   phase: 'rising' | 'orbit' | 'approach' | 'assault' | 'return' | 'away';
@@ -377,6 +384,40 @@ export interface PatrolState {
   purges: number;
   wars: number;
   strikes: number;
+}
+
+/** A moon (or a bare rock) where the Order's astronomers saw something no rock should have. */
+export interface DigSite {
+  world: number;
+  /** open: nothing found yet · sure: an archive points the way · done: its relic was found. */
+  state: 'open' | 'sure' | 'done';
+  tries: number;
+}
+
+/** Faith in the star: who believes, the Order of the Star and its search for the Precursors' relics. */
+export interface FaithState {
+  /** Benefit tier (0–4), and the highest one ever reached. */
+  tier: number;
+  peak?: number;
+  /** Believers (millions), and those who believe out of love rather than fear. */
+  believers: number;
+  devout: number;
+  /** Seconds the conditions to found the Order have held. */
+  formT?: number;
+  order?: { born: number; members: number[] } | null;
+  /** "Reading the Heavens": the research that finds the dig sites. */
+  study?: { t: number; dur: number } | null;
+  read?: boolean;
+  sites: DigSite[];
+  /** Pilgrims digging at a site. */
+  digs: { world: number; t: number; dur: number }[];
+  relics: number;
+  /** Relics the forge needs (set once the sites are known). */
+  need?: number;
+  forge?: { t: number; dur: number } | null;
+  /** The forge is done: the Space Patrols rise as soon as a people can crew them. */
+  forged?: boolean;
+  nextSign?: number;
 }
 
 export interface Threat {
@@ -475,6 +516,8 @@ export interface GameState {
   wings?: WingsState | null;
   /** How dangerous the galaxy has become for this system (1–10): it grows with the system's power. */
   threat?: { level: number; power: number };
+  /** Faith in the star. */
+  faith?: FaithState;
   peoples?: People[];
   relations?: Relation[];
   /** Legacy. */

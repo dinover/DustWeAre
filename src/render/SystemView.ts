@@ -18,7 +18,7 @@ const MAX_SATS = 220;
 const DYSON = 900;
 
 /** Engine glow size per kind. */
-const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8, looter: 0.8, bomber: 1 };
+const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8, looter: 0.8, bomber: 1, pilgrim: 0.8 };
 /** Hull shape, true size (world units) and smallest on-screen size (pixels) per kind. */
 const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   colony: { hull: 'challenger', size: 0.6, px: 15 },
@@ -39,6 +39,8 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   // Invaders who come for the stores, and those who come to burn cities from orbit.
   looter: { hull: 'insurgent', size: 0.7, px: 15 },
   bomber: { hull: 'striker', size: 0.85, px: 17 },
+  // The Order's pilgrims on their way to a dig.
+  pilgrim: { hull: 'zenith', size: 0.6, px: 14 },
 };
 /**
  * The battle barge's true size. It keeps it at every zoom, like the worlds (no minimum size on
@@ -351,6 +353,7 @@ export class SystemView {
     if (kind === 'trader') return out.copy(FACTION.trader);
     if (kind === 'refugee') return out.copy(FACTION.refugee);
     if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
+    if (kind === 'pilgrim') return out.setRGB(1, 0.86, 0.45);
     if (kind === 'pod') return out.copy(PATROL_GLOW);
     if (kind === 'gunship') return out.copy(PATROL_ACCENT);
     const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';

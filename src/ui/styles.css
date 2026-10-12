@@ -706,3 +706,22 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .wrath-opt .wo-cost { font: 700 12px var(--body); color: #ffcf8a; white-space: nowrap; }
 .use-line { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13.5px; }
 .use-line .ui { font-size: 17px; width: 22px; text-align: center; color: var(--dust); }
+.faith-line { margin-top: 5px; font-size: 11.5px; color: var(--sand-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.faith-line i { font-style: normal; color: #ffe1a0; }
+.faith-line b { color: #ffe1a0; font-weight: 600; }
+.tool.active[data-tool='bless'] { border-color: #ffd27a; box-shadow: inset 0 0 18px rgba(255, 210, 122, .35), 0 0 22px rgba(255, 210, 122, .35), 0 6px 0 #0f0b09; }
+.tool[data-tool='bless'] svg { stroke: #ffe1a0; }
+/* faith */
+.proj-ico.fa, .fa { color: #ffe1a0; }
+.faith-pips { display: flex; gap: 4px; margin: 6px 0; }
+.faith-pips i { flex: 1; height: 7px; border-radius: 2px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .06); }
+.faith-pips i.on { background: #ffd27a; box-shadow: 0 0 6px rgba(255, 210, 122, .7); }
+.faith-peoples { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.faith-peoples .fp { display: grid; grid-template-columns: 1fr 90px 38px; align-items: center; gap: 8px; }
+.faith-peoples .fp em { font-style: normal; text-align: right; color: var(--sand-dim); }
+.order-card .checks { list-style: none; margin: 6px 0; padding: 0; font-size: 12.5px; color: var(--sand-dim); }
+.order-card .checks li.ok { color: #b8e08a; }
+.relics { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.relics .relic { font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px dashed rgba(255, 225, 160, .35); color: var(--sand-dim); }
+.relics .relic.on { border-style: solid; border-color: #6f9bff; color: #ffe1a0; box-shadow: inset 0 0 10px rgba(111, 155, 255, .25); }
+.faith-card { background: linear-gradient(160deg, rgba(255, 210, 120, .13), rgba(0, 0, 0, .32)); margin-bottom: 8px; }

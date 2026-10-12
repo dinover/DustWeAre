@@ -8,6 +8,8 @@ import { riskText, wingForecast } from './decisions';
 import type { WingSize } from '../core/state';
 import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, lanceSpeed, nextAt, podsPerWave, shieldStop, threatOf, upgradeCost, type DefenceId } from '../sim/threat';
 import { clamp } from '../util';
+import { DIG_COST, DIG_TIME, FAITH_TIERS, FORGE_COST, RELICS, RELICS_NEEDED, STUDY_COST, dreadOf, faithOf, popOf, type FaithSim } from '../sim/faith';
+import { fmtPop } from './text';
 import { h, stone, clear } from './dom';
 
 export const resName = (k: keyof Resources) =>
@@ -41,12 +43,32 @@ export class ProjectsPanel {
   private beyondHtml = '';
   private defences = h('div', { class: 'defences' });
   private defHtml = '';
+  private faithBox = h('div', { class: 'faith-box' });
+  private faithHtml = '';
 
   constructor(
     private civ: CivSim,
-    private on: { start(id: ProjectId): void; expedition(): void; armada(): void; research(): void; close(): void; send(id: number, conquer: boolean): void; release(id: number): void; rename(id: number): void; fortify(id: number): void; upgrade(id: DefenceId): void; wing(id: number, size: WingSize): void; unlockWings(): void; buyWings(): void },
+    private on: {
+      start(id: ProjectId): void;
+      expedition(): void;
+      armada(): void;
+      research(): void;
+      close(): void;
+      send(id: number, conquer: boolean): void;
+      release(id: number): void;
+      rename(id: number): void;
+      fortify(id: number): void;
+      upgrade(id: DefenceId): void;
+      wing(id: number, size: WingSize): void;
+      unlockWings(): void;
+      buyWings(): void;
+      study(): void;
+      dig(id: number): void;
+      forge(): void;
+    },
     private patrols?: PatrolSim,
     private wings?: WingsSim,
+    private faith?: FaithSim,
   ) {
     this.el = h('div', { class: 'projects' });
     this.build();
@@ -138,6 +160,15 @@ export class ProjectsPanel {
       },
     );
     // Beyond the system: the Space Patrols and the colonies around other stars.
+    // Faith: the Order of the Star, its reading of the heavens, the Precursors' relics and the forge.
+    this.el.append(h('h3', { class: 'proj-era' }, tr('La fe', 'Faith')), this.faithBox);
+    this.faithBox.addEventListener('click', (e) => {
+      const b = (e.target as Element).closest('button[data-faith]') as HTMLButtonElement | null;
+      if (!b || b.disabled) return;
+      if (b.dataset.faith === 'study') this.on.study();
+      else if (b.dataset.faith === 'dig') this.on.dig(Number(b.dataset.id));
+      else if (b.dataset.faith === 'forge') this.on.forge();
+    });
     this.el.append(h('h3', { class: 'proj-era' }, tr('Más allá del sistema', 'Beyond the system')), this.beyond);
     this.beyond.addEventListener('click', (e) => {
       const b = (e.target as Element).closest('button[data-act]') as HTMLButtonElement | null;
@@ -216,6 +247,107 @@ export class ProjectsPanel {
     return html + '</div>';
   }
 
+  /** Faith in the star: who believes, the Order, the reading of the heavens, the digs, the relics and the forge. */
+  private faithView() {
+    const F = this.faith;
+    const s = this.civ.state;
+    const f = s.faith;
+    const res = s.civ?.res ?? null;
+    if (!F || !f) return `<div class="small muted" style="margin:8px 2px">${tr('Todavía no hay pueblos que puedan creer en la estrella.', 'There are no peoples yet who could believe in the star.')}</div>`;
+    const dread = dreadOf(s);
+    const tier = f.tier;
+    let pips = '';
+    for (let i = 1; i <= FAITH_TIERS.length; i++) pips += `<i class="${i <= tier ? 'on' : ''}" data-tip="${tr(`<b>${FAITH_TIERS[i - 1].name.es}</b><br>${FAITH_TIERS[i - 1].gift.es}<br>Cuando el ${Math.round(FAITH_TIERS[i - 1].share * 100)} % de todos cree por amor.`, `<b>${FAITH_TIERS[i - 1].name.en}</b><br>${FAITH_TIERS[i - 1].gift.en}<br>When ${Math.round(FAITH_TIERS[i - 1].share * 100)}% of everyone believes out of love.`).replace(/"/g, '&quot;')}"></i>`;
+    const now = tier ? FAITH_TIERS[tier - 1] : null;
+    let html = `<div class="patrol-card faith-card"><div class="proj-head"><span class="proj-ico fa">❂</span><b>${tr('Fe en la estrella', 'Faith in the star')}</b><span class="def-lvl">${now ? pick(now.name) : tr('sin dones', 'no gifts yet')}</span></div>
+      <div class="pips faith-pips">${pips}</div>
+      <div class="small">${tr(`Creyentes: <b>${fmtPop(f.believers)}</b> · por amor: <b>${fmtPop(f.devout)}</b>`, `Believers: <b>${fmtPop(f.believers)}</b> · out of love: <b>${fmtPop(f.devout)}</b>`)}${dread > 0.05 ? ` · <span class="ember">${tr(`${Math.round(dread * 100)} % por miedo`, `${Math.round(dread * 100)}% out of fear`)}</span>` : ''}</div>
+      ${now ? `<div class="small gold">${pick(now.gift)}</div>` : ''}
+      <div class="small muted">${tr(
+        'Crece cuando los salvas (llamaradas contra asteroides e invasores), los bendices, proteges a los nativos, impones treguas y escuchas sus plegarias. La crueldad no la borra: la vuelve miedo, que solo aviva tu luz.',
+        'It grows when you save them (flares against asteroids and invaders), bless them, shelter natives, force truces and hear their prayers. Cruelty does not erase it: it turns it into fear, which only feeds your light.',
+      )}</div><div class="faith-peoples">`;
+    for (const p of (s.peoples ?? []).filter((x) => !x.gone)) {
+      const v = faithOf(p);
+      const member = !!f.order?.members.includes(p.id);
+      html += `<div class="small fp" data-tip="${tr(`Los ${p.name}: ${fmtPop(popOf(s, p))}, fe del ${Math.round(v * 100)} %`, `The ${p.name}: ${fmtPop(popOf(s, p))}, ${Math.round(v * 100)}% faith`)}"><span>${tr('Los', 'The')} ${tr(p.name, p.name.charAt(0).toUpperCase() + p.name.slice(1))}${member ? ' <span class="fa">❂</span>' : ''}</span><div class="vessel thin gold"><i style="--v:${Math.round(v * 100)}%"></i></div><em>${Math.round(v * 100)} %</em></div>`;
+    }
+    html += '</div></div>';
+    // The Order of the Star.
+    if (!f.order) {
+      const needs = F.orderNeeds();
+      html += `<div class="proj order-card"><div class="proj-head"><span class="proj-ico fa">❂</span><b>${tr('La Orden de la Estrella', 'The Order of the Star')}</b></div><div class="small muted">${tr(
+        'Cuando muchos crean en la estrella por amor y al menos dos pueblos la veneren juntos, fundarán la Orden: no se harán la guerra entre ellos y buscarán en el cielo lo que la estrella quiere decirles.',
+        'When many believe in the star out of love and at least two peoples worship it together, they will found the Order: they will not war on each other and will search the sky for what the star wants to tell them.',
+      )}</div><ul class="checks">${needs.map((n) => `<li class="${n.ok ? 'ok' : ''}">${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}</li>`).join('')}</ul>${
+        f.formT ? `<div class="vessel thin gold"><i style="--v:${Math.round(Math.min(1, f.formT / 30) * 100)}%"></i></div>` : ''
+      }</div>`;
+      return html;
+    }
+    const members = f.order.members.map((id) => s.peoples?.find((p) => p.id === id)?.name ?? '?');
+    html += `<div class="proj order-card"><div class="proj-head"><span class="proj-ico fa">❂</span><b>${tr('La Orden de la Estrella', 'The Order of the Star')}</b></div><div class="small">${
+      F.silent
+        ? `<span class="ember">${tr('La Orden calla: ninguno de sus pueblos cree lo bastante. Su obra está detenida hasta que la fe vuelva.', 'The Order is silent: none of its peoples believes enough. Its work is halted until faith returns.')}</span>`
+        : tr(`Sus fieles: los ${members.join(', los ')}. No se harán la guerra entre ellos, y de vez en cuando pedirán una señal.`, `Its faithful: the ${members.join(', the ')}. They will not war on each other, and now and then they will ask for a sign.`)
+    }</div></div>`;
+    // Reading the heavens.
+    const sl = F.studyLock();
+    html += `<div class="proj"><div class="proj-head"><span class="proj-ico">✶</span><b>${tr('Lectura de los cielos', 'Reading the heavens')}</b></div><div class="small muted">${tr(
+      'Los astrónomos de la Orden buscan en las lunas las huellas de los Precursores, un pueblo desaparecido que también rezaba a esta estrella.',
+      'The Order’s astronomers search the moons for traces of the Precursors, a vanished people who also prayed to this star.',
+    )}</div>${
+      f.read
+        ? `<div class="small gold">${tr('Cielos leídos.', 'The heavens have been read.')}</div>`
+        : f.study
+          ? `<div class="vessel thin moss"><i style="--v:${Math.round((f.study.t / f.study.dur) * 100)}%"></i></div>`
+          : `<div class="costs">${costChips(STUDY_COST, res)}</div>${sl ? `<div class="note small">${pick(sl)}</div>` : ''}<button class="btn small primary" data-faith="study"${sl ? ' disabled' : ''}>${tr('Leer los cielos', 'Read the heavens')}</button>`
+    }</div>`;
+    // The sites.
+    if (f.read && f.sites.length) {
+      html += `<div class="star-rows">`;
+      for (const site of f.sites) {
+        const w = s.worlds.find((x) => x.id === site.world);
+        if (!w) continue;
+        const dig = f.digs.find((d) => d.world === site.world);
+        const road = s.ships.some((x) => x.kind === 'pilgrim' && x.to === site.world);
+        const state =
+          site.state === 'done'
+            ? `<span class="gold">${tr('✓ reliquia hallada', '✓ relic found')}</span>`
+            : dig
+              ? `<span class="fa">${tr('excavando…', 'digging…')}</span>`
+              : road
+                ? `<span class="fa">${tr('peregrinos en camino', 'pilgrims on the way')}</span>`
+                : site.state === 'sure'
+                  ? `<span class="wg">${tr('un archivo señala dónde cavar', 'an archive shows where to dig')}</span>`
+                  : `<span class="muted">${tr(`por excavar${site.tries ? ` · ${site.tries} ${site.tries === 1 ? 'intento' : 'intentos'}` : ''}`, `to dig${site.tries ? ` · ${site.tries} ${site.tries === 1 ? 'try' : 'tries'}` : ''}`)}</span>`;
+        const lock = F.digLock(site.world);
+        const btn =
+          site.state === 'done' || dig || road
+            ? ''
+            : `<span class="bw" data-tip="${(lock ? pick(lock) : tr(`Peregrinos de la Orden excavan durante ${DIG_TIME} s: una reliquia, un archivo que señala el camino… o una baliza que despierta a alguien.`, `Pilgrims of the Order dig for ${DIG_TIME}s: a relic, an archive that shows the way… or a beacon that wakes someone up.`)).replace(/"/g, '&quot;')}"><button class="btn small" data-faith="dig" data-id="${site.world}"${lock ? ' disabled' : ''}>◬ ${tr('Excavar', 'Dig')} ${costChips(DIG_COST, res)}</button></span>`;
+        html += `<div class="star-row"><div class="sr-head"><i style="background:#ffe1a0;color:#ffe1a0"></i><b>${w.name}</b></div><div class="small">${state}</div>${dig ? `<div class="vessel thin gold"><i style="--v:${Math.round((dig.t / dig.dur) * 100)}%"></i></div>` : ''}${btn ? `<div class="sr-btns">${btn}</div>` : ''}</div>`;
+      }
+      html += '</div>';
+    }
+    // The relics and the forge.
+    const need = f.need ?? RELICS_NEEDED;
+    if (f.read) {
+      let slots = '';
+      for (let i = 0; i < Math.max(need, f.relics); i++) slots += `<span class="relic ${i < f.relics ? 'on' : ''}">${i < f.relics ? `◬ ${pick(RELICS[i % RELICS.length].name)}` : '◬ ?'}</span>`;
+      const fl = F.forgeLock();
+      html += `<div class="proj forge-card"><div class="proj-head"><span class="proj-ico pt">⛨</span><b>${tr('Forjar los Space Patrols', 'Forge the Space Patrols')}</b></div>${slots ? `<div class="relics">${slots}</div>` : ''}${
+        s.patrol
+          ? `<div class="small gold">${s.patrol.origin === 'faith' ? tr('Forjados por la Orden. Cada reliquia nueva arma una compañía más.', 'Forged by the Order. Every new relic arms one more company.') : tr('Los pueblos ya los fundaron de urgencia. Cada reliquia nueva arma una compañía más.', 'The peoples already raised them in a hurry. Every new relic arms one more company.')}</div>`
+          : f.forge
+            ? `<div class="vessel thin gold"><i style="--v:${Math.round((f.forge.t / f.forge.dur) * 100)}%"></i></div>`
+            : f.forged
+              ? `<div class="small gold">${tr('La forja está lista: se alzarán en cuanto un pueblo pueda tripular la barcaza.', 'The forge is done: they will rise as soon as a people can crew the barge.')}</div>`
+              : `<div class="small muted">${tr(`Con ${need} ${need === 1 ? 'reliquia' : 'reliquias'} de los Precursores, la Orden arma a sus mejores: guerreros con armadura azul y oro y su barcaza de batalla. Empiezan con dos compañías.`, `With ${need} ${need === 1 ? 'relic' : 'relics'} of the Precursors, the Order arms its finest: warriors in blue and gold armour with their battle barge. They start with two companies.`)}</div><div class="costs">${costChips(FORGE_COST, res)}</div>${fl ? `<div class="note small">${pick(fl)}</div>` : ''}<button class="btn small primary" data-faith="forge"${fl ? ' disabled' : ''}>${tr('Forjar', 'Forge')}</button>`
+      }</div>`;
+    }
+    return html;
+  }
+
   /** The Freedom Wings: how many ships, how fast they grow, and where they fight. */
   private wingsCard() {
     const W = this.wings;
@@ -264,8 +396,8 @@ export class ProjectsPanel {
     let html = '<div class="patrol-card">';
     if (!p) {
       html += `<div class="proj-head"><span class="proj-ico pt">⛨</span><b>Space Patrols</b></div><div class="small muted">${tr(
-        'Aún no existen. Si los invasores llegan a dominar varios mundos, los pueblos fundarán una orden de guerreros acorazados con su propia barcaza de batalla.',
-        'They do not exist yet. If invaders come to hold several worlds, the peoples will found an order of armoured warriors with their own battle barge.',
+        'Aún no existen. La Orden de la Estrella puede forjarlos con las reliquias de los Precursores (mira «La fe»). Si antes los invasores llegan a dominar varios mundos, los pueblos los fundarán de urgencia.',
+        'They do not exist yet. The Order of the Star can forge them with the Precursors’ relics (see “Faith”). If invaders come to hold several worlds first, the peoples will raise them in a hurry.',
       )}</div>`;
     } else {
       const target = p.target !== undefined ? s.worlds.find((w) => w.id === p.target)?.name : undefined;
@@ -412,6 +544,8 @@ export class ProjectsPanel {
     }
     const dh = this.defencesView();
     if (dh !== this.defHtml) this.defences.innerHTML = this.defHtml = dh;
+    const fh = this.faithView();
+    if (fh !== this.faithHtml) this.faithBox.innerHTML = this.faithHtml = fh;
     const bh = this.beyondView();
     if (bh !== this.beyondHtml) this.beyond.innerHTML = this.beyondHtml = bh;
   }

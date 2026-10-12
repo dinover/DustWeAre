@@ -2,6 +2,7 @@ import type { Decision, GameState, World } from '../core/state';
 import type { Rng } from '../util';
 import { capName } from '../content/names';
 import type { PeopleSim } from './peoples';
+import { addFaith } from './faith';
 
 /** The harm the player's own choices have caused (it fades slowly). */
 export function addHarm(s: GameState, n: number) {
@@ -107,9 +108,12 @@ export class VoicesSim {
   decide(d: Decision, accept: boolean) {
     const s = this.h.s;
     if (!accept) {
+      addFaith(s, 'all', -0.08);
       this.h.news('❝', 'La estrella guarda silencio. Los pueblos siguen rezando.', 'The star keeps silent. The peoples keep praying.', 'voice');
       return;
     }
+    // A prayer answered: they will believe in it for a long time.
+    addFaith(s, 'all', 0.12);
     const wars = this.h.peoples.wars();
     if (wars.length && s.energy >= PLEA_COST) {
       s.energy -= PLEA_COST;

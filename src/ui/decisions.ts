@@ -9,6 +9,7 @@ import type { DecisionView } from './Hud';
 import { resName } from './Projects';
 import { NATIVE_COST, STAGE_NAMES } from '../sim/system';
 import { USE_INFO } from '../sim/uses';
+import { SIGN_COST } from '../sim/faith';
 
 const list = (r: Partial<Resources> | undefined) =>
   RES_KEYS.filter((k) => r?.[k])
@@ -244,6 +245,20 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
         no: tr('Que convivan como puedan', 'Let them get along'),
       };
     }
+    // The Order of the Star asks for a sign.
+    case 'sign':
+      return {
+        ...base,
+        icon: '❂',
+        title: tr('La Orden pide una señal', 'The Order asks for a sign'),
+        body: tr(
+          'En todos los templos de la Orden de la Estrella rezan a la vez. Piden una señal de que alguien los escucha. Un halo sobre la estrella avivaría su fe… y su trabajo.',
+          'In every temple of the Order of the Star they pray at once. They ask for a sign that someone is listening. A halo around the star would kindle their faith… and their work.',
+        ),
+        yes: tr(`Darles una señal · ☀ ${SIGN_COST}`, `Give them a sign · ☀ ${SIGN_COST}`),
+        yesOk: s.energy >= SIGN_COST,
+        no: tr('Guardar silencio', 'Keep silent'),
+      };
     default:
       return {
         ...base,

@@ -6,6 +6,7 @@ import { travel, worldXZ } from '../render/layout';
 import type { CivFx } from './civ';
 import { addHarm } from './voices';
 import { ETHOS, USE_INFO, ethosOf } from './uses';
+import { FAITH_START, addFaith, faithOf, inOrder } from './faith';
 
 /** What the peoples simulation needs from the system. */
 export interface PeopleHost {
@@ -129,7 +130,7 @@ export class PeopleSim {
     let name = p.name;
     for (let k = 0; k < 8 && this.list.some((x) => x.name === name); k++) name = speciesName(this.h.rng);
     // Every people has a character of its own: scholars, builders, warriors or traders.
-    const people: People = { ...p, name, id, born: s.time, nextShip: s.time + 50, ethos: p.ethos ?? this.h.rng.pick(ETHOS) };
+    const people: People = { ...p, name, id, born: s.time, nextShip: s.time + 50, ethos: p.ethos ?? this.h.rng.pick(ETHOS), faith: p.faith ?? FAITH_START };
     for (const o of this.alive()) {
       this.relations.push({ a: o.id, b: id, mood: this.h.rng.range(-0.2, 0.3), state: 'peace', warT: 0, nextTalk: s.time + this.h.rng.range(60, 120), nextSkirmish: 0 });
     }
@@ -252,6 +253,8 @@ export class PeopleSim {
       const eb = ethosOf(b);
       const drift = (ea === 'war' ? -0.0012 : ea === 'trade' ? 0.0008 : 0) + (eb === 'war' ? -0.0012 : eb === 'trade' ? 0.0008 : 0);
       r.mood = clamp(r.mood + ((r.state === 'alliance' ? 0.0025 : -r.mood * 0.002) + drift) * dt, -1, 1);
+      // Brothers and sisters of the Order of the Star do not go to war with each other.
+      if (inOrder(s, a.id) && inOrder(s, b.id)) r.mood = Math.max(-0.55, r.mood + 0.001 * dt);
     }
     if (r.state !== 'war' && r.state !== 'alliance') r.state = r.mood < -0.3 ? 'tension' : 'peace';
     // Allies trade all the time.
@@ -311,7 +314,7 @@ export class PeopleSim {
     if (!candidates.length) return;
     const w = this.h.rng.pick(candidates);
     r.mixed = true;
-    const p = this.add({ name: blendNames(a.name, b.name), hue: this.hue(), home: w.id, parents: [a.id, b.id], ethos: this.h.rng.pick([ethosOf(a), ethosOf(b)]) });
+    const p = this.add({ name: blendNames(a.name, b.name), hue: this.hue(), home: w.id, parents: [a.id, b.id], ethos: this.h.rng.pick([ethosOf(a), ethosOf(b)]), faith: (faithOf(a) + faithOf(b)) / 2 });
     const name = p.name;
     w.owner = p.id;
     w.colony = 1;
@@ -337,7 +340,7 @@ export class PeopleSim {
     if (!life) return;
     natives.gone = true;
     for (const r of this.relations) if (r.a === natives.id || r.b === natives.id) r.state = 'peace';
-    const p = this.add({ name: blendNames(natives.name, settlers.name), hue: this.hue(), home: w.id, parents: [settlers.id, natives.id], ethos: this.h.rng.next() < 0.5 ? ethosOf(settlers) : ethosOf(natives) });
+    const p = this.add({ name: blendNames(natives.name, settlers.name), hue: this.hue(), home: w.id, parents: [settlers.id, natives.id], ethos: this.h.rng.next() < 0.5 ? ethosOf(settlers) : ethosOf(natives), faith: (faithOf(settlers) + faithOf(natives)) / 2 });
     const name = p.name;
     life.people = p.id;
     life.stage = Math.max(life.stage, 4);
@@ -443,10 +446,11 @@ export class PeopleSim {
     const b = this.get(ib);
     const r = a && b ? this.relation(a.id, b.id) : undefined;
     if (r && !accept) {
-      // Choosing to let a war run its course weighs on the player.
+      // Choosing to let a war run its course weighs on the player — and on their faith.
       if (d.kind === 'war') {
         r.ignored = true;
         addHarm(s, 5);
+        addFaith(s, [r.a, r.b], -0.06);
       } else addHarm(s, 1.5);
     }
     if (r && accept) addHarm(s, d.kind === 'war' ? -5 : -2);
@@ -454,10 +458,12 @@ export class PeopleSim {
     if (d.kind === 'tension' && s.energy >= 25) {
       s.energy -= 25;
       r.mood = clamp(r.mood + 0.35, -1, 1);
+      addFaith(s, [a.id, b.id], 0.05);
       this.h.news('☀', `Una aurora inesperada ilumina a los ${a.name} y los ${b.name}. Lo toman como una señal y se calman.`, `An unexpected aurora lights up the ${capName(a.name)} and the ${capName(b.name)}. They take it as a sign and calm down.`, 'good');
     } else if (d.kind === 'war' && s.energy >= 40 && r.state === 'war') {
       s.energy -= 40;
       this.peace(r, a, b, true);
+      addFaith(s, [a.id, b.id], 0.08);
     }
   }
 

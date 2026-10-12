@@ -10,6 +10,7 @@ import type { PeopleSim, PeopleFx } from './peoples';
 import { addHarm } from './voices';
 import { USE_ROLE, ethosOf, naturalUse, type Role } from './uses';
 import { colonyCap, nativeCap } from './population';
+import { CAP_BONUS, faithTier } from './faith';
 import { DEFENCES, MAX_LEVEL, defLevel, fleetCatch, levelFor, powerOf, shieldStop, threatOf, upgradeCost, type DefenceId } from './threat';
 
 export type { Role } from './uses';
@@ -67,6 +68,8 @@ export interface CivHost {
   kill(w: World, frac: number): number;
   /** An invading ship was shot down (looters drop what they stole). */
   shipDown(sh: Ship): void;
+  /** A choice nobody made in time (prayers and requests for a sign end in silence). */
+  expire(d: Decision): void;
 }
 
 export type CivFx =
@@ -193,7 +196,7 @@ export class CivSim {
         ? { es: 'Necesita la gran obra «Flota de defensa».', en: 'Needs the great work “Defence fleet”.' }
         : id === 'shield'
           ? { es: 'Necesita la gran obra «Escudo planetario».', en: 'Needs the great work “Planetary shield”.' }
-          : { es: 'Aún no existen: los pueblos los fundan cuando los invasores dominan varios mundos.', en: 'They do not exist yet: the peoples found them when invaders hold several worlds.' };
+          : { es: 'Aún no existen: la Orden de la Estrella puede forjarlos con reliquias de los Precursores (o los pueblos los fundan de urgencia si los invasores dominan varios mundos).', en: 'They do not exist yet: the Order of the Star can forge them with the Precursors’ relics (or the peoples raise them in a hurry if invaders hold several worlds).' };
     if (lvl >= MAX_LEVEL) return { es: 'Nivel máximo.', en: 'Maximum level.' };
     if (!has(civ.res, upgradeCost(id, lvl))) return { es: 'Faltan recursos.', en: 'Not enough resources.' };
     return null;
@@ -257,7 +260,7 @@ export class CivSim {
     if (civ.done.ring) r.science *= 1.5;
     // Allied peoples share their science.
     r.science *= 1 + 0.1 * (this.h.s.relations ?? []).filter((x) => x.state === 'alliance').length;
-    const diversity = roles.size >= 4 ? 1.3 : roles.size >= 3 ? 1.15 : 1;
+    const diversity = (roles.size >= 4 ? 1.3 : roles.size >= 3 ? 1.15 : 1) * (faithTier(this.h.s) >= 4 ? 1.1 : 1);
     const tech = 1 + 0.1 * (civ.tech ?? 0);
     for (const k of RES_KEYS) {
       r[k] *= diversity * tech;
@@ -436,7 +439,8 @@ export class CivSim {
     const s = this.h.s;
     const civ = this.civ;
     const k = sh.kind;
-    if (!k || k === 'colony' || k === 'alien' || k === 'mother' || k === 'ark') return false;
+    // Invaders of every kind (landers, motherships, looters, bombers), colonists, the ark and the Order's pilgrims are handled elsewhere.
+    if (!k || sh.alien || k === 'colony' || k === 'ark' || k === 'pilgrim') return false;
     if (k === 'miner' && !sh.back) {
       // Back home with a hold full of ore.
       s.ships.push({ id: this.h.nid(), from: -2, to: sh.from, t: 0, dur: sh.dur, alien: false, kind: 'miner', belt: sh.belt, back: true, people: sh.people });
@@ -827,7 +831,10 @@ export class CivSim {
   private decisions(civ: CivState, dt: number) {
     for (const d of [...civ.decisions]) {
       d.left -= dt;
-      if (d.left <= 0) this.decide(d.id, false);
+      if (d.left > 0) continue;
+      // Leaving a prayer unanswered is an answer too.
+      if (d.kind === 'plea' || d.kind === 'sign') this.h.expire(d);
+      else this.decide(d.id, false);
     }
   }
 
@@ -1017,7 +1024,7 @@ export class CivSim {
   }
 
   get energyCap() {
-    return this.civ?.done.dyson ? 200 : 100;
+    return (this.civ?.done.dyson ? 200 : 100) + CAP_BONUS[faithTier(this.h.s)];
   }
 
   private flavor(civ: CivState) {

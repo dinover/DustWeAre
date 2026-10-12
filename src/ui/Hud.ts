@@ -7,7 +7,7 @@ import { h, stone, clear, ICONS } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
 
-export type Action = 'flare' | 'volcano' | 'comets' | 'migrate' | 'wrath';
+export type Action = 'flare' | 'volcano' | 'comets' | 'migrate' | 'wrath' | 'bless';
 
 interface ToolDef<T extends string> {
   id: T;
@@ -93,6 +93,18 @@ const SYSTEM_ACTIONS: ToolDef<Action>[] = [
         '<b>Wrath of the star</b> · For those who want to be feared: plagues, meteor storms, endless winters, discord or offerings of lives. The peoples remember, and their fear feeds your light.',
       ),
   },
+  {
+    id: 'bless',
+    key: '6',
+    icon: 'bless',
+    cost: COST.bless,
+    name: () => tr('Bendición', 'Blessing'),
+    tip: () =>
+      tr(
+        '<b>Bendición</b> · Una aurora dorada sobre un mundo habitado: la vida sana, las plagas remiten y el clima se calma. Sus pueblos creen un poco más en la estrella, y la fe da sus frutos.',
+        '<b>Blessing</b> · A golden aurora over a peopled world: life heals, plagues fade and the climate calms down. Its peoples believe in the star a little more, and faith bears fruit.',
+      ),
+  },
 ];
 
 export interface HudHandlers {
@@ -126,6 +138,17 @@ export interface DecisionView {
   options?: { label: string; ok: boolean; tip?: string; choice: number; primary?: boolean }[];
 }
 
+/** Faith in the star, for the starlight slab. */
+export interface FaithInfo {
+  believers: number;
+  believersTxt: { es: string; en: string };
+  dread: number;
+  tier: number;
+  tierName: { es: string; en: string };
+  gift: { es: string; en: string } | null;
+  order: boolean;
+}
+
 export interface LateInfo {
   era: string;
   label: string;
@@ -152,6 +175,8 @@ export class Hud {
   private subHtml = '';
   private energyVal = h('b');
   private energyBar = h('div', { class: 'vessel' }, h('i'));
+  private faithEl = h('div', { class: 'faith-line' });
+  private faithHtml = '';
   private speedBtns: HTMLButtonElement[] = [];
   private toolbar: HTMLElement;
   private tip: HTMLElement;
@@ -193,7 +218,7 @@ export class Hud {
     tablet.dataset.tip = tr('<b>El sistema</b><br>Toca para ver la estrella y ajustar su brillo. ✎ para ponerle nombre.', '<b>The system</b><br>Tap to see the star and adjust its brightness. ✎ to name it.');
     tablet.addEventListener('click', () => this.on.star());
     const prog = stone('progress-slab', this.progLabel, this.progBar, this.row2, this.settleBtn);
-    const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar);
+    const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar, this.faithEl);
     const speeds: [number, string][] = [
       [0, '❚❚'],
       [1, '▶'],
@@ -323,13 +348,18 @@ export class Hud {
     for (const [k, el] of this.toolEls) el.classList.toggle('active', k === id);
   }
 
-  setActionState(state: Record<string, { ok: boolean; afford: boolean }>) {
+  setActionState(state: Record<string, { ok: boolean; afford: boolean; cost?: number }>) {
     for (const [k, el] of this.toolEls) {
       const st = state[k];
       if (!st) continue;
       el.classList.toggle('disabled', !st.afford);
       const c = el.querySelector('.cost') as HTMLElement | null;
-      if (c) c.style.color = st.afford ? '' : '#ff7a5a';
+      if (c) {
+        c.style.color = st.afford ? '' : '#ff7a5a';
+        // Deep faith makes the star's actions cheaper.
+        const txt = st.cost ? `☀ ${st.cost}` : c.textContent;
+        if (txt && c.textContent !== txt) c.textContent = txt;
+      }
     }
   }
 
@@ -339,7 +369,19 @@ export class Hud {
 
   update(
     s: GameState,
-    info: { progress?: number; gas?: number; canSettle?: boolean; energyRate: number; energyCap?: number; living?: number; topStage?: number; reached?: number; total?: number; late?: LateInfo | null },
+    info: {
+      progress?: number;
+      gas?: number;
+      canSettle?: boolean;
+      energyRate: number;
+      energyCap?: number;
+      living?: number;
+      topStage?: number;
+      reached?: number;
+      total?: number;
+      late?: LateInfo | null;
+      faith?: FaithInfo | null;
+    },
     dt: number,
   ) {
     if (this.tipTimer > 0) {
@@ -366,6 +408,21 @@ export class Hud {
     this.energyVal.textContent = `${e}`;
     (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${(s.energy / (info.energyCap ?? 100)) * 100}%`);
     this.energyBar.dataset.tip = tr(`<b>Luz estelar</b><br>Se recarga sola: +${num(info.energyRate, 1)} por segundo. La gastan tus acciones.`, `<b>Starlight</b><br>It refills on its own: +${num(info.energyRate, 1)} per second. Your actions spend it.`);
+    // Faith: how many believe in the star, out of love or out of fear.
+    const f = s.phase === 'system' ? info.faith : null;
+    let fh = '';
+    if (f && f.believers > 0.5) {
+      const tierName = f.tier ? pick(f.tierName) : tr('sin bendiciones', 'no blessings yet');
+      const tip = tr(
+        `<b>Fe en la estrella</b><br>Creyentes: ${f.believersTxt.es}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)} % por miedo` : ''}.<br>Nivel: <b>${tierName}</b>${f.gift ? ` · ${f.gift.es}` : ''}<br>Sube al salvarlos (llamaradas contra asteroides e invasores), bendecirlos, proteger a los nativos, imponer treguas y escuchar sus plegarias. La crueldad la vuelve miedo.${f.order ? '<br><b>La Orden de la Estrella</b> existe: ábrela en Proyectos.' : ''}`,
+        `<b>Faith in the star</b><br>Believers: ${f.believersTxt.en}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)}% out of fear` : ''}.<br>Tier: <b>${tierName}</b>${f.gift ? ` · ${f.gift.en}` : ''}<br>It rises when you save them (flares against asteroids and invaders), bless them, shelter natives, force truces and hear their prayers. Cruelty turns it into fear.${f.order ? '<br><b>The Order of the Star</b> exists: open it in Projects.' : ''}`,
+      );
+      fh = `<span data-tip="${tip.replace(/"/g, '&quot;')}"><i>❂</i> ${tr(f.believersTxt.es, f.believersTxt.en)} · <b>${tierName}</b></span>`;
+    }
+    if (fh !== this.faithHtml) {
+      this.faithEl.innerHTML = this.faithHtml = fh;
+      this.faithEl.style.display = fh ? '' : 'none';
+    }
     if (s.phase === 'formation') {
       const p = info.progress ?? 0;
       this.progLabel.innerHTML = `<span>${tr('Polvo convertido en mundos', 'Dust turned into worlds')}</span><b>${Math.round(p * 100)} %</b>`;
