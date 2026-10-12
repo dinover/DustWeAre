@@ -3,14 +3,30 @@ import { h, stone } from '../ui/dom';
 import { clamp } from '../util';
 
 const ROUNDS = 5;
+/** How far one migration can go at best (five perfect pushes). */
+const REACH_IN = Math.pow(0.92, ROUNDS);
+const REACH_OUT = Math.pow(1.08, ROUNDS);
 
 /**
  * Orbital migration: a passing body tugs your planet. Stop the swinging needle inside the
  * glowing arc to time each gravity assist; every good push moves the orbit a little.
  */
+/** What the migration needs to know about the neighbourhood (radii in AU). */
+export interface MigrationGuide {
+  /** Every other planet: its orbit and the band where this one could not stay. */
+  neighbours: { name: string; a: number; band: [number, number] }[];
+  /** Stretches where this planet would be stable. */
+  zones: [number, number][];
+  /** The next stable orbits inwards and outwards. */
+  inner?: number;
+  outer?: number;
+  /** How an orbit would turn out, and the stable orbit it would settle into (if close enough). */
+  check(a: number): { state: 'stable' | 'edge' | 'unstable'; other?: string; outcome?: 'moon' | 'impact'; heavier?: boolean; snap: number | null };
+}
+
 export function playMigration(
   host: HTMLElement,
-  o: { name: string; a: number; hz: [number, number]; preview: (a: number) => number },
+  o: { name: string; a: number; hz: [number, number]; preview: (a: number) => number; guide?: MigrationGuide },
   done: (factor: number | null) => void,
 ) {
   const portrait = window.innerWidth < window.innerHeight;
@@ -145,6 +161,71 @@ export function playMigration(
     g.font = 'italic 15px "Cormorant Garamond", Georgia, serif';
     g.textAlign = 'center';
     g.fillText(tr('zona habitable', 'habitable zone'), SX + Math.cos(ARC) * (r0 + r1) / 2, SY - Math.sin(ARC) * r1 - 10);
+    // The neighbourhood: where this planet would be stable (green), its neighbours' reach (ember),
+    // their orbits, and the next stable orbits either way.
+    const gd = o.guide;
+    if (gd) {
+      const arcBand = (lo: number, hi: number, fill: string) => {
+        const ra = px(Math.min(lo, aMax)) - SX;
+        const rb = px(Math.min(hi, aMax)) - SX;
+        if (rb - ra < 0.5) return;
+        g.fillStyle = fill;
+        g.beginPath();
+        g.arc(SX, SY, rb, -ARC, ARC);
+        g.arc(SX, SY, ra, ARC, -ARC, true);
+        g.closePath();
+        g.fill();
+      };
+      for (const n of gd.neighbours) {
+        if (n.band[0] >= aMax) continue;
+        arcBand(n.band[0], n.band[1], 'rgba(255,110,50,0.16)');
+        // Crisp edges: where the neighbour's reach begins and ends.
+        g.strokeStyle = 'rgba(255,123,53,0.45)';
+        g.lineWidth = 1;
+        for (const e of n.band) {
+          if (e >= aMax) continue;
+          g.beginPath();
+          g.arc(SX, SY, px(e) - SX, -ARC, ARC);
+          g.stroke();
+        }
+      }
+      g.font = '600 13px "Alegreya Sans", sans-serif';
+      g.textAlign = 'center';
+      for (const n of gd.neighbours) {
+        if (n.a > aMax) continue;
+        const rr = px(n.a) - SX;
+        g.strokeStyle = 'rgba(255,170,120,0.45)';
+        g.lineWidth = 1;
+        g.beginPath();
+        g.arc(SX, SY, rr, -ARC, ARC);
+        g.stroke();
+        g.fillStyle = 'rgba(255,190,150,0.9)';
+        g.beginPath();
+        g.arc(SX + Math.cos(ARC * 0.55) * rr, SY + Math.sin(ARC * 0.55) * rr, 6, 0, Math.PI * 2);
+        g.fill();
+        g.fillText(n.name, SX + Math.cos(ARC * 0.55) * rr, SY + Math.sin(ARC * 0.55) * rr + 20);
+      }
+      for (const [a, label, side] of [
+        [gd.inner, tr('estable', 'stable'), -1],
+        [gd.outer, tr('estable', 'stable'), 1],
+      ] as [number | undefined, string, number][]) {
+        if (a === undefined || a > aMax) continue;
+        const rr = px(a) - SX;
+        g.strokeStyle = 'rgba(184,224,138,0.95)';
+        g.lineWidth = 2;
+        g.setLineDash([6, 5]);
+        g.beginPath();
+        g.arc(SX, SY, rr, -ARC - 0.1, ARC + 0.1);
+        g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = 'rgba(190,230,150,1)';
+        // Five perfect pushes reach ×0.66 inwards and ×1.47 outwards: further than that is out of reach.
+        const far = a < o.a * REACH_IN || a > o.a * REACH_OUT;
+        // The inner one is named at the top end of its arc, the outer one at the bottom end.
+        const at = side < 0 ? -ARC - 0.1 : ARC + 0.1;
+        g.fillText(`${label} · ${num(a, 2)} ${tr('UA', 'AU')}${far ? tr(' (fuera de alcance)', ' (out of reach)') : ''}`, SX + Math.cos(at) * rr, SY + Math.sin(at) * rr + (side < 0 ? -8 : 18));
+      }
+    }
     // old orbit
     const ro = px(o.a) - SX;
     g.strokeStyle = 'rgba(220,187,122,0.35)';
@@ -154,7 +235,8 @@ export function playMigration(
     g.stroke();
     g.setLineDash([]);
     const rn = px(aNow()) - SX;
-    g.strokeStyle = 'rgba(255,215,150,0.85)';
+    const fate = o.guide?.check(aNow());
+    g.strokeStyle = !fate ? 'rgba(255,215,150,0.85)' : fate.state === 'unstable' && fate.snap === null ? 'rgba(255,123,53,0.95)' : fate.state === 'edge' ? 'rgba(229,182,90,0.95)' : 'rgba(184,224,138,0.95)';
     g.lineWidth = 1.6;
     g.beginPath();
     g.arc(SX, SY, rn, -ARC - 0.1, ARC + 0.1);
@@ -241,7 +323,26 @@ export function playMigration(
       g.fillText(tr('¿Hacia dónde lo llevamos?', 'Which way shall we take it?'), DX, DY - 20);
     }
     const Tn = o.preview(aNow());
-    info.innerHTML = `${tr('Órbita', 'Orbit')}: <b class="gold">${num(o.a, 2)}</b> → <b class="gold">${num(aNow(), 2)} UA</b> · ${tr('temperatura', 'temperature')} <b>${Math.round(T0 - 273)} °C</b> → <b class="${Tn > 273 && Tn < 315 ? 'moss' : 'ember'}">${Math.round(Tn - 273)} °C</b>`;
+    // Live: will the new orbit hold?
+    let safety = '';
+    if (gd) {
+      const c = gd.check(aNow());
+      safety =
+        c.state === 'stable'
+          ? `<b class="moss">${tr('Órbita estable ✓', 'Stable orbit ✓')}</b>`
+          : c.state === 'edge'
+            ? `<b class="gold">${tr(`Estable, al límite de ${c.other}`, `Stable, close to ${c.other}`)}</b>`
+            : c.snap !== null
+              ? `<b class="moss">${tr(`Se asentará en ${num(c.snap, 2)} UA, estable`, `It will settle at ${num(c.snap, 2)} AU, stable`)}</b>`
+              : `<b class="ember">${
+                  c.outcome === 'moon'
+                    ? c.heavier
+                      ? tr(`${c.other} entra en su zona: lo capturará como luna`, `${c.other} falls inside its reach: it will capture it as a moon`)
+                      : tr(`En la zona de ${c.other}: acabará como su luna`, `Inside the reach of ${c.other}: it will end up as its moon`)
+                    : tr(`Demasiado cerca de ${c.other}: chocarán`, `Too close to ${c.other}: they will collide`)
+                }</b>`;
+    }
+    info.innerHTML = `${tr('Órbita', 'Orbit')}: <b class="gold">${num(o.a, 2)}</b> → <b class="gold">${num(aNow(), 2)} UA</b> · ${tr('temperatura', 'temperature')} <b>${Math.round(T0 - 273)} °C</b> → <b class="${Tn > 273 && Tn < 315 ? 'moss' : 'ember'}">${Math.round(Tn - 273)} °C</b>${safety ? ` · ${safety}` : ''}`;
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

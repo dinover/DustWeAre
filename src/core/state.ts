@@ -476,6 +476,10 @@ export interface Encounter {
   ea: number;
   eb: number;
   emergency?: boolean;
+  /** How it ends: the two crash ('impact'), or the lighter one is captured as a moon ('moon'). */
+  kind?: 'impact' | 'moon';
+  /** How far along its orbit the lighter world was from the heavier one when it began (radians). */
+  dth0?: number;
 }
 
 export interface Species {

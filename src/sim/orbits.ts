@@ -1,9 +1,34 @@
-import { R_MAX, massOf, sysWorld, toAU, toWorld, type Encounter, type GameState, type NewsFocus, type World } from '../core/state';
+import { R_MAX, R_MIN, massOf, sysWorld, toAU, toWorld, type Encounter, type GameState, type NewsFocus, type World } from '../core/state';
 import { moonOrbit, worldRadius } from '../render/layout';
-import { Rng, clamp } from '../util';
+import { Rng, clamp, smoothstep } from '../util';
 import { isGiantStuff } from './worlds';
 import { moonName, worldName } from '../content/names';
 import { peopleOf, type PeopleSim } from './peoples';
+
+/*
+ * Orbits, pulls and collisions in the finished system. Every planet rules a band around its orbit
+ * that widens with its mass; a lighter world inside a heavier one's band cannot stay there: it either
+ * crashes into it or, if it is small enough, ends up orbiting it as a moon. Everything is measured
+ * in world units of the old, tight map, so the player's "distance between worlds" only changes the
+ * drawing, never the outcome.
+ */
+
+/** Moons a planet can hold. */
+export const MAX_MOONS = 6;
+/** A world this much lighter than its neighbour (or less) is captured as its moon instead of crashing. */
+export const MOON_RATIO = 0.1;
+/** A stable orbit closer than this share of the band is "on the edge" (it is only a warning). */
+export const EDGE = 1.15;
+/** A migration that ends this close (world units) to a stable orbit settles into it. */
+export const SNAP = 0.6;
+/** Stable orbits are searched for in steps of this many world units. */
+const STEP = 0.05;
+/** A safe margin over the band's edge for the orbits offered as stable. */
+const SAFE = 1.03;
+/** When the worlds settle, pairs deeper than this share of their band are left to meet later… */
+const DEEP = 0.6;
+/** …but no more than this many. */
+const DEEP_MAX = 2;
 
 /**
  * How far a world's look reaches from its centre: the planet, its ring and part of its moons. Measured
@@ -18,29 +43,188 @@ export function reach(w: World, worlds: World[]) {
 /** Room two neighbouring planets need so they never overlap on screen (world units). */
 export const clearance = (a: World, b: World, worlds: World[]) => reach(a, worlds) + reach(b, worlds) + 2;
 
-/** Too close to share the sky for long: their gravity will pull them together. */
-export const doomed = (a: World, b: World) => toWorld(b.a) - toWorld(a.a) < (worldRadius(a) + worldRadius(b)) * 1.2 + 0.6;
+/** The heavier of two worlds first. */
+const heavier = (a: World, b: World): [World, World] => (massOf(a) >= massOf(b) ? [a, b] : [b, a]);
+
+/**
+ * The band a planet rules around its orbit, against a given neighbour (world units, no spread): a
+ * lighter world closer than this cannot keep its orbit. For worlds up to an Earth it is the old fixed
+ * rule; heavier worlds rule a wider band (with the cube root of their mass).
+ */
+export function captureDist(a: World, b: World) {
+  const [B, S] = heavier(a, b);
+  return 1.2 * (worldRadius(B) + worldRadius(S)) + 0.6 + 0.8 * Math.max(0, Math.cbrt(massOf(B)) - 1);
+}
+
+/** Distance between two planets' orbits (world units, no spread). */
+export const gapOf = (a: World, b: World) => Math.abs(toWorld(a.a) - toWorld(b.a));
+
+/** One of the two lies inside the other's band. */
+export const inBand = (a: World, b: World) => gapOf(a, b) < captureDist(a, b);
+
+/** How a meeting ends: a light enough world becomes the heavier one's moon (if it has room); otherwise they crash. */
+export function outcomeOf(a: World, b: World, worlds: World[]): 'moon' | 'impact' {
+  const [B, S] = heavier(a, b);
+  const moons = worlds.filter((m) => m.parent === B.id).length;
+  return massOf(S) <= MOON_RATIO * massOf(B) && moons < MAX_MOONS ? 'moon' : 'impact';
+}
 
 const planetsOf = (worlds: World[]) => worlds.filter((w) => w.parent === null).sort((x, y) => x.a - y.a);
 
+export interface OrbitState {
+  /** stable · stable but close to a band (edge) · inside a band (unstable). */
+  state: 'stable' | 'edge' | 'unstable';
+  /** The neighbour that decides it (the closest one, measured in bands). */
+  other?: World;
+  /** Gap over band with that neighbour (≥ 1: outside its band). */
+  margin: number;
+  /** When unstable: how it would end. */
+  outcome?: 'moon' | 'impact';
+}
+
+/** How safe a planet's orbit is (or would be at radius `a`, in AU), against its neighbours there. */
+export function orbitState(w: World, worlds: World[], a = w.a): OrbitState {
+  if (w.parent !== null) return { state: 'stable', margin: Infinity };
+  const test = a === w.a ? w : { ...w, a };
+  let inner: World | undefined;
+  let outer: World | undefined;
+  for (const p of worlds) {
+    if (p.parent !== null || p.id === w.id) continue;
+    if (p.a <= a) {
+      if (!inner || p.a > inner.a) inner = p;
+    } else if (!outer || p.a < outer.a) outer = p;
+  }
+  let worst: OrbitState = { state: 'stable', margin: Infinity };
+  for (const n of [inner, outer]) {
+    if (!n) continue;
+    const m = gapOf(test, n) / captureDist(test, n);
+    if (m < worst.margin) worst = { state: 'stable', margin: m, other: n };
+  }
+  if (worst.margin < 1) {
+    worst.state = 'unstable';
+    worst.outcome = outcomeOf(test, worst.other!, worlds);
+  } else if (worst.margin < EDGE) worst.state = 'edge';
+  return worst;
+}
+
+/** The stretches of the system where a planet would be stable, as [inner, outer] radii in AU. */
+export function stableZones(w: World, worlds: World[]): [number, number][] {
+  const out: [number, number][] = [];
+  const lo = toWorld(R_MIN * 1.05);
+  const hi = toWorld(R_MAX);
+  let open: number | null = null;
+  for (let x = lo; x <= hi + 1e-9; x += STEP) {
+    const ok = orbitState(w, worlds, toAU(x)).margin >= SAFE;
+    if (ok && open === null) open = x;
+    if ((!ok || x + STEP > hi) && open !== null) {
+      out.push([toAU(open), toAU(ok ? x : x - STEP)]);
+      open = null;
+    }
+  }
+  return out;
+}
+
 /**
- * When the worlds settle: neighbours that are close (but not doomed) drift apart into stable,
- * well spaced orbits. Doomed pairs are left alone; they will meet later.
+ * The next stable orbits inwards and outwards (AU). From an unstable orbit, the nearest way out of the
+ * band; from a stable one, the nearest stable stretch beyond the one it is in.
+ */
+export function nearestStable(w: World, worlds: World[], zones = stableZones(w, worlds)) {
+  const here = zones.find(([lo, hi]) => w.a >= lo - 1e-6 && w.a <= hi + 1e-6);
+  let inner: number | undefined;
+  let outer: number | undefined;
+  for (const [lo, hi] of zones) {
+    if (zones.indexOf(here!) >= 0 && lo === here![0]) continue;
+    if (hi < w.a && (inner === undefined || hi > inner)) inner = hi;
+    if (lo > w.a && (outer === undefined || lo < outer)) outer = lo;
+  }
+  return { inner, outer, here: !!here };
+}
+
+/** A stable orbit within reach of `a` (world units of SNAP), or null. */
+export function snapStable(w: World, worlds: World[], a: number) {
+  const x0 = toWorld(a);
+  for (let d = STEP; d <= SNAP + 1e-9; d += STEP) {
+    for (const x of [x0 - d, x0 + d]) {
+      const t = toAU(x);
+      if (t < R_MIN * 1.05 || t > R_MAX) continue;
+      if (orbitState(w, worlds, t).margin >= SAFE) return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * When the worlds settle: neighbours inside a band, or too close to look tidy, drift apart into stable,
+ * well spaced orbits. Up to two pairs deep inside a band are left alone: they will meet later, in
+ * play. Any other pair that cannot be pulled apart (no room left at the edge of the system) meets at
+ * once, before the system is shown, as it would have during the formation: the lighter world becomes
+ * the heavier one's moon, or the two become one.
  */
 export function spaceOrbits(worlds: World[]) {
-  const planets = planetsOf(worlds);
-  for (let i = 0; i < planets.length - 1; i++) {
-    const A = planets[i];
-    const B = planets[i + 1];
-    if (doomed(A, B)) continue;
-    const need = clearance(A, B, worlds);
-    if (toWorld(B.a) - toWorld(A.a) >= need) continue;
-    const a = toAU(toWorld(A.a) + need);
-    if (a <= R_MAX * 1.2) B.a = a;
+  const left = new Set<string>();
+  for (let pass = 0; pass < 64; pass++) {
+    const planets = planetsOf(worlds);
+    for (let i = 0; i < planets.length - 1; i++) {
+      const A = planets[i];
+      const B = planets[i + 1];
+      const D = captureDist(A, B);
+      const gap = toWorld(B.a) - toWorld(A.a);
+      const key = `${A.id}:${B.id}`;
+      if (left.has(key)) continue;
+      if (gap < D * DEEP && left.size < DEEP_MAX) {
+        left.add(key);
+        continue;
+      }
+      const need = Math.max(clearance(A, B, worlds), D * EDGE);
+      // (A hair of slack: the round trip through AU must not bring the same pair back again.)
+      if (gap >= need - 1e-6) continue;
+      const a = toAU(toWorld(A.a) + need + 1e-4);
+      if (a > R_MAX * 1.2) continue;
+      B.a = a;
+      // B may have overtaken its outer neighbour: keep the order and look at this pair again.
+      planets.sort((x, y) => x.a - y.a);
+      i--;
+    }
+    // A pair still inside a band that was not left to meet later meets now.
+    const now = planetsOf(worlds);
+    let met = false;
+    for (let i = 0; i < now.length - 1 && !met; i++) {
+      const A = now[i];
+      const B = now[i + 1];
+      if (left.has(`${A.id}:${B.id}`) || !inBand(A, B)) continue;
+      settleMeet(A, B, worlds);
+      met = true;
+    }
+    if (!met) break;
   }
 }
 
-export type OrbitFx = { kind: 'collision'; world: number; x: number; z: number; big: boolean };
+/** Two worlds meet before the system is shown: a moon caught, or one world made of both (no fanfare). */
+function settleMeet(a: World, b: World, worlds: World[]) {
+  const [big, small] = heavier(a, b);
+  const moon = outcomeOf(a, b, worlds) === 'moon';
+  let n = worlds.filter((m) => m.parent === big.id).length;
+  if (moon) {
+    small.parent = big.id;
+    small.a = n++;
+  } else {
+    big.metal += small.metal;
+    big.rock += small.rock;
+    big.water += small.water;
+    big.gas += small.gas;
+    big.org += small.org;
+  }
+  // The small world's moons join the big one while there is room; the rest are lost.
+  for (const m of worlds.filter((x) => x.parent === small.id)) {
+    if (n < MAX_MOONS) {
+      m.parent = big.id;
+      m.a = n++;
+    } else worlds.splice(worlds.indexOf(m), 1);
+  }
+  if (!moon) worlds.splice(worlds.indexOf(small), 1);
+}
+
+export type OrbitFx = { kind: 'collision'; world: number; x: number; z: number; big: boolean } | { kind: 'capture'; world: number; x: number; z: number } | { kind: 'stable'; world: number };
 
 /** What the collisions need from the system. */
 export interface OrbitHost {
@@ -63,10 +247,17 @@ const wrap = (d: number) => {
   return d;
 };
 
+/** Where a planet is drawn right now (the drawing follows the player's spread). */
+const drawn = (w: World) => {
+  const r = sysWorld(w.a);
+  return { x: Math.cos(w.th) * r, z: Math.sin(w.th) * r };
+};
+
 /**
- * Worlds whose orbits are too close do not share the sky for long: they drift together and
- * collide. A new, molten world rises from the two, with new moons, rings, sometimes a new
- * planet made of the largest fragment. Spacefaring peoples see it coming and evacuate.
+ * A lighter world inside a heavier one's band does not keep its orbit: the two drift together, along
+ * the orbit and across it at once, until they touch. Then they crash into one molten world (with new
+ * moons, rings, sometimes a new planet made of the largest fragment), or the lighter one is caught as
+ * a moon. Spacefaring peoples see a crash coming and evacuate.
  */
 export class OrbitSim {
   private scanT = 2;
@@ -81,6 +272,11 @@ export class OrbitSim {
     return this.list.some((e) => e.a === id || e.b === id);
   }
 
+  /** The encounter a planet is caught in, if any. */
+  encounterOf(id: number) {
+    return this.list.find((e) => e.a === id || e.b === id);
+  }
+
   update(dt: number) {
     this.scanT -= dt;
     if (this.scanT <= 0) {
@@ -90,27 +286,48 @@ export class OrbitSim {
     for (const e of [...this.list]) this.step(e, dt);
   }
 
-  private scan() {
+  /** Looks for neighbours inside each other's band right now (after a migration, without waiting). */
+  scan() {
     const s = this.h.s;
     const planets = planetsOf(s.worlds);
     for (let i = 0; i < planets.length - 1; i++) {
       const A = planets[i];
       const B = planets[i + 1];
-      if (this.busy(A.id) || this.busy(B.id) || !doomed(A, B)) continue;
-      const gap = Math.max(0, toWorld(B.a) - toWorld(A.a));
-      // Several at once are staggered, so each collision gets its moment.
+      if (this.busy(A.id) || this.busy(B.id) || !inBand(A, B)) continue;
+      const D = captureDist(A, B);
+      const gap = gapOf(A, B);
+      // Deeper inside the band, sooner; several at once are staggered, so each gets its moment.
       const queue = this.list.length * 40;
-      const e: Encounter = { id: this.h.nid(), a: A.id, b: B.id, t: 0, dur: 60 + gap * 6 + this.h.rng.range(0, 20) + queue, a0: A.a, b0: B.a, ea: A.a, eb: B.a };
+      const e: Encounter = { id: this.h.nid(), a: A.id, b: B.id, t: 0, dur: 40 + 40 * (gap / D) + this.h.rng.range(0, 10) + queue, a0: A.a, b0: B.a, ea: A.a, eb: B.a };
+      this.begin(e, A, B);
       this.list.push(e);
-      this.h.news(
-        '⚠',
-        `Las órbitas de ${A.name} y ${B.name} están demasiado cerca: sus mundos empiezan a atraerse. Si nada lo impide, chocarán.`,
-        `The orbits of ${A.name} and ${B.name} are too close: the two worlds are starting to pull at each other. If nothing stops them, they will collide.`,
-        'warn',
-        { pair: [A.id, B.id] },
-      );
-      this.emergency(e, A, B, true);
+      const [big, small] = heavier(A, B);
+      if (e.kind === 'moon')
+        this.h.news(
+          '☾',
+          `${small.name} ha entrado en la zona de ${big.name}: su gravedad lo arrastra. Si nada lo impide, ${small.name} acabará orbitando a ${big.name} como una luna.`,
+          `${small.name} has strayed into the reach of ${big.name}: its gravity drags it along. If nothing stops it, ${small.name} will end up orbiting ${big.name} as a moon.`,
+          'warn',
+          { pair: [A.id, B.id] },
+        );
+      else {
+        this.h.news(
+          '⚠',
+          `Las órbitas de ${A.name} y ${B.name} están demasiado cerca: sus mundos empiezan a atraerse. Si nada lo impide, chocarán.`,
+          `The orbits of ${A.name} and ${B.name} are too close: the two worlds are starting to pull at each other. If nothing stops them, they will collide.`,
+          'warn',
+          { pair: [A.id, B.id] },
+        );
+        this.emergency(e, A, B, true);
+      }
     }
+  }
+
+  /** How it will end and where the lighter world starts along the orbit. */
+  private begin(e: Encounter, A: World, B: World) {
+    const [big, small] = heavier(A, B);
+    e.kind = outcomeOf(A, B, this.h.s.worlds);
+    e.dth0 = wrap(small.th - big.th);
   }
 
   /**
@@ -154,46 +371,98 @@ export class OrbitSim {
   private step(e: Encounter, dt: number) {
     const A = this.h.world(e.a);
     const B = this.h.world(e.b);
-    if (!A || !B) return this.drop(e);
+    if (!A || !B || A.parent !== null || B.parent !== null) return this.drop(e);
+    // An encounter from an older save: it starts over from where the worlds are now.
+    if (!e.kind || e.dth0 === undefined) {
+      e.dur = Math.max(20, e.dur - e.t);
+      e.t = 0;
+      e.a0 = e.ea = A.a;
+      e.b0 = e.eb = B.a;
+      this.begin(e, A, B);
+    }
     // Someone moved one of them (a migration): the danger may be over.
     if (Math.abs(A.a - e.ea) > 0.01 || Math.abs(B.a - e.eb) > 0.01) {
-      const [inner, outer] = A.a <= B.a ? [A, B] : [B, A];
-      if (!doomed(inner, outer)) {
-        this.h.news('✧', `${A.name} y ${B.name} se alejan: sus nuevas órbitas son estables. Choque evitado.`, `${A.name} and ${B.name} drift apart: their new orbits are stable. Collision averted.`, 'good', { pair: [A.id, B.id] });
+      if (!inBand(A, B)) {
+        this.h.news('✧', `${A.name} y ${B.name} se alejan: sus nuevas órbitas son estables. ${e.kind === 'moon' ? 'Captura evitada' : 'Choque evitado'}.`, `${A.name} and ${B.name} drift apart: their new orbits are stable. ${e.kind === 'moon' ? 'Capture averted' : 'Collision averted'}.`, 'good', { pair: [A.id, B.id] });
+        for (const w of [A, B]) if (orbitState(w, this.h.s.worlds).state !== 'unstable') this.h.fx({ kind: 'stable', world: w.id });
         return this.drop(e);
       }
+      // Still inside the band: it goes on from here, in the time that was left.
+      e.dur = Math.max(20, e.dur - e.t);
+      e.t = 0;
       e.a0 = A.a;
       e.b0 = B.a;
-      e.t *= 0.5;
+      this.begin(e, A, B);
     }
     const before = e.t;
     e.t += dt;
-    if (!e.emergency && Math.floor(before / 8) !== Math.floor(e.t / 8)) this.emergency(e, A, B, false);
-    const k = Math.min(1, e.t / e.dur);
-    const ease = k * k;
+    if (e.kind === 'impact' && !e.emergency && Math.floor(before / 8) !== Math.floor(e.t / 8)) this.emergency(e, A, B, false);
+    // Across the orbit and along it at once, smoothly: the distance between them only ever shrinks.
+    const p = smoothstep(0, 1, Math.min(1, e.t / e.dur));
     const mA = massOf(A);
     const mB = massOf(B);
-    // The heavier world moves less.
     const wa0 = toWorld(e.a0);
     const wb0 = toWorld(e.b0);
     const mid = (wa0 * mA + wb0 * mB) / (mA + mB);
-    A.a = toAU(wa0 + (mid - wa0) * ease);
-    B.a = toAU(wb0 + (mid - wb0) * ease);
+    A.a = toAU(wa0 + (mid - wa0) * p);
+    B.a = toAU(wb0 + (mid - wb0) * p);
     e.ea = A.a;
     e.eb = B.a;
-    // At the end, they also catch up with each other along the orbit.
-    const d = wrap(B.th - A.th);
-    if (k > 0.55) {
-      const f = clamp((k - 0.55) / 0.45) * Math.min(1, dt * (k >= 1 ? 3 : 1.2));
-      A.th += d * f * (mB / (mA + mB));
-      B.th -= d * f * (mA / (mA + mB));
-    }
-    if (k >= 1 && Math.abs(wrap(B.th - A.th)) < 0.08) this.collide(e, A, B);
+    const [big, small] = heavier(A, B);
+    const slot = this.h.s.worlds.filter((m) => m.parent === big.id).length;
+    // A moon-to-be ends a moon's distance ahead of (or behind) the heavier world; a crash ends on it.
+    const moonD = moonOrbit(big, slot);
+    const end = e.kind === 'moon' ? Math.sign(e.dth0 ?? 1) * Math.min(0.5, moonD / Math.max(1, sysWorld(big.a))) : 0;
+    small.th = big.th + (e.dth0 ?? 0) * (1 - p) + end * p;
+    // It ends the moment they touch on screen (no overlapping first), or when the time is up.
+    const pb = drawn(big);
+    const ps = drawn(small);
+    const d = Math.hypot(pb.x - ps.x, pb.z - ps.z);
+    if (e.kind === 'moon') {
+      if (d <= moonD * 1.02 || p >= 1) this.capture(e, big, small);
+    } else if (d <= (worldRadius(big) + worldRadius(small)) * 0.9 || p >= 1) this.collide(e, A, B);
   }
 
   private drop(e: Encounter) {
     const i = this.list.indexOf(e);
     if (i >= 0) this.list.splice(i, 1);
+  }
+
+  /** The lighter world is caught: it becomes one of the heavier one's moons, with its life and peoples. */
+  private capture(e: Encounter, big: World, small: World) {
+    this.drop(e);
+    const s = this.h.s;
+    const rng = this.h.rng;
+    const pb = drawn(big);
+    const ps = drawn(small);
+    // Its own moons follow it into the new family while there is room; the rest break into debris.
+    const theirs = s.worlds.filter((m) => m.parent === small.id);
+    const ours = s.worlds.filter((m) => m.parent === big.id).sort((x, y) => x.a - y.a);
+    ours.forEach((m, i) => (m.a = i));
+    small.parent = big.id;
+    small.a = ours.length;
+    small.th = Math.atan2(ps.z - pb.z, ps.x - pb.x);
+    const lost: string[] = [];
+    let n = ours.length + 1;
+    for (const m of theirs) {
+      if (n < MAX_MOONS) {
+        m.parent = big.id;
+        m.a = n++;
+      } else {
+        lost.push(m.name);
+        this.h.removeWorld(m.id);
+      }
+    }
+    if (lost.length) for (let i = 0; i < 30; i++) s.belts.push({ r: big.a * (1 + rng.gauss(0, 0.015)), th: big.th + rng.range(-0.6, 0.6), s: 0.0005, born: s.time });
+    this.h.fx({ kind: 'capture', world: big.id, x: ps.x, z: ps.z });
+    this.h.news(
+      '☾',
+      `${small.name} ha sido capturado por ${big.name}: ahora es una de sus lunas.${small.life || small.colony > 0 ? ' La vida sigue allí, bajo un cielo nuevo.' : ''}`,
+      `${small.name} has been captured by ${big.name}: it is now one of its moons.${small.life || small.colony > 0 ? ' Life goes on there, under a new sky.' : ''}`,
+      'good',
+      { world: small.id },
+    );
+    if (lost.length) this.h.news('✺', `Las lunas que no caben se rompen en un anillo de escombros: ${lost.join(', ')}.`, `The moons with no room left break into a ring of debris: ${lost.join(', ')}.`, 'warn', { world: big.id });
   }
 
   /** Two worlds become one; what is left over becomes moons, rings, a trail — or a new world. */

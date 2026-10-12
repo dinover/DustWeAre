@@ -176,7 +176,7 @@ export class DiskView {
     this.avgSolids = cnt ? tot / cnt : 0.01;
   }
 
-  update(f: Formation, dt: number, time: number, cursorOn: boolean, showOrbit: number | null) {
+  update(f: Formation, dt: number, time: number, cursorOn: boolean, showOrbit: number | null, orbitDanger = false) {
     this.baseT -= dt;
     if (this.baseT <= 0) {
       this.baseT = 0.4;
@@ -240,6 +240,8 @@ export class DiskView {
     }
     this.orbit.visible = showOrbit !== null;
     if (showOrbit !== null) this.orbit.scale.setScalar(toWorld(showOrbit));
+    // The new orbit turns ember when the body would be pulled into another and merge.
+    (this.orbit.material as THREE.LineBasicMaterial).color.setHex(orbitDanger ? 0xff7b35 : 0xe8d2a0);
   }
 
   dispose() {

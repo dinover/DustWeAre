@@ -267,6 +267,16 @@ export class Formation {
     return this.nudgeBody;
   }
 
+  /** Would a body left on this orbit (AU) be pulled into another body and merge with it? */
+  willMerge(b: Body, at: number) {
+    const w = toWorld(at);
+    return this.bodies.some((o) => {
+      if (o === b) return false;
+      const near = Math.max((captureRadius(b) + captureRadius(o)) * 0.42, (bodyRadius(b) + bodyRadius(o)) * 0.95);
+      return Math.abs(toWorld(o.r) - w) < near;
+    });
+  }
+
   private releaseClump() {
     const c = this.clump!;
     this.clump = null;

@@ -14,6 +14,8 @@ export class Effects {
   private list: Fx[] = [];
   private ringGeo = new THREE.RingGeometry(0.9, 1, 64);
   private thinRingGeo = new THREE.RingGeometry(0.975, 1, 96);
+  /** A fine, round ring for whole orbits. */
+  private orbitGeo = new THREE.RingGeometry(0.988, 1, 256);
   private beamGeo: THREE.PlaneGeometry;
 
   constructor(private camera: THREE.Camera) {
@@ -103,6 +105,16 @@ export class Effects {
   }
 
   /** An explosion: a hot flash and a fading shock ring. */
+  /** A ring that lights up along a whole orbit and fades: a planet settling into a stable orbit. */
+  orbit(radius: number, color: number, dur = 2) {
+    const m = new THREE.Mesh(this.orbitGeo, new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    m.rotation.x = -Math.PI / 2;
+    this.add(m, dur, (k) => {
+      m.scale.setScalar(radius * (1.03 - 0.03 * k));
+      (m.material as THREE.MeshBasicMaterial).opacity = 0.85 * Math.sin(Math.PI * Math.min(1, k * 1.15));
+    });
+  }
+
   boom(x: number, y: number, z: number, big: boolean, color = 0xffa060) {
     this.flash(x, y, z, color, big ? 9 : 3.5, big ? 1.2 : 0.6);
     this.flash(x, y, z, 0xffffff, big ? 4 : 1.5, 0.3);

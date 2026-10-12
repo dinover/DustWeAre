@@ -4,7 +4,7 @@ import { worldStats, colonizable, isGiantStuff, type WorldStats } from './worlds
 import { CivSim, type CivFx } from './civ';
 import { MAX_PEOPLES, PeopleSim, migratePeoples, peopleOf, type PeopleFx } from './peoples';
 import { PatrolSim, type PatrolFx } from './patrols';
-import { OrbitSim, type OrbitFx } from './orbits';
+import { OrbitSim, orbitState, snapStable, type OrbitFx } from './orbits';
 import { VoicesSim, addHarm } from './voices';
 import { DISCOUNT, FaithSim, addFaith, dreadOf, faithOf, faithTier, note, type FaithFx } from './faith';
 import { WingsSim } from './wings';
@@ -1307,6 +1307,26 @@ export class SystemSim {
     if (w.parent !== null) return;
     const before = w.a;
     w.a = clamp(w.a * factor, 0.3, 16);
+    // Close enough to a stable orbit, the planet finds its lane on its own.
+    if (orbitState(w, this.s.worlds).state === 'unstable') {
+      const lane = snapStable(w, this.s.worlds, w.a);
+      if (lane !== null) w.a = lane;
+    }
     if (Math.abs(w.a - before) > 0.001) this.news('↻', `${w.name} cambió de órbita: ahora está a ${w.a.toFixed(2).replace('.', ',')} UA de su estrella.`, `${w.name} moved to a new orbit: now ${w.a.toFixed(2)} AU from its star.`, 'info');
+    // A planet already caught in an encounter is told about by the encounter itself.
+    if (this.orbits.busy(w.id)) return;
+    const st = orbitState(w, this.s.worlds);
+    if (st.state !== 'unstable') {
+      this.news(
+        '✓',
+        st.state === 'edge' ? `${w.name} se asienta en una órbita estable, aunque al límite de ${st.other!.name}.` : `${w.name} se asienta en una órbita estable.`,
+        st.state === 'edge' ? `${w.name} settles into a stable orbit, though close to ${st.other!.name}.` : `${w.name} settles into a stable orbit.`,
+        'good',
+        { world: w.id },
+      );
+      this.fx({ kind: 'stable', world: w.id });
+    }
+    // Inside a band: the warning comes at once, not a few seconds later.
+    else this.orbits.scan();
   }
 }

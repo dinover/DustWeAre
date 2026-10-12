@@ -324,6 +324,7 @@ a { color: var(--dust); }
 .inspector h2 { margin: 0; font: 700 var(--fs-xl) var(--title); letter-spacing: var(--tr-m); color: var(--dust); text-shadow: 0 -1px 0 #000, 0 0 18px rgba(255, 180, 90, .18); }
 .inspector .kind { font-size: var(--fs-m); color: var(--sand-dim); margin: 1px 0 10px; }
 .inspector .x { position: absolute; right: 10px; top: 10px; }
+.inspector .orbit-line { margin: -6px 0 10px; cursor: help; }
 .inspector section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(220, 187, 122, .12); position: relative; }
 .inspector section::before { content: ''; position: absolute; top: -1px; left: 0; width: 40px; height: 1px; background: var(--ember); box-shadow: 0 0 6px var(--ember); opacity: .6; }
 .inspector h3 { margin: 0 0 7px; font: 700 var(--fs-xs) var(--title); letter-spacing: var(--tr-l); color: var(--dust-dim); }
@@ -367,6 +368,7 @@ a { color: var(--dust); }
 .wlabel .f .a { color: var(--violet); }
 .guide-label { position: absolute; transform: translate(-50%, -50%); font: italic 500 13px var(--lore); color: rgba(160, 205, 130, .65); text-shadow: 0 0 8px #000; pointer-events: none; white-space: nowrap; }
 .guide-label.snow { color: rgba(170, 215, 235, .6); }
+.guide-label.stable { color: rgba(190, 230, 150, .95); font-style: normal; font: 600 var(--fs-s) var(--body); letter-spacing: .04em; }
 .tag { position: absolute; padding: 6px 10px 7px; font-size: var(--fs-s); pointer-events: none; transform: translate(14px, 14px); white-space: nowrap; z-index: 5; }
 .tag b { font-family: var(--title); color: var(--dust); letter-spacing: var(--tr-m); }
 .target-banner { position: absolute; top: calc(118px + var(--safe-t)); left: 50%; transform: translateX(-50%); padding: 10px 18px; display: flex; gap: 14px; align-items: center; font-size: 15px; }

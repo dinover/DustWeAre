@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { far, omega, sysWorld, type GameState, type Ship, type ShipKind, type World } from '../core/state';
+import { far, omega, sysWorld, view, type GameState, type Ship, type ShipKind, type World } from '../core/state';
 import { worldStats, isGiantStuff } from '../sim/worlds';
 import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
+import { orbitState } from '../sim/orbits';
 import { PlanetMesh, baseLook, lookOfWorld, ringStyleOf, type Look } from './Planet';
 import { glowTexture } from './Stage';
 import { worldRadius, worldXZ } from './layout';
@@ -127,6 +128,9 @@ export class SystemView {
   private tmp2 = { x: 0, z: 0 };
   selected: number | null = null;
   hovered: number | null = null;
+  /** The migration guide: stable stretches (green), neighbours' bands (ember) and the next stable orbits. */
+  private guide = new THREE.Group();
+  private guideKey = '';
   /** Ship positions (for flare targeting). */
   shipXYZ = new Map<number, THREE.Vector3>();
 
@@ -193,7 +197,7 @@ export class SystemView {
     this.elevatorTop.visible = false;
     this.rogueGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x7a2a18, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.6 }));
     this.rogueGlow.visible = false;
-    this.group.add(this.dyson, this.ringMesh, this.elevator, this.elevatorTop, this.rogueGlow);
+    this.group.add(this.dyson, this.ringMesh, this.elevator, this.elevatorTop, this.rogueGlow, this.guide);
     this.trailGeo = new THREE.BufferGeometry();
     this.trailGeo.setAttribute('position', new THREE.BufferAttribute(this.trailPos, 3).setUsage(THREE.DynamicDrawUsage));
     this.trailGeo.setAttribute('color', new THREE.BufferAttribute(this.trailCol, 3).setUsage(THREE.DynamicDrawUsage));
@@ -218,6 +222,39 @@ export class SystemView {
     // Soft light from the galaxy above, so the ships' night sides are never pitch black.
     const sky = new THREE.HemisphereLight(0xb8c4e0, 0x2a2018, 0.9);
     this.group.add(amb, sky);
+  }
+
+  /**
+   * Shows (or hides, with null) the migration guide for one planet: where it would be stable, the bands
+   * of its neighbours, and dashed rings on the next stable orbits. Rebuilt only when something changes.
+   */
+  showOrbitGuide(g: { zones: [number, number][]; bands: [number, number][]; marks: number[] } | null) {
+    const key = g ? JSON.stringify(g) + view.spread.toFixed(3) : '';
+    if (key === this.guideKey) return;
+    this.guideKey = key;
+    for (const c of [...this.guide.children]) {
+      this.guide.remove(c);
+      const m = c as THREE.Mesh;
+      m.geometry?.dispose();
+      (m.material as THREE.Material | undefined)?.dispose();
+    }
+    if (!g) return;
+    const band = (lo: number, hi: number, color: number, opacity: number) => {
+      const r0 = sysWorld(lo);
+      const r1 = Math.max(r0 + 0.15, sysWorld(hi));
+      const m = new THREE.Mesh(new THREE.RingGeometry(r0, r1, 192, 1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = -0.04;
+      this.guide.add(m);
+    };
+    for (const [lo, hi] of g.zones) band(lo, hi, 0x98c770, 0.1);
+    for (const [lo, hi] of g.bands) band(lo, hi, 0xff7b35, 0.12);
+    for (const a of g.marks) {
+      const line = new THREE.LineLoop(this.orbitGeo, new THREE.LineDashedMaterial({ color: 0xb8e08a, dashSize: 0.02, gapSize: 0.016, transparent: true, opacity: 0.9, depthWrite: false }));
+      line.scale.setScalar(sysWorld(a));
+      line.computeLineDistances();
+      this.guide.add(line);
+    }
   }
 
   setBelts(belts: { r: number; th: number; s: number }[]) {
@@ -399,6 +436,12 @@ export class SystemView {
         this.group.add(mesh.group);
         this.map.set(w.id, e);
       }
+      // A planet caught as a moon no longer has an orbit of its own around the star.
+      if (e.orbit && w.parent !== null) {
+        this.group.remove(e.orbit);
+        (e.orbit.material as THREE.Material).dispose();
+        e.orbit = null;
+      }
       const p = worldXZ(w, this.byId, this.tmp);
       e.mesh.group.position.set(p.x, 0, p.z);
       const r = worldRadius(w);
@@ -415,7 +458,14 @@ export class SystemView {
       e.mesh.update(dt, time, sel);
       if (e.orbit) {
         e.orbit.scale.setScalar(sysWorld(w.a));
-        (e.orbit.material as THREE.LineBasicMaterial).opacity = this.selected === w.id ? 0.55 : this.hovered === w.id ? 0.32 : 0.14;
+        const om = e.orbit.material as THREE.LineBasicMaterial;
+        om.opacity = this.selected === w.id ? 0.55 : this.hovered === w.id ? 0.32 : 0.14;
+        // The selected planet's orbit tells how safe it is: green stable, amber on the edge, ember in danger.
+        if (this.selected === w.id) {
+          const st = orbitState(w, s.worlds).state;
+          const caught = (s.encounters ?? []).some((x) => x.a === w.id || x.b === w.id);
+          om.color.setHex(caught || st === 'unstable' ? 0xff7b35 : st === 'edge' ? 0xe5b65a : 0x98c770);
+        } else om.color.setHex(0xc9a86a);
       }
       const am = e.aura.material as THREE.SpriteMaterial;
       am.opacity = w.invaded * (0.45 + 0.2 * Math.sin(time * 2 + w.id));

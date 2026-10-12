@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { onLangChange, pick, tr, num } from '../i18n';
 import { Rng, clamp, damp, randomSeed } from '../util';
-import { far, massOf, solidsOf, toWorld, habZone, view, type Heirloom, type StarType, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
+import { far, massOf, solidsOf, sysWorld, toAU, toWorld, habZone, view, type Heirloom, type StarType, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
 import { SystemSim, COST, WRATHS, WRATH_COST, type Fx, type Wrath } from '../sim/system';
@@ -27,7 +27,7 @@ import { h } from '../ui/dom';
 import { fmtAge, kindName, listOf } from '../ui/text';
 import { capName, worldName } from '../content/names';
 import { renameDialog } from '../ui/Rename';
-import { spaceOrbits } from '../sim/orbits';
+import { captureDist, nearestStable, orbitState, snapStable, spaceOrbits, stableZones } from '../sim/orbits';
 import { playComets } from '../minigames/Comets';
 import { ProjectsPanel, type ProjTab } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
@@ -36,7 +36,7 @@ import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
 import { DEFENCES, allureOf, defLevel, threatOf } from '../sim/threat';
-import { playMigration } from '../minigames/Migration';
+import { playMigration, type MigrationGuide } from '../minigames/Migration';
 import { sound } from '../audio';
 
 type Sel = number | 'star' | null;
@@ -667,15 +667,22 @@ export class Game {
       const A = s.worlds.find((w) => w.id === e.a);
       const B = s.worlds.find((w) => w.id === e.b);
       if (!A || !B) continue;
+      const moon = e.kind === 'moon';
+      const [big, small] = massOf(A) >= massOf(B) ? [A, B] : [B, A];
       out.push({
         id: -e.id,
-        icon: '☄',
-        title: tr('¡Colisión inminente!', 'Collision ahead!'),
-        body: tr(
-          `<b>${A.name}</b> y <b>${B.name}</b> se atraen y van a chocar.${e.emergency ? ' Sus pueblos han declarado el estado de emergencia y evacúan.' : ''} <i>Migrar uno de los dos aún podría evitarlo.</i>`,
-          `<b>${A.name}</b> and <b>${B.name}</b> are pulling at each other and will collide.${e.emergency ? ' Their peoples have declared a state of emergency and are evacuating.' : ''} <i>Migrating one of them could still avert it.</i>`,
-        ),
-        yes: tr('Ver el choque', 'Watch it'),
+        icon: moon ? '☾' : '☄',
+        title: moon ? tr('¡Captura inminente!', 'Capture ahead!') : tr('¡Colisión inminente!', 'Collision ahead!'),
+        body: moon
+          ? tr(
+              `<b>${big.name}</b> arrastra a <b>${small.name}</b>: acabará orbitándolo como una luna. <i>Migrar uno de los dos aún podría evitarlo.</i>`,
+              `<b>${big.name}</b> is dragging <b>${small.name}</b> along: it will end up orbiting it as a moon. <i>Migrating one of them could still avert it.</i>`,
+            )
+          : tr(
+              `<b>${A.name}</b> y <b>${B.name}</b> se atraen y van a chocar.${e.emergency ? ' Sus pueblos han declarado el estado de emergencia y evacúan.' : ''} <i>Migrar uno de los dos aún podría evitarlo.</i>`,
+              `<b>${A.name}</b> and <b>${B.name}</b> are pulling at each other and will collide.${e.emergency ? ' Their peoples have declared a state of emergency and are evacuating.' : ''} <i>Migrating one of them could still avert it.</i>`,
+            ),
+        yes: moon ? tr('Verlo', 'Watch it') : tr('Ver el choque', 'Watch it'),
         yesOk: true,
         no: tr('Cerrar', 'Close'),
         left: Math.max(0, e.dur - e.t),
@@ -775,6 +782,20 @@ export class Game {
         this.fx.boom(x, 0.3, z, false, f.pod ? 0xffb060 : 0x9fc0ff);
         if (f.pod) this.fx.ring(p.x, p.z, 0xffc890, r * 1.6 + 1, 0.8, 0, true);
         sound.thud(f.pod ? 0.5 : 0.25);
+        return;
+      }
+      case 'capture': {
+        // A world caught as a moon: a soft flash and a ring where it settles.
+        this.fx.flash(f.x, 0, f.z, 0xbfe0ff, 8, 1.6);
+        this.fx.ring(f.x, f.z, 0x9fd4ff, 9, 2.2);
+        sound.chime('good');
+        return;
+      }
+      case 'stable': {
+        // A green ring runs along the orbit the planet settled into.
+        const w = this.s?.worlds.find((x) => x.id === f.world);
+        if (w && w.parent === null) this.fx.orbit(sysWorld(w.a), 0x98c770, 2.2);
+        sound.chime('good');
         return;
       }
       case 'collision': {
@@ -1026,7 +1047,12 @@ export class Game {
       wrath: tr('la ira de la estrella', 'the wrath of the star'),
       bless: tr('la bendición (un mundo habitado)', 'the blessing (a peopled world)'),
     }[a];
-    const extra = a === 'flare' ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)') : '';
+    const extra =
+      a === 'flare'
+        ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)')
+        : a === 'migrate'
+          ? tr('. Pasa sobre un planeta: <b class="moss">verde</b>, donde su órbita sería estable; <b class="ember">brasa</b>, la zona de sus vecinos', '. Hover a planet: <b class="moss">green</b>, where its orbit would be stable; <b class="ember">ember</b>, its neighbours’ reach')
+          : '';
     this.hud.showBanner(tr(`Elige un objetivo para ${name}${extra}.`, `Choose a target for ${name}${extra}.`));
   }
 
@@ -1108,6 +1134,7 @@ export class Game {
           a: w.a,
           hz: habZone(L),
           preview: (a2) => worldStats({ ...w, a: a2 }, s.worlds, L).T,
+          guide: this.migrationGuide(w),
         },
         (factor) => {
           this.hold = Math.max(0, this.hold - 1);
@@ -1760,12 +1787,15 @@ export class Game {
       activeF.L = L;
       this.disk.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov);
       const nudging = activeF.nudging;
-      this.disk.update(activeF, dt, this.time, this.mode === 'play', nudging ? nudging.target ?? nudging.r : null);
+      const nudgeAt = nudging ? nudging.target ?? nudging.r : null;
+      this.disk.update(activeF, dt, this.time, this.mode === 'play', nudgeAt, !!nudging && nudgeAt !== null && activeF.willMerge(nudging, nudgeAt));
       this.bodiesView.update(activeF.bodies, L, dt, this.time);
     }
     if (s && this.sim) {
       this.systemView.setScale(this.stage.renderer.domElement.height, this.stage.camera.fov, this.stage.canvas.clientHeight || window.innerHeight);
       this.systemView.update(s, dt, this.time);
+      const gw = this.guideTarget();
+      this.systemView.showOrbitGuide(gw ? this.orbitGuide(gw) : null);
     }
 
     // Interface.
@@ -2028,6 +2058,62 @@ export class Game {
     panel.bindClose(close);
   }
 
+  private guideCache: { id: number; t: number; g: { zones: [number, number][]; bands: [number, number][]; marks: number[]; inner?: number; outer?: number } } | null = null;
+
+  /** What the migration minigame shows about a planet's neighbourhood. */
+  private migrationGuide(w: World): MigrationGuide {
+    const worlds = this.s!.worlds;
+    const zones = stableZones(w, worlds);
+    const { inner, outer } = nearestStable(w, worlds, zones);
+    const neighbours = worlds
+      .filter((p) => p.parent === null && p.id !== w.id)
+      .map((p) => {
+        const D = captureDist(w, p);
+        const x = toWorld(p.a);
+        return { name: p.name, a: p.a, band: [toAU(Math.max(0, x - D)), toAU(x + D)] as [number, number] };
+      });
+    return {
+      neighbours,
+      zones,
+      inner,
+      outer,
+      check: (a) => {
+        const st = orbitState(w, worlds, a);
+        return { state: st.state, other: st.other?.name, outcome: st.outcome, heavier: !!st.other && massOf(w) >= massOf(st.other), snap: st.state === 'unstable' ? snapStable(w, worlds, a) : null };
+      },
+    };
+  }
+
+  /** The planet the migration guide is about: the one under the pointer while choosing a target for Migrate (or the selected one). */
+  private guideTarget(): World | null {
+    if (this.targeting !== 'migrate' || !this.s) return null;
+    const id = this.systemView.hovered ?? (typeof this.selected === 'number' ? this.selected : null);
+    const w = id !== null ? this.s.worlds.find((x) => x.id === id) : undefined;
+    return w && w.parent === null ? w : null;
+  }
+
+  /** Where a planet would be stable, its neighbours' bands and the next stable orbits (refreshed twice a second). */
+  private orbitGuide(w: World) {
+    const now = performance.now();
+    if (this.guideCache && this.guideCache.id === w.id && now - this.guideCache.t < 500) return this.guideCache.g;
+    const worlds = this.s!.worlds;
+    const zones = stableZones(w, worlds);
+    const { inner, outer } = nearestStable(w, worlds, zones);
+    const bands = worlds
+      .filter((p) => p.parent === null && p.id !== w.id)
+      .map((p) => {
+        const D = captureDist(w, p);
+        const x = toWorld(p.a);
+        return [toAU(Math.max(0, x - D)), toAU(x + D)] as [number, number];
+      });
+    const marks = [inner, outer].filter((x): x is number => x !== undefined);
+    // Green is the habitable zone's colour on the map: the stable stretches are shown by their
+    // dashed rings only, the neighbours' reach in ember.
+    const g = { zones: [] as [number, number][], bands, marks, inner, outer };
+    this.guideCache = { id: w.id, t: now, g };
+    return g;
+  }
+
   private drawLabels(s: GameState, L: number) {
     // Guides: names written on the rings, on the side facing the camera.
     const yaw = this.stage.yaw;
@@ -2037,6 +2123,20 @@ export class Game {
     const sr = this.guides.snowRadius(L);
     this.labels.put('g.snow', 'guide-label snow', tr('línea de nieve', 'snow line'), Math.sin(yaw + 0.25) * sr, 0, Math.cos(yaw + 0.25) * sr);
     if (!this.sim) return;
+    // Choosing where to migrate: the next stable orbits are named on their rings.
+    const gw = this.guideTarget();
+    if (gw) {
+      const g = this.orbitGuide(gw);
+      const st = orbitState(gw, s.worlds);
+      const here = st.state === 'unstable' ? tr('aquí: inestable', 'here: unstable') : tr('aquí: estable', 'here: stable');
+      const put = (key: string, a: number, label: string, ang: number) => {
+        const r = sysWorld(a);
+        this.labels.put(key, 'guide-label stable', label, Math.sin(yaw + ang) * r, 0, Math.cos(yaw + ang) * r);
+      };
+      if (g.inner !== undefined) put('g.in', g.inner, tr(`estable · ${num(g.inner, 2)} UA`, `stable · ${num(g.inner, 2)} AU`), -0.35);
+      if (g.outer !== undefined) put('g.out', g.outer, tr(`estable · ${num(g.outer, 2)} UA`, `stable · ${num(g.outer, 2)} AU`), -0.35);
+      put('g.here', gw.a, here, 0.95);
+    }
     const near = this.stage.dist < 75;
     const byId = new Map(s.worlds.map((w) => [w.id, w]));
     const tmp = { x: 0, z: 0 };

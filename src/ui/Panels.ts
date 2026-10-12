@@ -11,6 +11,7 @@ import { ETHOS_INFO, USE_INFO, ethosOf, naturalUse } from '../sim/uses';
 import { coexists, colonyCap, nativeCap, pressureOn } from '../sim/population';
 import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
 import { CONDENSE } from '../sim/system';
+import { orbitState } from '../sim/orbits';
 
 const hsl = (h: number, s = 70, l = 62) => `hsl(${Math.round(h * 360)} ${s}% ${l}%)`;
 const resWord = (k: 'fuel' | 'water' | 'metal' | 'science') => ({ metal: tr('metal', 'metal'), fuel: tr('combustible', 'fuel'), water: tr('agua', 'water'), science: tr('ciencia', 'science') })[k];
@@ -301,10 +302,37 @@ export interface InspectorHandlers {
 }
 
 /** Side panel with everything about the selected world (or the star). */
+/** One line on how safe a planet's orbit is (and when an encounter will end, if it is caught in one). */
+function orbitLine(w: World, s: GameState) {
+  if (w.parent !== null || s.phase !== 'system') return '';
+  const e = (s.encounters ?? []).find((x) => x.a === w.id || x.b === w.id);
+  if (e) {
+    const other = s.worlds.find((x) => x.id === (e.a === w.id ? e.b : e.a));
+    const left = Math.max(1, Math.round(e.dur - e.t));
+    if (!other) return '';
+    if (e.kind === 'moon') {
+      const caught = massOf(w) <= massOf(other);
+      return `<span class="ember">☾ ${caught ? tr(`Inestable: ${other.name} lo capturará como luna en ~${left} s`, `Unstable: ${other.name} will capture it as a moon in ~${left}s`) : tr(`Capturará a ${other.name} como luna en ~${left} s`, `It will capture ${other.name} as a moon in ~${left}s`)}</span>`;
+    }
+    return `<span class="ember">⚠ ${tr(`Inestable: chocará con ${other.name} en ~${left} s`, `Unstable: it will collide with ${other.name} in ~${left}s`)}</span>`;
+  }
+  const st = orbitState(w, s.worlds);
+  const tip = tr('Cada planeta domina una franja alrededor de su órbita, más ancha cuanto más masivo es. Un mundo más ligero dentro de esa franja no puede quedarse: choca o acaba como su luna. Usa <b>Migrar</b> para buscar una órbita estable.', 'Every planet rules a band around its orbit, wider the more massive it is. A lighter world inside that band cannot stay: it crashes or ends up as its moon. Use <b>Migrate</b> to find a stable orbit.').replace(/"/g, '&quot;');
+  if (st.state === 'unstable') {
+    const o = st.other!;
+    const text = massOf(w) >= massOf(o) ? tr(`Inestable: ${o.name} está dentro de su zona`, `Unstable: ${o.name} is inside its reach`) : tr(`Inestable: dentro de la zona de ${o.name}`, `Unstable: inside the reach of ${o.name}`);
+    return `<span class="ember" data-tip="${tip}">⚠ ${text}</span>`;
+  }
+  if (st.state === 'edge') return `<span class="gold" data-tip="${tip}">◐ ${tr(`Órbita estable, al límite de ${st.other!.name}`, `Stable orbit, close to ${st.other!.name}`)}</span>`;
+  return `<span class="moss" data-tip="${tip}">✓ ${tr('Órbita estable', 'Stable orbit')}</span>`;
+}
+
 export class Inspector {
   el: HTMLElement;
   private title: HTMLElement;
   private kind: HTMLElement;
+  /** Is the planet's orbit safe? */
+  private orbit: HTMLElement;
   private body: HTMLElement;
   private extra: HTMLElement;
   private slider: HTMLInputElement | null = null;
@@ -329,6 +357,7 @@ export class Inspector {
       '✎',
     );
     this.kind = h('div', { class: 'kind' });
+    this.orbit = h('div', { class: 'orbit-line small' });
     this.body = h('div');
     this.extra = h('div');
     this.el = stone(
@@ -336,6 +365,7 @@ export class Inspector {
       h('button', { class: 'btn icon small x ghost', 'data-tip': tr('Cerrar', 'Close'), onclick: () => this.on.close() }, '✕'),
       h('div', { class: 'title-line' }, this.title, rename),
       this.kind,
+      this.orbit,
       this.body,
       this.extra,
     );
@@ -366,6 +396,9 @@ export class Inspector {
       ? tr(`Luna de ${parent.name}`, `Moon of ${parent.name}`)
       : tr(`${num(w.a, 2)} UA de la estrella`, `${num(w.a, 2)} AU from the star`);
     this.kind.textContent = `${kindName(st.kind)} · ${where}`;
+    const ol = orbitLine(w, s);
+    if (this.orbit.innerHTML !== ol) this.orbit.innerHTML = ol;
+    this.orbit.style.display = ol ? '' : 'none';
     const m = massOf(w);
     const parts: [number, string, string][] = [
       [w.metal, '#8c5a44', tr('metal', 'metal')],
@@ -548,6 +581,7 @@ export class Inspector {
     this.html = '';
     this.el.style.display = '';
     if (fresh) this.el.scrollTop = 0;
+    this.orbit.style.display = 'none';
     this.title.textContent = s.name;
     const type = starOf(s);
     this.kind.textContent = s.phase === 'formation' ? tr(`${type.name.es} recién nacida`, `Newborn ${type.name.en.toLowerCase()}`) : pick(type.name);
