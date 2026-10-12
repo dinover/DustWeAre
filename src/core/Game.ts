@@ -1123,26 +1123,34 @@ export class Game {
     }
     if (a === 'migrate') {
       if (w.parent !== null) return say('Las lunas siguen a su planeta: migra el planeta entero.', 'Moons follow their planet: migrate the whole planet.');
+      const L = s.L * s.dial;
+      const guide = this.migrationGuide(w);
       const paid = sim.cost('migrate');
       s.energy -= paid;
       this.hold++;
-      const L = s.L * s.dial;
-      playMigration(
-        this.ui,
-        {
-          name: w.name,
-          a: w.a,
-          hz: habZone(L),
-          preview: (a2) => worldStats({ ...w, a: a2 }, s.worlds, L).T,
-          guide: this.migrationGuide(w),
-        },
-        (factor) => {
-          this.hold = Math.max(0, this.hold - 1);
-          if (factor && Math.abs(factor - 1) > 1e-3) sim.migrate(w, factor, false);
-          else if (factor === null) s.energy += paid;
-          this.save();
-        },
-      );
+      try {
+        playMigration(
+          this.ui,
+          {
+            name: w.name,
+            a: w.a,
+            hz: habZone(L),
+            preview: (a2) => worldStats({ ...w, a: a2 }, s.worlds, L).T,
+            guide,
+          },
+          (factor) => {
+            this.hold = Math.max(0, this.hold - 1);
+            if (factor && Math.abs(factor - 1) > 1e-3) sim.migrate(w, factor, false);
+            else if (factor === null) s.energy += paid;
+            this.save();
+          },
+        );
+      } catch (err) {
+        // The minigame could not open: the light is given back and the game goes on.
+        s.energy += paid;
+        this.hold = Math.max(0, this.hold - 1);
+        console.error(err);
+      }
     }
   }
 

@@ -25,6 +25,8 @@ export const SNAP = 0.6;
 const STEP = 0.05;
 /** A safe margin over the band's edge for the orbits offered as stable. */
 const SAFE = 1.03;
+/** When the worlds settle, neighbours spread out to at least this many bands apart (room to migrate). */
+const SETTLE_GAP = 1.6;
 /** When the worlds settle, pairs deeper than this share of their band are left to meet later… */
 const DEEP = 0.6;
 /** …but no more than this many. */
@@ -154,38 +156,31 @@ export function snapStable(w: World, worlds: World[], a: number) {
 }
 
 /**
- * When the worlds settle: neighbours inside a band, or too close to look tidy, drift apart into stable,
- * well spaced orbits. Up to two pairs deep inside a band are left alone: they will meet later, in
- * play. Any other pair that cannot be pulled apart (no room left at the edge of the system) meets at
- * once, before the system is shown, as it would have during the formation: the lighter world becomes
- * the heavier one's moon, or the two become one.
+ * When the worlds settle they spread out into roomy, stable orbits: each pair of neighbours ends at
+ * least SETTLE_GAP bands apart (or as far as their looks need), both moving (the heavier less), within
+ * the edges of the system. Up to two pairs deep inside a band are left alone: they will meet later, in
+ * play. If the system has no room for all of them, any other pair still inside a band meets at once,
+ * before the system is shown, as it would have during the formation: the lighter world becomes the
+ * heavier one's moon, or the two become one; then the rest spread out again.
  */
 export function spaceOrbits(worlds: World[]) {
   const left = new Set<string>();
-  for (let pass = 0; pass < 64; pass++) {
+  // The pairs left to meet later are chosen first, among those deepest in a band.
+  {
     const planets = planetsOf(worlds);
+    const deep = [];
     for (let i = 0; i < planets.length - 1; i++) {
       const A = planets[i];
       const B = planets[i + 1];
-      const D = captureDist(A, B);
-      const gap = toWorld(B.a) - toWorld(A.a);
-      const key = `${A.id}:${B.id}`;
-      if (left.has(key)) continue;
-      if (gap < D * DEEP && left.size < DEEP_MAX) {
-        left.add(key);
-        continue;
-      }
-      const need = Math.max(clearance(A, B, worlds), D * EDGE);
-      // (A hair of slack: the round trip through AU must not bring the same pair back again.)
-      if (gap >= need - 1e-6) continue;
-      const a = toAU(toWorld(A.a) + need + 1e-4);
-      if (a > R_MAX * 1.2) continue;
-      B.a = a;
-      // B may have overtaken its outer neighbour: keep the order and look at this pair again.
-      planets.sort((x, y) => x.a - y.a);
-      i--;
+      const r = gapOf(A, B) / captureDist(A, B);
+      if (r < DEEP) deep.push({ key: `${A.id}:${B.id}`, r });
     }
-    // A pair still inside a band that was not left to meet later meets now.
+    deep.sort((x, y) => x.r - y.r);
+    for (const d of deep.slice(0, DEEP_MAX)) left.add(d.key);
+  }
+  for (let pass = 0; pass < 64; pass++) {
+    spread(worlds, left);
+    // A pair still inside a band that was not left to meet later meets now; then spread out again.
     const now = planetsOf(worlds);
     let met = false;
     for (let i = 0; i < now.length - 1 && !met; i++) {
@@ -196,6 +191,45 @@ export function spaceOrbits(worlds: World[]) {
       met = true;
     }
     if (!met) break;
+  }
+}
+
+/** Pushes neighbours apart, both ways, until every pair (but those left to meet) has its room. */
+function spread(worlds: World[], left: Set<string>) {
+  const lo = toWorld(R_MIN * 1.05);
+  const hi = toWorld(R_MAX * 1.2);
+  for (let iter = 0; iter < 400; iter++) {
+    const planets = planetsOf(worlds);
+    const x = planets.map((p) => toWorld(p.a));
+    let moved = false;
+    for (let i = 0; i < planets.length - 1; i++) {
+      const A = planets[i];
+      const B = planets[i + 1];
+      if (left.has(`${A.id}:${B.id}`)) continue;
+      const need = Math.max(clearance(A, B, worlds), captureDist(A, B) * SETTLE_GAP);
+      const gap = x[i + 1] - x[i];
+      if (gap >= need - 1e-3) continue;
+      // Half the shortfall each round, shared by mass (the heavier moves less), within the system.
+      const short = (need - gap) * 0.5;
+      const mA = massOf(A);
+      const mB = massOf(B);
+      let inA = (short * mB) / (mA + mB);
+      let outB = short - inA;
+      if (x[i] - inA < lo) {
+        outB += inA - (x[i] - lo);
+        inA = x[i] - lo;
+      }
+      if (x[i + 1] + outB > hi) {
+        inA = Math.min(x[i] - lo, inA + (x[i + 1] + outB - hi));
+        outB = hi - x[i + 1];
+      }
+      if (inA <= 1e-6 && outB <= 1e-6) continue;
+      x[i] -= inA;
+      x[i + 1] += outB;
+      moved = true;
+    }
+    planets.forEach((p, i) => (p.a = toAU(x[i])));
+    if (!moved) break;
   }
 }
 

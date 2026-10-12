@@ -3,6 +3,8 @@ import { h, stone } from '../ui/dom';
 import { clamp } from '../util';
 
 const ROUNDS = 5;
+/** Size of a push: [good, perfect], as a share of the orbit. Fine pushes are for settling into a narrow lane. */
+const PUSH = { normal: [0.05, 0.08], fine: [0.01, 0.02] } as const;
 /** How far one migration can go at best (five perfect pushes). */
 const REACH_IN = Math.pow(0.92, ROUNDS);
 const REACH_OUT = Math.pow(1.08, ROUNDS);
@@ -40,11 +42,22 @@ export function playMigration(
   g.scale(dpr, dpr);
   const info = h('div', { class: 'small' });
   const choose = h('div', { class: 'chips' });
+  let fine = false;
+  // Fine pushes: a twentieth of the normal ones, to land inside a narrow stable lane (F toggles it).
+  const fineBtn = h('button', { class: 'btn small', 'aria-pressed': 'false', onclick: () => setFine(!fine) }) as HTMLButtonElement;
+  const setFine = (v: boolean) => {
+    fine = v;
+    fineBtn.classList.toggle('on', v);
+    fineBtn.setAttribute('aria-pressed', String(v));
+    fineBtn.textContent = v ? tr('Empuje fino: sí', 'Fine push: on') : tr('Empuje fino: no', 'Fine push: off');
+    fineBtn.dataset.tip = tr('Cada empuje mueve la órbita un 1–2 % en lugar de un 5–8 %. Tecla F.', 'Each push moves the orbit 1–2% instead of 5–8%. Key F.');
+  };
+  setFine(false);
   const card = stone(
     'mg',
     h('div', { class: 'top' }, h('h1', { class: 'carved' }, tr(`Migración orbital de ${o.name}`, `Orbital migration of ${o.name}`)), h('button', { class: 'btn small', onclick: () => finish() }, tr('Terminar', 'Finish'))),
     canvas,
-    h('div', { class: 'bar' }, info, choose),
+    h('div', { class: 'bar' }, info, h('div', { class: 'chips' }, choose, fineBtn)),
   );
   const veil = h('div', { class: 'veil' }, card);
   host.append(veil);
@@ -85,12 +98,13 @@ export function playMigration(
   const press = () => {
     if (!dir || round >= ROUNDS || !running) return;
     const d = Math.abs(needle - zone);
+    const [good, perfect] = PUSH[fine ? 'fine' : 'normal'];
     if (d < zoneW * 0.22) {
-      factor *= dir < 0 ? 0.92 : 1.08;
+      factor *= 1 + dir * perfect;
       msg = tr('¡Perfecto!', 'Perfect!');
       msgGood = true;
     } else if (d < zoneW * 0.5) {
-      factor *= dir < 0 ? 0.95 : 1.05;
+      factor *= 1 + dir * good;
       msg = tr('Bien', 'Good');
       msgGood = true;
     } else {
@@ -108,6 +122,10 @@ export function playMigration(
       e.preventDefault();
       e.stopPropagation();
       press();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFine(!fine);
     }
   };
   window.addEventListener('keydown', onKey, true);
