@@ -272,6 +272,7 @@ export class TitleScreen {
   el: HTMLElement;
   private motes: HTMLCanvasElement;
   private raf = 0;
+  private stopMotes = () => {};
 
   constructor(
     private host: HTMLElement,
@@ -340,12 +341,26 @@ export class TitleScreen {
     const g = c.getContext('2d');
     if (!g) return;
     const motes = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), s: 0.5 + Math.random() * 1.8, v: 0.004 + Math.random() * 0.012, p: Math.random() * 6.28 }));
+    // The canvas is resized only when its box changes (resizing it clears and reallocates it).
+    const fit = () => {
+      c.width = c.clientWidth;
+      c.height = c.clientHeight;
+    };
+    fit();
+    // With reduced motion the motes are drawn once and stay still.
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const resize = new ResizeObserver(() => {
+      fit();
+      if (still) tick(performance.now());
+    });
+    resize.observe(c);
+    this.stopMotes = () => resize.disconnect();
     let last = performance.now();
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const w = (c.width = c.clientWidth);
-      const hh = (c.height = c.clientHeight);
+      const w = c.width;
+      const hh = c.height;
       g.clearRect(0, 0, w, hh);
       for (const m of motes) {
         m.y -= m.v * dt * 3;
@@ -362,13 +377,15 @@ export class TitleScreen {
         g.arc(m.x * w, m.y * hh, m.s, 0, Math.PI * 2);
         g.fill();
       }
-      this.raf = requestAnimationFrame(tick);
+      if (!still) this.raf = requestAnimationFrame(tick);
     };
-    this.raf = requestAnimationFrame(tick);
+    if (still) tick(last);
+    else this.raf = requestAnimationFrame(tick);
   }
 
   destroy() {
     cancelAnimationFrame(this.raf);
+    this.stopMotes();
     this.el.style.transition = 'opacity .8s';
     this.el.style.opacity = '0';
     setTimeout(() => this.el.remove(), 800);

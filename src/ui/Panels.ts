@@ -353,6 +353,8 @@ export class Inspector {
     this.target = w.id;
     this.el.style.display = '';
     if (fresh) {
+      // A new target starts at the top: its name must never be scrolled out of sight.
+      this.el.scrollTop = 0;
       clear(this.extra);
       this.slider = null;
       this.extra.append(
@@ -545,6 +547,7 @@ export class Inspector {
     this.target = 'star';
     this.html = '';
     this.el.style.display = '';
+    if (fresh) this.el.scrollTop = 0;
     this.title.textContent = s.name;
     const type = starOf(s);
     this.kind.textContent = s.phase === 'formation' ? tr(`${type.name.es} recién nacida`, `Newborn ${type.name.en.toLowerCase()}`) : pick(type.name);

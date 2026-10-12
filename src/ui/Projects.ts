@@ -623,13 +623,17 @@ export class ProjectsPanel {
       const html = costChips(c.def.cost, { metal: civ.res.metal / UPFRONT, fuel: civ.res.fuel / UPFRONT, water: civ.res.water / UPFRONT, science: civ.res.science / UPFRONT });
       if (c.cost.innerHTML !== html) c.cost.innerHTML = html;
       c.el.classList.toggle('done', done);
+      c.el.classList.toggle('building', building);
       c.el.classList.toggle('locked', !done && !building && !!lock);
       c.bar.style.display = building ? '' : 'none';
       if (building) (c.bar.firstChild as HTMLElement).style.setProperty('--v', `${Math.round((civ.building!.t / civ.building!.dur) * 100)}%`);
       // Only the first installment is needed to start.
       const short = !this.civ.canAfford(this.civ.upfront(c.def.cost));
       c.btn.disabled = done || building || !!lock || short;
-      c.btn.textContent = done ? tr('Completado ✓', 'Completed ✓') : building ? tr('En construcción…', 'Under construction…') : tr('Construir', 'Build');
+      const pct = building ? Math.round((civ.building!.t / civ.building!.dur) * 100) : 0;
+      // The figure goes in the reading face: Cinzel's 1 looks like a Roman I.
+      const label = done ? tr('Completado ✓', 'Completed ✓') : building ? tr(`En obra · <span class="num">${pct} %</span>`, `Under way · <span class="num">${pct}%</span>`) : tr('Construir', 'Build');
+      if (c.btn.innerHTML !== label) c.btn.innerHTML = label;
       const missing = building ? this.civ.shortfall() : null;
       c.note.textContent = done
         ? ''

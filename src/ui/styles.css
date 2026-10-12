@@ -7,10 +7,14 @@
   --edge: #57442f;
   --edge-hi: #8c6b45;
   --dust: #dcbb7a;
-  --dust-dim: #9c8257;
+  --dust-dim: #c2a473;
   --sand: #eedfbd;
-  --sand-dim: #b9a681;
+  --sand-dim: #c8b48c;
   --ember: #ff7b35;
+  /* Ember for small text: the same hue, light enough to read on the stone. */
+  --ember-text: #ff9a6a;
+  /* The keyboard focus ring: molten gold. */
+  --focus: #ffd08a;
   --lava: #ff4d1c;
   --lava-deep: #a52a0c;
   --moss: #98c770;
@@ -19,7 +23,7 @@
   --ice: #acdcec;
   --violet: #bf93ff;
   --danger: #ff5f3f;
-  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .62  0 0 0 0 .5  0 0 0 0 .37  0 0 0 .3 0'/></filter><rect width='220' height='220' filter='url(%23g)'/></svg>");
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .62  0 0 0 0 .5  0 0 0 0 .37  0 0 0 .22 0'/></filter><rect width='220' height='220' filter='url(%23g)'/></svg>");
   --mottle: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='420' height='420'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='.011' numOctaves='4' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .05  0 0 0 0 .035  0 0 0 0 .02  1.7 0 0 0 -.7'/></filter><rect width='420' height='420' filter='url(%23m)'/></svg>");
   --veins: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='v'><feTurbulence type='turbulence' baseFrequency='.018 .05' numOctaves='2' seed='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .86  0 0 0 0 .7  0 0 0 0 .45  -1.2 0 0 0 .12'/></filter><rect width='300' height='300' filter='url(%23v)'/></svg>");
   --title: 'Cinzel', 'Trajan Pro', Georgia, serif;
@@ -113,7 +117,7 @@ a { color: var(--dust); }
 .small { font-size: 13px; }
 .gold { color: var(--dust); }
 .moss { color: var(--moss); }
-.ember { color: var(--ember); }
+.ember { color: var(--ember-text); }
 .violet { color: var(--violet); }
 .water { color: var(--water); }
 
@@ -140,8 +144,7 @@ a { color: var(--dust); }
   cursor: pointer;
   transition: color .2s, border-color .2s, box-shadow .25s, transform .08s, filter .2s;
 }
-.btn:hover:not(:disabled), .btn:focus-visible {
-  outline: none;
+.btn:hover:not(:disabled) {
   color: #fff3da;
   border-color: #a8703c;
   box-shadow: inset 0 1px 0 rgba(255, 230, 190, .25), inset 0 -2px 0 rgba(0, 0, 0, .45), inset 0 0 18px rgba(255, 120, 40, .22), 0 3px 0 #110d0a, 0 0 22px rgba(255, 105, 35, .22), 0 7px 14px rgba(0, 0, 0, .5);
@@ -272,7 +275,7 @@ a { color: var(--dust); }
 .hint { position: absolute; top: calc(118px + var(--safe-t)); left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 24px)); padding: 12px 40px 13px 54px; font-size: 15px; animation: rise .7s cubic-bezier(.2, .9, .3, 1.1); }
 .hint .glyph { position: absolute; left: 14px; top: 12px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: var(--moss); background: rgba(0, 0, 0, .35); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .8), 0 0 12px rgba(150, 210, 110, .25); font-size: 15px; }
 .hint .x { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; border: 0; background: none; color: var(--sand-dim); cursor: pointer; font-size: 18px; line-height: 1; }
-.hint .x:hover { color: var(--ember); }
+.hint .x:hover { color: var(--ember-text); }
 .hint b { color: var(--dust); }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 14px); } }
 .hud:has(.target-banner) .hint { display: none; }
@@ -298,7 +301,7 @@ a { color: var(--dust); }
 .factors { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; align-items: center; font-size: 13px; margin-top: 8px; }
 .factors .ok { color: var(--moss); }
 .factors .meh { color: #e5b65a; }
-.factors .bad { color: var(--ember); }
+.factors .bad { color: var(--ember-text); }
 .advice { margin-top: 9px; padding: 8px 10px; font-size: 13.5px; border-radius: 6px 9px 7px 10px; background: rgba(0, 0, 0, .28); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .6); border-left: 2px solid var(--moss-dim); }
 .advice.warn { border-left-color: var(--ember); }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 4px; }
@@ -560,7 +563,7 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .people-row i { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
 .people-row em { font-style: normal; font-size: 11px; color: var(--sand-dim); padding: 0 6px; border-radius: 8px; background: rgba(0, 0, 0, .3); }
 .people-row.big { font-size: 14px; }
-.rel.war { color: #ff7a5a !important; }
+.rel.war { color: var(--ember-text) !important; }
 .rel.tension { color: #e5b65a !important; }
 .rel.alliance { color: var(--moss) !important; }
 .legend-ships { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 8px 8px 2px; padding-top: 6px; border-top: 1px solid rgba(220, 187, 122, .12); font-size: 11.5px; color: var(--sand-dim); }
@@ -576,7 +579,7 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .hab-top .hv { text-align: right; }
 .hab-row.ok .hv b { color: var(--moss); }
 .hab-row.meh .hv b { color: #e5b65a; }
-.hab-row.bad .hv b { color: var(--ember); }
+.hab-row.bad .hv b { color: var(--ember-text); }
 .hab-gauge { display: grid; grid-template-columns: 44px 1fr 44px; gap: 6px; align-items: center; margin-top: 3px; }
 .hab-gauge small { font-size: 10px; color: var(--dust-dim); letter-spacing: .02em; }
 .hab-gauge small:first-child { text-align: right; }
@@ -597,13 +600,13 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .rel-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .rel-chip { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 9px; background: rgba(0, 0, 0, .35); font-size: 11px; color: var(--sand-dim); cursor: help; }
 .rel-chip i { width: 7px; height: 7px; border-radius: 50%; }
-.rel-chip.war { color: #ff7a5a; box-shadow: inset 0 0 0 1px rgba(255, 110, 70, .35); }
+.rel-chip.war { color: var(--ember-text); box-shadow: inset 0 0 0 1px rgba(255, 110, 70, .35); }
 .rel-chip.tension { color: #e5b65a; }
 .rel-chip.alliance { color: var(--moss); }
 .rel-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 13px; }
 .rel-line { cursor: help; }
 .rel-line .ic { display: inline-block; width: 18px; color: var(--sand-dim); }
-.rel-line.war .ic { color: #ff7a5a; }
+.rel-line.war .ic { color: var(--ember-text); }
 .rel-line.tension .ic { color: #e5b65a; }
 .rel-line.alliance .ic { color: var(--moss); }
 .ledger .flags span, .legend-ships span { cursor: help; }
@@ -699,14 +702,14 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .proj.def.even .def-status { color: var(--moss); }
 .proj.def.near .def-status { color: #ffb45a; }
 .proj.def.behind { border-color: rgba(255, 110, 80, .55); }
-.proj.def.behind .def-status { color: var(--ember); }
+.proj.def.behind .def-status { color: var(--ember-text); }
 .proj.def.none { opacity: .72; }
 
 /* risk, companies and Freedom Wings */
 .risk { font-weight: 700; white-space: nowrap; }
 .risk.low { color: var(--moss); }
 .risk.mid { color: #ffb45a; }
-.risk.high { color: var(--ember); text-shadow: 0 0 8px rgba(255, 110, 60, .5); }
+.risk.high { color: var(--ember-text); text-shadow: 0 0 8px rgba(255, 110, 60, .5); }
 .wg { color: #ffe1a0; }
 .proj-ico.wg { color: #ffe1a0; text-shadow: 0 0 8px rgba(255, 220, 150, .6); }
 .barges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
@@ -759,3 +762,91 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .heirloom-opt:hover { border-color: #ffd27a !important; box-shadow: inset 0 0 16px rgba(255, 210, 122, .25) !important; }
 .heirloom-opt .wo-ico { color: #ffe1a0; }
 .heirloom-opt .wo-text b { color: #ffe9c0; }
+
+/* ================================================================== UI polish (R01–R32) */
+
+/* R01 · The news column rises above the tool bar whenever they would overlap. */
+@media (min-width: 761px) {
+  .news-up .news { bottom: calc(14px + var(--tb-h, 96px) + 10px + var(--safe-b)); }
+  #ui.news-up .ledger { max-height: calc(100% - 96px - 290px - var(--tb-h, 96px) - 10px - var(--safe-t)); }
+  #ui.late.news-up .ledger { max-height: calc(100% - 150px - 290px - var(--tb-h, 96px) - 10px - var(--safe-t)); }
+}
+
+/* R03 · One focus ring for every control, for the keyboard only. */
+:where(.btn, .tool, .proj-tab, .wrath-opt, .howto-dot, .rename-btn, .news-item, .ledger .row, .ledger h3, .hint .x, .uib-link, input[type='range'], .res-tablet, .faith-line):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+:where(.btn, .tool, .proj-tab, .wrath-opt, .howto-dot, .rename-btn, .news-item, .ledger .row, .ledger h3, .hint .x, .uib-link, input[type='range'], .res-tablet, .faith-line):focus:not(:focus-visible) { outline: none; }
+
+/* R04 · Stone that rises and brightens under the pointer, and sinks when pressed. */
+.btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.12); }
+.btn.primary:hover:not(:disabled) {
+  border-color: #e2833f;
+  box-shadow: inset 0 1px 0 rgba(255, 210, 160, .35), inset 0 -2px 0 rgba(0, 0, 0, .45), 0 3px 0 #140b07, 0 0 26px rgba(255, 110, 35, .45), 0 7px 14px rgba(0, 0, 0, .5);
+}
+.btn:active:not(:disabled) { transform: translateY(2px); filter: brightness(.95); transition-duration: .05s; }
+.tool:hover:not(.disabled) { transform: translateY(-1px); }
+.tool.active, .tool.active:hover { transform: translateY(-3px); }
+.tool:active:not(.disabled) { transform: translateY(1px); box-shadow: inset 0 2px 6px rgba(0, 0, 0, .6), 0 1px 0 #0f0b09; transition-duration: .05s; }
+.proj-tab:hover { color: var(--sand); background: rgba(255, 220, 160, .06); }
+.proj-tab:active, .wrath-opt:active:not(:disabled), .news-item.has-focus:active, .ledger .row:active { transform: translateY(1px); }
+
+/* R07 · Figures in Alegreya: Cinzel's 1 reads as a Roman I. */
+.res-tablet { font: 700 15px var(--body); letter-spacing: .02em; }
+.energy .top b { font: 700 18px var(--body); letter-spacing: .02em; }
+.res-pill b { font-family: var(--body); font-size: 18px; }
+.proj.def .def-lvl, .howto-keys dt, .hab-ring > b { font-family: var(--body); font-weight: 700; letter-spacing: .04em; }
+
+.btn .num { font-family: var(--body); letter-spacing: .02em; }
+
+/* R09 · The threat pill: calm, wary or burning, and it says what it is when it matters. */
+.res-tablet .res.threat { padding: 1px 9px 1px 7px; gap: 5px; transition: background-color .4s, border-color .4s, color .4s; }
+.res-tablet .res.threat small { font: 700 10.5px var(--body); letter-spacing: .12em; text-transform: uppercase; opacity: .9; }
+.res-tablet .res.threat small:empty { display: none; }
+.res-tablet .res.threat.warn { background: rgba(120, 70, 10, .35); }
+.res-tablet .res.threat.bad { background: rgba(130, 30, 12, .55); color: #ffe0d4; border-color: #ff7a5a; animation: threat-pulse 1.6s ease-in-out infinite; }
+@keyframes threat-pulse { 50% { box-shadow: 0 0 0 3px rgba(255, 90, 60, .18), 0 0 16px rgba(255, 90, 60, .55); } }
+
+/* R14 · A card that is locked, under way or finished looks it. */
+.proj.locked { opacity: 1; }
+.proj.locked > :not(.note):not(.btn) { opacity: .55; }
+.proj.locked .proj-ico { filter: grayscale(1); }
+.proj.locked .note { color: #e8c99a; font-style: normal; }
+.proj.done { background: linear-gradient(160deg, rgba(152, 199, 112, .1), rgba(0, 0, 0, .3)); }
+.proj.done .btn:disabled { opacity: 1; filter: none; background: transparent; border: 1px dashed rgba(152, 199, 112, .55); color: var(--moss); box-shadow: none; text-shadow: 0 0 10px rgba(150, 210, 110, .45); cursor: default; }
+.proj.building { background: linear-gradient(160deg, rgba(255, 140, 60, .1), rgba(0, 0, 0, .3)); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .7), 0 0 0 1px rgba(255, 170, 80, .6), 0 0 22px rgba(255, 120, 40, .2); }
+.proj.building .vessel { height: 8px; margin-top: 4px; }
+.proj.building .btn:disabled { opacity: 1; filter: none; color: #ffd08a; border-color: rgba(255, 170, 80, .5); cursor: default; }
+
+/* R17 · Nothing functional below 10.5 px, and calmer tracking. */
+.tool .key { font-size: 10.5px; color: rgba(236, 214, 170, .72); }
+.hab-gauge small, .hab-key { font-size: 11px; }
+.inspector h3, .ledger h3 { font-size: 11.5px; letter-spacing: .18em; }
+.proj-era { letter-spacing: .18em; }
+.peoples-head { font-size: 10.5px; letter-spacing: .16em; }
+.faith-line, .legend-ships { font-size: 12px; }
+.phase-chip { font-size: 10.5px; letter-spacing: .14em; }
+.tool .t { font-size: 11.5px; letter-spacing: .06em; }
+.news-item .age { font: 700 10.5px var(--body); letter-spacing: .1em; text-transform: uppercase; }
+
+/* R20 · Buttons that do not fit wrap with the primary on top; a victory worthy of the name. */
+.modal .buttons { flex-wrap: wrap-reverse; }
+.modal.victory { border-color: #8c6b45; }
+.modal.victory::before { content: ''; position: absolute; left: 8%; right: 8%; top: 0; height: 2px; border-radius: 2px; z-index: 1; background: linear-gradient(90deg, transparent, var(--lava-deep) 14%, var(--ember) 42%, #ffd08a 50%, var(--ember) 58%, var(--lava-deep) 86%, transparent); background-size: 220% 100%; animation: flow 10s linear infinite; filter: drop-shadow(0 0 6px rgba(255, 110, 40, .8)); pointer-events: none; }
+.victory .big-glyph { font-size: 56px; animation: ignite 1.6s cubic-bezier(.2, .9, .3, 1.2) .2s both, glow-text 4s ease-in-out 1.8s infinite; }
+@keyframes ignite { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes glow-text { 50% { text-shadow: 0 0 34px rgba(255, 200, 110, .95), 0 0 70px rgba(255, 140, 50, .45); } }
+.victory .summary .w { animation: rise-d .5s cubic-bezier(.2, .9, .3, 1.1) both; }
+.victory .summary .w:nth-child(1) { animation-delay: .5s; }
+.victory .summary .w:nth-child(2) { animation-delay: .65s; }
+.victory .summary .w:nth-child(3) { animation-delay: .8s; }
+
+/* R11 · Reduced motion: everything stays put; states are still shown, just not animated. */
+@media (prefers-reduced-motion: reduce) {
+  .seam, .vessel > i, .sun-glyph, .proj-tab .tab-dot, .tool.works.ready .badge, .res-tablet .res.threat.bad, .star-label .warn, #boot .mote, .decision .d-timer.low > i, .victory .big-glyph, .modal.victory::before { animation: none !important; }
+  .news-item, .hint, .inspector, .decision, .modal, .veil, .title-screen, .milestone, .proj-pane, .proj-grid > *, .victory .summary .w { animation-duration: .01ms !important; animation-delay: 0s !important; }
+  .btn, .tool, .news-item, .vessel > i, .res-tablet .res { transition-duration: .01ms !important; }
+  .btn:hover:not(:disabled), .tool:hover:not(.disabled) { transform: none; }
+  .res-tablet .res.threat.bad { box-shadow: 0 0 12px rgba(255, 90, 60, .5); }
+}

@@ -201,6 +201,9 @@ export class Hud {
   private ageT = 0;
   private worksEl: HTMLElement | null = null;
   private tipTimer = 0;
+  /** The resource tablet's pills, built once: only their text, class and tip change. */
+  private resPills: { k: string; el: HTMLElement; n: HTMLElement; label?: HTMLElement }[] | null = null;
+  private layoutT = 0;
 
   constructor(
     host: HTMLElement,
@@ -244,14 +247,8 @@ export class Hud {
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
     this.resEl.dataset.tip = tr('<b>Recursos</b><br>Lo que reúnen los pueblos del sistema. Toca para abrir Proyectos.', '<b>Resources</b><br>What the peoples of the system gather. Tap to open Projects.');
-    // The threat pill opens straight on the defences. The pills are redrawn as resources tick, so the
-    // click may land on the tablet itself: what was under the pointer when it went down decides.
-    let toDef = false;
-    this.resEl.addEventListener('pointerdown', (e) => (toDef = !!(e.target as Element).closest('.threat')));
-    this.resEl.addEventListener('click', (e) => {
-      this.on.works(toDef || (e.target as Element).closest('.threat') ? 'def' : undefined);
-      toDef = false;
-    });
+    // The threat pill opens straight on the defences (the pills are never rebuilt, so the click lands on it).
+    this.resEl.addEventListener('click', (e) => this.on.works((e.target as Element).closest('.threat') ? 'def' : undefined));
     const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
     this.decisionsEl = h('div', { class: 'decisions' });
     this.toolbar = stone('toolbar');
@@ -262,6 +259,20 @@ export class Hud {
     this.tagEl.style.display = 'none';
     this.root.append(top, this.toolbar, this.newsEl, this.tagEl, this.decisionsEl);
     host.append(this.root);
+    window.addEventListener('resize', () => this.layoutNews());
+  }
+
+  /**
+   * The news column (bottom left) rises above the tool bar whenever the two would overlap, so no
+   * tool is ever hidden under the news. `--tb-h` carries the bar's real height for the CSS.
+   */
+  private layoutNews() {
+    const ui = this.root.parentElement;
+    if (!ui) return;
+    const bar = this.toolbar.getBoundingClientRect();
+    const news = this.newsEl.getBoundingClientRect();
+    ui.style.setProperty('--tb-h', `${Math.round(bar.height)}px`);
+    ui.classList.toggle('news-up', bar.width > 0 && news.width > 0 && news.right + 8 > bar.left);
   }
 
   setVisible(v: boolean) {
@@ -334,6 +345,7 @@ export class Hud {
     if (mode === 'formation') this.toolbar.append(h('div', { class: 'divider' }));
     this.toolbar.append(chron);
     this.refreshLanguage();
+    this.layoutNews();
   }
 
   showTip(html: string, seconds = 0) {
@@ -404,6 +416,12 @@ export class Hud {
     if (this.tipTimer > 0) {
       this.tipTimer -= dt;
       if (this.tipTimer <= 0) this.tip.classList.remove('show');
+    }
+    // The bar changes width as tools come and go (Projects appears in the late game).
+    this.layoutT -= dt;
+    if (this.layoutT <= 0) {
+      this.layoutT = 0.5;
+      this.layoutNews();
     }
     this.name.textContent = s.name;
     const phase = s.phase === 'formation' ? tr('FORMACIÓN', 'FORMATION') : tr('SISTEMA', 'SYSTEM');
@@ -511,10 +529,39 @@ export class Hud {
         `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Botín a la vista: <b>${int(late.allure)}</b> · cada mundo habitado y cada recurso acumulado agrandan las oleadas (y atraen saqueadores).<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
         `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Loot in sight: <b>${int(late.allure)}</b> · every settled world and every stored resource makes the waves bigger (and draws looters).<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
       );
-      const html =
-        RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('') +
-        `<span class="res threat ${state}" data-tip="${tip.replace(/"/g, '&quot;')}"><i>⚠</i>${L}</span>`;
-      if (this.resEl.innerHTML !== html) this.resEl.innerHTML = html;
+      if (!this.resPills) {
+        this.resPills = [];
+        for (const k of RES_KEYS) {
+          const n = h('b');
+          const el = h('span', { class: `res ${k}` }, h('i', null, RES_ICON[k]), n);
+          this.resEl.append(el);
+          this.resPills.push({ k, el, n });
+        }
+        const n = h('b');
+        const label = h('small');
+        const el = h('span', { class: 'res threat' }, h('i', null, '⚠'), label, n);
+        this.resEl.append(el);
+        this.resPills.push({ k: 'threat', el, n, label });
+      }
+      const set = (el: HTMLElement, key: 'textContent' | 'className', v: string) => {
+        if (el[key] !== v) el[key] = v;
+      };
+      const tipOf = (el: HTMLElement, v: string) => {
+        if (el.dataset.tip !== v) el.dataset.tip = v;
+      };
+      for (const p of this.resPills) {
+        if (p.k === 'threat') {
+          set(p.el, 'className', `res threat ${state}`);
+          // Only when it matters does the pill spell out what it is.
+          set(p.label!, 'textContent', state === 'ok' ? '' : tr('Amenaza', 'Threat'));
+          set(p.n, 'textContent', String(L));
+          tipOf(p.el, tip);
+        } else {
+          const k = p.k as keyof Resources;
+          set(p.n, 'textContent', int(late.res[k]));
+          tipOf(p.el, `+${num(late.rates[k], 1)}/s`);
+        }
+      }
     }
     if (this.worksEl) {
       this.worksEl.style.display = late ? '' : 'none';
