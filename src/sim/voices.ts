@@ -2,6 +2,7 @@ import type { Decision, GameState, World } from '../core/state';
 import type { Rng } from '../util';
 import { capName } from '../content/names';
 import type { PeopleSim } from './peoples';
+import { addFaith, note } from './faith';
 
 /** The harm the player's own choices have caused (it fades slowly). */
 export function addHarm(s: GameState, n: number) {
@@ -13,6 +14,8 @@ export const VOICES_AFTER = 3600;
 const HARM_VOICES = 20;
 const HARM_PLEA = 32;
 const PLEA_COST = 60;
+/** Starlight it takes to answer a plea with nothing but a gentler light. */
+const LISTEN_COST = 30;
 
 export interface VoicesHost {
   s: GameState;
@@ -107,23 +110,37 @@ export class VoicesSim {
   decide(d: Decision, accept: boolean) {
     const s = this.h.s;
     if (!accept) {
+      addFaith(s, 'all', -0.08);
+      note(s, -1, 'Ignoraste sus plegarias', 'You ignored their prayers');
       this.h.news('❝', 'La estrella guarda silencio. Los pueblos siguen rezando.', 'The star keeps silent. The peoples keep praying.', 'voice');
       return;
     }
+    // A prayer answered: they will believe in it for a long time.
+    const answered = () => {
+      addFaith(s, 'all', 0.12);
+      note(s, 1, 'Escuchaste sus plegarias', 'You heard their prayers');
+    };
     const wars = this.h.peoples.wars();
     if (wars.length && s.energy >= PLEA_COST) {
       s.energy -= PLEA_COST;
+      answered();
       this.h.peoples.truceAll();
       addHarm(s, -30);
       this.h.news('☀', 'La estrella escucha. Una luz suave cubre el sistema y las armas callan en todos los mundos.', 'The star listens. A soft light covers the system and the weapons fall silent on every world.', 'good');
       return;
     }
     const dom = (s.stars ?? []).filter((x) => x.mode === 'dominion');
+    // Simply listening to them costs light: forgiveness is not free.
+    if (!dom.length) {
+      if (s.energy < LISTEN_COST) return;
+      s.energy -= LISTEN_COST;
+    }
     for (const st of dom) st.mode = 'trade';
+    answered();
     addHarm(s, -25);
     if (dom.length) this.h.news('⚖', `Los dominios vuelven a ser libres: ${dom.map((x) => x.name).join(', ')}. Por primera vez en mucho tiempo, alguien canta.`, `The dominions are free again: ${dom.map((x) => x.name).join(', ')}. For the first time in a long while, someone sings.`, 'good');
     else this.h.news('☀', 'La estrella brilla más suave. Los pueblos lo notan, y por una vez duermen tranquilos.', 'The star shines more gently. The peoples notice, and for once they sleep in peace.', 'good');
   }
 }
 
-export const PLEA = { cost: PLEA_COST };
+export const PLEA = { cost: PLEA_COST, listen: LISTEN_COST };

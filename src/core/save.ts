@@ -1,11 +1,12 @@
 import { Rng, randomSeed } from '../util';
-import type { GameState, Settings, Species } from './state';
+import { SPREAD_DEFAULT, SPREAD_MAX, SPREAD_MIN, type GameState, type Heirloom, type Settings, type Species, type StarType } from './state';
+import { STAR_TYPES } from '../content/stars';
 import { worldName } from '../content/names';
 
 const KEY = 'dwa.save.v1';
 const SKEY = 'dwa.settings';
 
-export function newState(opts: { legacy?: number; legacySpecies?: Species | null; from?: 'uib' | null } = {}): GameState {
+export function newState(opts: { legacy?: number; legacySpecies?: Species | null; from?: 'uib' | null; star?: StarType; heirloom?: Heirloom } = {}): GameState {
   const seed = randomSeed();
   const rng = new Rng(seed ^ 0x51ed);
   return {
@@ -15,8 +16,10 @@ export function newState(opts: { legacy?: number; legacySpecies?: Species | null
     phase: 'formation',
     age: 0,
     time: 0,
-    L: 1,
+    L: STAR_TYPES[opts.star ?? 'yellow'].lum,
     dial: 1,
+    star: opts.star ?? 'yellow',
+    heirloom: opts.heirloom,
     energy: 60,
     bodies: [],
     disk: null,
@@ -79,13 +82,17 @@ export const hasSave = () => {
 
 const defaults = (): Settings => {
   const weak = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-  return { music: 0.6, sfx: 0.7, quality: weak ? 'low' : 'high', speed: 1 };
+  return { music: 0.6, sfx: 0.7, quality: weak ? 'low' : 'high', speed: 1, spread: SPREAD_DEFAULT };
 };
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SKEY);
-    if (raw) return { ...defaults(), ...(JSON.parse(raw) as Partial<Settings>) };
+    if (raw) {
+      const st = { ...defaults(), ...(JSON.parse(raw) as Partial<Settings>) };
+      st.spread = Math.min(SPREAD_MAX, Math.max(SPREAD_MIN, Number(st.spread) || SPREAD_DEFAULT));
+      return st;
+    }
   } catch {
     /* ignore */
   }

@@ -27,6 +27,10 @@ export function upgradeCost(id: DefenceId, level: number): Partial<Resources> {
   return out;
 }
 
+/** Threat power each great work and each technology adds. */
+export const WORK_POWER = 1.5;
+export const TECH_POWER = 0.6;
+
 /** How strong the system looks from outside. */
 export function powerOf(s: GameState, settled: number) {
   const civ = s.civ;
@@ -34,8 +38,20 @@ export function powerOf(s: GameState, settled: number) {
   const works = Object.values(civ.done).filter(Boolean).length;
   const stars = s.stars ?? [];
   const dom = stars.filter((x) => x.mode === 'dominion').length;
-  return settled + works * 1.5 + (civ.tech ?? 0) * 0.6 + (stars.length - dom) + dom * 2.5;
+  return settled + works * WORK_POWER + (civ.tech ?? 0) * TECH_POWER + (stars.length - dom) + dom * 2.5;
 }
+
+/**
+ * How tempting the system looks to raiders: every settled world, and above all the stores the
+ * peoples have piled up. It swells invasions (and brings looters) whatever the threat level.
+ */
+export function allureOf(s: GameState, settled: number) {
+  const r = s.civ?.res;
+  const stock = r ? Math.max(0, r.metal) + Math.max(0, r.fuel) + Math.max(0, r.water) + Math.max(0, r.science) : 0;
+  return Math.min(ALLURE_MAX, settled * 0.3 + Math.sqrt(stock / 100));
+}
+/** However rich the system, a wave never grows by more than this many ships for it. */
+export const ALLURE_MAX = 12;
 
 export const levelFor = (power: number) => clamp(1 + Math.floor(power / STEP), 1, MAX_LEVEL);
 /** Power at which the next threat level arrives. */

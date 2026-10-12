@@ -6,8 +6,9 @@ import { COST } from '../sim/system';
 import { h, stone, clear, ICONS } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
+import type { ProjTab } from './Projects';
 
-export type Action = 'flare' | 'volcano' | 'comets' | 'migrate';
+export type Action = 'flare' | 'volcano' | 'comets' | 'migrate' | 'wrath' | 'bless';
 
 interface ToolDef<T extends string> {
   id: T;
@@ -82,6 +83,29 @@ const SYSTEM_ACTIONS: ToolDef<Action>[] = [
     name: () => tr('Migrar', 'Migrate'),
     tip: () => tr('<b>Migración orbital</b> · Acerca o aleja un planeta de la estrella con empujones gravitatorios bien sincronizados.', '<b>Orbital migration</b> · Move a planet closer to or farther from the star with well-timed gravity assists.'),
   },
+  {
+    id: 'wrath',
+    key: '5',
+    icon: 'wrath',
+    name: () => tr('Ira', 'Wrath'),
+    tip: () =>
+      tr(
+        '<b>Ira de la estrella</b> · Para quien quiera ser temido: plagas, lluvias de meteoritos, inviernos sin fin, discordia u ofrendas de vidas. Los pueblos lo recuerdan, y su miedo aviva tu luz.',
+        '<b>Wrath of the star</b> · For those who want to be feared: plagues, meteor storms, endless winters, discord or offerings of lives. The peoples remember, and their fear feeds your light.',
+      ),
+  },
+  {
+    id: 'bless',
+    key: '6',
+    icon: 'bless',
+    cost: COST.bless,
+    name: () => tr('Bendición', 'Blessing'),
+    tip: () =>
+      tr(
+        '<b>Bendición</b> · Una aurora dorada sobre un mundo habitado: la vida sana, las plagas remiten y el clima se calma. Sus pueblos creen un poco más en la estrella, y la fe da sus frutos.',
+        '<b>Blessing</b> · A golden aurora over a peopled world: life heals, plagues fade and the climate calms down. Its peoples believe in the star a little more, and faith bears fruit.',
+      ),
+  },
 ];
 
 export interface HudHandlers {
@@ -93,7 +117,8 @@ export interface HudHandlers {
   settle(): void;
   chronicle(): void;
   cancelTarget(): void;
-  works(): void;
+  /** Opens Projects (on a given tab, or the last one opened). */
+  works(tab?: ProjTab): void;
   decide(id: number, accept: boolean, choice?: number): void;
   /** A piece of news was clicked: take the camera there. */
   news(n: NewsItem): void;
@@ -115,6 +140,19 @@ export interface DecisionView {
   options?: { label: string; ok: boolean; tip?: string; choice: number; primary?: boolean }[];
 }
 
+/** Faith in the star, for the starlight slab. */
+export interface FaithInfo {
+  believers: number;
+  believersTxt: { es: string; en: string };
+  dread: number;
+  tier: number;
+  tierName: { es: string; en: string };
+  gift: { es: string; en: string } | null;
+  order: boolean;
+  /** The latest reasons faith rose (+1) or fear grew (−1), newest last. */
+  moral: { sign: 1 | -1; es: string; en: string }[];
+}
+
 export interface LateInfo {
   era: string;
   label: string;
@@ -124,6 +162,10 @@ export interface LateInfo {
   canBuild: boolean;
   /** Threat level, and the level of each defence (0: not there yet). */
   threat: number;
+  /** How tempting the system looks to raiders (worlds and stores). */
+  allure: number;
+  /** What the star ark still needs (from the warp drive on). */
+  ark?: { es: string; en: string; ok: boolean }[];
   def: Record<'fleet' | 'shield' | 'patrol', number>;
 }
 
@@ -136,16 +178,19 @@ export class Hud {
   private progBar = h('div', { class: 'vessel' }, h('i'));
   private row2 = h('div', { class: 'row2' });
   private settleBtn: HTMLButtonElement;
+  private progSlab!: HTMLElement;
   private subHtml = '';
   private energyVal = h('b');
   private energyBar = h('div', { class: 'vessel' }, h('i'));
+  private faithEl = h('div', { class: 'faith-line' });
+  private faithHtml = '';
   private speedBtns: HTMLButtonElement[] = [];
   private toolbar: HTMLElement;
   private tip: HTMLElement;
   private toolEls = new Map<string, HTMLElement>();
   private newsEl: HTMLElement;
   private hintEl: HTMLElement | null = null;
-  private hintQueue: { id: string; glyph: string; html: () => string }[] = [];
+  private hintQueue: { id: string; glyph: string; html: () => string; prio: number; onShow?: () => void }[] = [];
   private hintTimer = 0;
   private banner: HTMLElement | null = null;
   tagEl: HTMLElement;
@@ -180,7 +225,10 @@ export class Hud {
     tablet.dataset.tip = tr('<b>El sistema</b><br>Toca para ver la estrella y ajustar su brillo. ✎ para ponerle nombre.', '<b>The system</b><br>Tap to see the star and adjust its brightness. ✎ to name it.');
     tablet.addEventListener('click', () => this.on.star());
     const prog = stone('progress-slab', this.progLabel, this.progBar, this.row2, this.settleBtn);
-    const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar);
+    this.progSlab = prog;
+    // The faith line opens Projects on the faith tab.
+    this.faithEl.addEventListener('click', () => this.on.works('faith'));
+    const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar, this.faithEl);
     const speeds: [number, string][] = [
       [0, '❚❚'],
       [1, '▶'],
@@ -196,7 +244,14 @@ export class Hud {
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
     this.resEl.dataset.tip = tr('<b>Recursos</b><br>Lo que reúnen los pueblos del sistema. Toca para abrir Proyectos.', '<b>Resources</b><br>What the peoples of the system gather. Tap to open Projects.');
-    this.resEl.addEventListener('click', () => this.on.works());
+    // The threat pill opens straight on the defences. The pills are redrawn as resources tick, so the
+    // click may land on the tablet itself: what was under the pointer when it went down decides.
+    let toDef = false;
+    this.resEl.addEventListener('pointerdown', (e) => (toDef = !!(e.target as Element).closest('.threat')));
+    this.resEl.addEventListener('click', (e) => {
+      this.on.works(toDef || (e.target as Element).closest('.threat') ? 'def' : undefined);
+      toDef = false;
+    });
     const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
     this.decisionsEl = h('div', { class: 'decisions' });
     this.toolbar = stone('toolbar');
@@ -228,7 +283,7 @@ export class Hud {
         h('span', { class: 'key' }, d.key),
         h('span', { html: ICONS[d.icon], style: 'display:contents' }),
         h('span', { class: 't' }, d.name()),
-        d.cost ? h('span', { class: 'cost' }, `☀ ${d.cost}`) : null,
+        d.cost ? h('span', { class: 'cost' }, `☀ ${d.cost}`) : d.id === 'wrath' ? h('span', { class: 'cost' }, '☀ …') : null,
       );
       el.addEventListener('click', () => {
         if (mode === 'formation') this.on.tool(d.id as Tool);
@@ -310,13 +365,18 @@ export class Hud {
     for (const [k, el] of this.toolEls) el.classList.toggle('active', k === id);
   }
 
-  setActionState(state: Record<string, { ok: boolean; afford: boolean }>) {
+  setActionState(state: Record<string, { ok: boolean; afford: boolean; cost?: number }>) {
     for (const [k, el] of this.toolEls) {
       const st = state[k];
       if (!st) continue;
       el.classList.toggle('disabled', !st.afford);
       const c = el.querySelector('.cost') as HTMLElement | null;
-      if (c) c.style.color = st.afford ? '' : '#ff7a5a';
+      if (c) {
+        c.style.color = st.afford ? '' : '#ff7a5a';
+        // Deep faith makes the star's actions cheaper.
+        const txt = st.cost ? `☀ ${st.cost}` : c.textContent;
+        if (txt && c.textContent !== txt) c.textContent = txt;
+      }
     }
   }
 
@@ -326,7 +386,19 @@ export class Hud {
 
   update(
     s: GameState,
-    info: { progress?: number; gas?: number; canSettle?: boolean; energyRate: number; energyCap?: number; living?: number; topStage?: number; reached?: number; total?: number; late?: LateInfo | null },
+    info: {
+      progress?: number;
+      gas?: number;
+      canSettle?: boolean;
+      energyRate: number;
+      energyCap?: number;
+      living?: number;
+      topStage?: number;
+      reached?: number;
+      total?: number;
+      late?: LateInfo | null;
+      faith?: FaithInfo | null;
+    },
     dt: number,
   ) {
     if (this.tipTimer > 0) {
@@ -353,6 +425,28 @@ export class Hud {
     this.energyVal.textContent = `${e}`;
     (this.energyBar.firstChild as HTMLElement).style.setProperty('--v', `${(s.energy / (info.energyCap ?? 100)) * 100}%`);
     this.energyBar.dataset.tip = tr(`<b>Luz estelar</b><br>Se recarga sola: +${num(info.energyRate, 1)} por segundo. La gastan tus acciones.`, `<b>Starlight</b><br>It refills on its own: +${num(info.energyRate, 1)} per second. Your actions spend it.`);
+    // Faith: how many believe in the star, out of love or out of fear.
+    const f = s.phase === 'system' ? info.faith : null;
+    let fh = '';
+    if (f && f.believers > 0.5) {
+      const tierName = f.tier ? pick(f.tierName) : tr('sin bendiciones', 'no blessings yet');
+      const why = f.moral.length
+        ? `<br><br><b>${tr('Últimos motivos', 'Latest reasons')}</b><br>${[...f.moral]
+            .reverse()
+            .map((m) => `<span style="color:${m.sign > 0 ? '#b8e08a' : '#ff8a6a'}">${m.sign > 0 ? '+' : '−'}</span> ${tr(m.es, m.en)}`)
+            .join('<br>')}`
+        : '';
+      const fear = f.dread > 0.05 ? ` · <span class="ember">☠ ${Math.round(f.dread * 100)} %</span>` : '';
+      const tip = tr(
+        `<b>Fe en la estrella</b><br>Creyentes: ${f.believersTxt.es}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)} % por miedo` : ''}.<br>Nivel: <b>${tierName}</b>${f.gift ? ` · ${f.gift.es}` : ''}<br>Sube al salvarlos (llamaradas contra asteroides e invasores), bendecirlos, proteger a los nativos, imponer treguas y escuchar sus plegarias. La crueldad la vuelve miedo.${f.order ? '<br><b>La Orden de la Estrella</b> existe: ábrela en Proyectos.' : ''}`,
+        `<b>Faith in the star</b><br>Believers: ${f.believersTxt.en}${f.dread > 0.05 ? ` · ${Math.round(f.dread * 100)}% out of fear` : ''}.<br>Tier: <b>${tierName}</b>${f.gift ? ` · ${f.gift.en}` : ''}<br>It rises when you save them (flares against asteroids and invaders), bless them, shelter natives, force truces and hear their prayers. Cruelty turns it into fear.${f.order ? '<br><b>The Order of the Star</b> exists: open it in Projects.' : ''}`,
+      );
+      fh = `<span data-tip="${(tip + why).replace(/"/g, '&quot;')}"><i>❂</i> ${tr(f.believersTxt.es, f.believersTxt.en)} · <b>${tierName}</b>${fear}</span>`;
+    }
+    if (fh !== this.faithHtml) {
+      this.faithEl.innerHTML = this.faithHtml = fh;
+      this.faithEl.style.display = fh ? '' : 'none';
+    }
     if (s.phase === 'formation') {
       const p = info.progress ?? 0;
       this.progLabel.innerHTML = `<span>${tr('Polvo convertido en mundos', 'Dust turned into worlds')}</span><b>${Math.round(p * 100)} %</b>`;
@@ -395,6 +489,13 @@ export class Hud {
         this.row2.style.display = '';
       }
     }
+    // From the warp drive on, the top slab tells what the star ark still needs.
+    const ark = s.phase === 'system' ? info.late?.ark : undefined;
+    const arkTip = ark ? `<b>${tr('Arca estelar', 'Star ark')}</b><br>${ark.map((n) => `${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}`).join('<br>')}` : '';
+    if ((this.progSlab.dataset.tip ?? '') !== arkTip) {
+      if (arkTip) this.progSlab.dataset.tip = arkTip;
+      else delete this.progSlab.dataset.tip;
+    }
     // Resources of the civilization.
     const late = s.phase === 'system' ? info.late : null;
     this.resEl.style.display = late ? '' : 'none';
@@ -407,8 +508,8 @@ export class Hud {
       const state = !built.length ? (L >= 3 ? 'warn' : 'ok') : worst >= L ? 'ok' : worst === L - 1 ? 'warn' : 'bad';
       const lv = (n: number) => (n ? String(n) : '—');
       const tip = tr(
-        `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
-        `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
+        `<b>Amenaza: nivel ${L}</b><br>Crece con el poder de tu sistema: las invasiones llegan antes y con más naves.<br>Botín a la vista: <b>${int(late.allure)}</b> · cada mundo habitado y cada recurso acumulado agrandan las oleadas (y atraen saqueadores).<br>Defensas · flota ${lv(d.fleet)} · escudos ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Toca para mejorarlas en Proyectos.</i>`,
+        `<b>Threat: level ${L}</b><br>It grows with your system's power: invasions come sooner and with more ships.<br>Loot in sight: <b>${int(late.allure)}</b> · every settled world and every stored resource makes the waves bigger (and draws looters).<br>Defences · fleet ${lv(d.fleet)} · shields ${lv(d.shield)} · Space Patrols ${lv(d.patrol)}<br><i>Tap to raise them in Projects.</i>`,
       );
       const html =
         RES_KEYS.map((k) => `<span class="res ${k}" data-tip="+${num(late.rates[k], 1)}/s"><i>${RES_ICON[k]}</i>${int(late.res[k])}</span>`).join('') +
@@ -451,7 +552,7 @@ export class Hud {
   showDecisions(list: DecisionView[]) {
     // Newest first: it is shown in full, older ones fold into a single line.
     list = [...list].reverse();
-    const key = list.map((d) => `${d.id}:${d.yesOk}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
+    const key = list.map((d) => `${d.id}:${d.yesOk}:${d.body}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
     if (key !== this.decisionKey) {
       this.decisionKey = key;
       clear(this.decisionsEl);
@@ -472,7 +573,7 @@ export class Hud {
                 })
               : [h('button', { class: 'btn small primary', disabled: !d.yesOk, onclick: () => this.on.decide(d.id, true) }, d.yes)]),
           ),
-          h('div', { class: 'vessel thin gold d-timer' }, h('i')),
+          h('div', { class: 'vessel thin gold d-timer', 'data-tip': tr(`Si no decides: «${d.no}»`, `If you do not decide: “${d.no}”`) }, h('i')),
         );
         card.dataset.id = String(d.id);
         this.decisionsEl.append(card);
@@ -485,17 +586,24 @@ export class Hud {
   }
 
   // ------------------------------------------------------------------ hints
-  hint(id: string, glyph: string, html: () => string) {
+  /**
+   * Queues a hint. The most urgent one is shown first (2 urgent · 1 how things work · 0 a tip),
+   * the oldest among equals; `onShow` runs when it actually appears.
+   */
+  hint(id: string, glyph: string, html: () => string, prio = 1, onShow?: () => void) {
     if (this.hintQueue.some((q) => q.id === id) || this.hintEl?.dataset.id === id) return;
-    this.hintQueue.push({ id, glyph, html });
+    this.hintQueue.push({ id, glyph, html, prio, onShow });
   }
 
   private openHint() {
-    const q = this.hintQueue.shift()!;
+    let i = 0;
+    for (let k = 1; k < this.hintQueue.length; k++) if (this.hintQueue[k].prio > this.hintQueue[i].prio) i = k;
+    const q = this.hintQueue.splice(i, 1)[0];
+    q.onShow?.();
     const el = stone('hint', h('span', { class: 'glyph' }, q.glyph), h('div', { html: q.html() }), h('button', { class: 'x', title: tr('Entendido', 'Got it'), onclick: () => this.closeHint() }, '✕'));
     el.dataset.id = q.id;
     this.hintEl = el;
-    this.hintTimer = 18;
+    this.hintTimer = q.prio >= 2 ? 18 : 14;
     this.root.append(el);
   }
 

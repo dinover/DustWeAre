@@ -1,5 +1,6 @@
 import { int, num, tr } from '../i18n';
 import type { Kind, Factors } from '../sim/worlds';
+import { fmtPopEn, fmtPopEs } from '../content/pop';
 
 export function kindName(k: Kind) {
   switch (k) {
@@ -36,6 +37,9 @@ export function fmtAge(myr: number) {
 }
 
 export const fmtTemp = (K: number) => `${int(K - 273)} °C`;
+
+/** A population (in millions), written for people. */
+export const fmtPop = (m: number) => tr(fmtPopEs(m), fmtPopEn(m));
 
 export function tempWord(K: number) {
   const c = K - 273;

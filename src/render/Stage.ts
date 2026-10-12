@@ -16,9 +16,9 @@ export class Stage {
   target = new THREE.Vector3();
   goal = { yaw: 0.7, pitch: 0.98, dist: 158, target: new THREE.Vector3() };
   minDist = 10;
-  maxDist = 300;
+  maxDist = 420;
   /** How far from the star the view may wander. */
-  maxPan = 150;
+  maxPan = 220;
   /** Slow drift when nobody touches the camera (title screen). */
   drift = 0;
   /** The sky brightens (a nearby supernova) and fades back. */

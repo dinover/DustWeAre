@@ -180,6 +180,7 @@ export class WingsSim {
     g.units -= n;
     g.sorties.push({ id: this.h.nid(), star: st.id, size, units: n, t: 0, dur: wingOdds(size, risk).dur });
     st.wing = { size, units: n };
+    this.h.patrols.answered(st.id);
     const b = this.base();
     this.h.fx({ kind: 'warpOut', x: b.x, z: b.z, dx: Math.cos(st.ang), dz: Math.sin(st.ang), count: Math.min(8, Math.ceil(n / 3)), tint: 'wings' });
     this.h.news('✈', `Una escuadrilla ${size} de las Freedom Wings (${n} naves) salta hacia ${st.name}.`, `A size ${size} Freedom Wings squadron (${n} ships) jumps to ${st.name}.`, 'info');

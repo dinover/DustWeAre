@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { onLangChange, tr, num } from '../i18n';
-import { Rng, clamp, randomSeed } from '../util';
-import { massOf, solidsOf, toWorld, habZone, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
+import { onLangChange, pick, tr, num } from '../i18n';
+import { Rng, clamp, damp, randomSeed } from '../util';
+import { far, massOf, solidsOf, toWorld, habZone, view, type Heirloom, type StarType, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
-import { SystemSim, COST, type Fx } from '../sim/system';
-import { isGiantStuff, makeWorlds, worldStats, colonizable, type WorldStats } from '../sim/worlds';
+import { SystemSim, COST, WRATHS, WRATH_COST, type Fx, type Wrath } from '../sim/system';
+import { isGiantStuff, makeWorlds, worldStats, colonizable, arkWorld, type WorldStats } from '../sim/worlds';
 import { Stage } from '../render/Stage';
 import { Star } from '../render/Star';
 import { Guides } from '../render/Guides';
@@ -15,7 +15,10 @@ import { BodiesView } from '../render/BodiesView';
 import { SystemView } from '../render/SystemView';
 import { lookOfWorld } from '../render/Planet';
 import { worldRadius, worldXZ } from '../render/layout';
-import { Hud, type Action, type DecisionView } from '../ui/Hud';
+import { Hud, type Action, type DecisionView, type FaithInfo } from '../ui/Hud';
+import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
+import { fmtPopEn, fmtPopEs } from '../content/pop';
+import { HEIRLOOMS, STAR_TYPES, starOf } from '../content/stars';
 import { Inspector, Ledger, kindDot } from '../ui/Panels';
 import { Labels } from '../ui/Labels';
 import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
@@ -26,17 +29,20 @@ import { capName, worldName } from '../content/names';
 import { renameDialog } from '../ui/Rename';
 import { spaceOrbits } from '../sim/orbits';
 import { playComets } from '../minigames/Comets';
-import { ProjectsPanel } from '../ui/Projects';
+import { ProjectsPanel, type ProjTab } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
 import { installTips } from '../ui/Tip';
 import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
 import { ERA_NAMES, PROJECTS } from '../content/projects';
-import { DEFENCES, defLevel, threatOf } from '../sim/threat';
+import { DEFENCES, allureOf, defLevel, threatOf } from '../sim/threat';
 import { playMigration } from '../minigames/Migration';
 import { sound } from '../audio';
 
 type Sel = number | 'star' | null;
+
+/** How urgent each hint is: 2 something is happening right now · 1 how things work · 0 a tip. */
+const HINT_PRIO: Record<string, number> = { 'f.start': 2, 's.start': 2, 's.alien': 2, 's.threat': 2, 's.decision': 2, 's.names': 0, 's.star': 0 };
 
 /** Space Patrol blue. */
 const PATROL = 0x6f9bff;
@@ -121,11 +127,20 @@ export class Game {
         if (!this.focusNews(n)) this.openChronicle();
       },
       cancelTarget: () => this.setTargeting(null),
-      works: () => this.openProjects(),
+      works: (tab) => this.openProjects(tab),
       decide: (id, accept, choice) => {
         sound.click();
         // Negative ids are collision alerts (not choices for the peoples).
         if (id < 0) return this.encounterChoice(-id, accept);
+        // A prayer's "go and see": the camera goes to the world and the prayer stays open.
+        const d = this.s?.civ?.decisions.find((x) => x.id === id);
+        if (d?.kind === 'prayer' && accept) {
+          if (d.world !== undefined && this.s?.worlds.some((w) => w.id === d.world)) {
+            this.select(d.world);
+            this.focus(d.world, true);
+          }
+          return;
+        }
         this.sim?.decide(id, accept, choice);
       },
       renameSystem: () => this.rename('star'),
@@ -136,6 +151,12 @@ export class Game {
       focus: (id) => this.focus(id, true),
       dial: (v) => {
         if (this.s) this.s.dial = v;
+      },
+      condense: () => {
+        if (this.sim?.condense()) {
+          sound.chime('good');
+          this.panelT = 0;
+        }
       },
     });
     this.ledger = new Ledger(this.ui, { select: (id) => (this.select(id), this.focus(id, true)) });
@@ -215,12 +236,14 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ start / load
-  newGame(o: { legacy?: number; legacySpecies?: GameState['legacySpecies']; from?: 'uib' | null }) {
+  newGame(o: { legacy?: number; legacySpecies?: GameState['legacySpecies']; from?: 'uib' | null; heirloom?: Heirloom }) {
     sound.start();
     this.title?.destroy();
     this.title = null;
     this.clearWorld();
-    const s = newState(o);
+    // The first system is born around a yellow star; those seeded by an ark, around any kind.
+    const star: StarType = o.legacy ? new Rng(randomSeed()).pick(['orange', 'yellow', 'white'] as StarType[]) : 'yellow';
+    const s = newState({ ...o, star });
     this.s = s;
     const f = Formation.create(this.particles, new Rng(s.seed), () => s.nextId++);
     s.bodies = f.bodies;
@@ -238,6 +261,14 @@ export class Game {
           en: `From the dust your nebula returned to space, ${s.name} is born: a young star wrapped in gas, dust and ice.`,
         };
     this.news('✦', intro.es, intro.en, 'good');
+    if (star !== 'yellow') {
+      const t = STAR_TYPES[star];
+      this.news('☀', `${s.name} es una ${t.name.es.toLowerCase()}. ${t.desc.es}`, `${s.name} is ${star === 'orange' ? 'an' : 'a'} ${t.name.en.toLowerCase()}. ${t.desc.en}`, 'info');
+    }
+    if (o.heirloom) {
+      const hl = HEIRLOOMS[o.heirloom];
+      this.news(hl.icon, `Del sistema que dejaste atrás llega un legado: ${hl.name.es}. ${hl.desc.es}`, `A heirloom comes from the system you left behind: ${hl.name.en}. ${hl.desc.en}`, 'good');
+    }
     this.hint('f.start', '✋', () =>
       tr(
         'Mantén pulsado sobre el disco para <b>reunir</b> polvo en una piedra. Suéltala y crecerá sola, barriendo su órbita.',
@@ -261,6 +292,7 @@ export class Game {
       this.attachDisk(f);
     } else {
       s.phase = 'system';
+      view.spread = this.settings.spread;
       this.startSystem();
     }
     this.enterPlay();
@@ -274,7 +306,8 @@ export class Game {
     }
     this.mode = 'play';
     this.stage.drift = 0;
-    this.stage.goal.dist = 175;
+    // The settled system is laid out wider (the player's spread): the camera starts farther back.
+    this.stage.goal.dist = this.s!.phase === 'system' ? 130 + 45 * this.settings.spread : 175;
     this.stage.goal.pitch = 0.98;
     this.stage.goal.target.set(0, 0, 0);
     this.hud.setVisible(true);
@@ -303,10 +336,18 @@ export class Game {
   // ------------------------------------------------------------------ formation → system
   private confirmSettle() {
     if (!this.formation || this.settling) return;
+    // Without a giant there will be little fuel: say so while it can still be helped.
+    const giants = this.formation.bodies.some((b) => isGiantStuff(b));
+    const warn = giants
+      ? ''
+      : tr(
+          ' Ningún cuerpo es un gigante: el combustible será escaso (lo darán los pozos de hielo y la luz condensada en la estrella).',
+          ' No body is a giant: fuel will be scarce (ice wells and light condensed at the star will provide it).',
+        );
     confirmBox(
       this.ui,
       tr('Asentar el sistema', 'Settle the system'),
-      tr('Los cuerpos que has formado se convertirán en planetas y lunas. El polvo suelto quedará como cinturones de asteroides.', 'The bodies you have formed will become planets and moons. Loose dust will remain as asteroid belts.'),
+      tr('Los cuerpos que has formado se convertirán en planetas y lunas. El polvo suelto quedará como cinturones de asteroides.', 'The bodies you have formed will become planets and moons. Loose dust will remain as asteroid belts.') + warn,
       tr('Asentar', 'Settle'),
       () => this.finishFormation(),
     );
@@ -361,8 +402,9 @@ export class Game {
     s.bodies = [];
     s.disk = null;
     s.phase = 'system';
+    s.sysStart = s.time;
     s.age = Math.max(s.age, 100);
-    s.energy = 70;
+    s.energy = s.heirloom === 'fertile' ? 100 : 70;
     s.nextEvent = s.time + 140;
     const flash = () => {
       for (const b of keep) {
@@ -522,11 +564,13 @@ export class Game {
       this.hint('s.alien', '⚠', () => tr('Llegan visitantes de otra estrella. Pulsa <b>Llamarada</b> y elige sus naves o los mundos que ocupan.', 'Visitors from another star are arriving. Press <b>Flare</b> and pick their ships or the worlds they occupy.'));
   }
 
+  /** A hint is only marked as seen once it is on screen: one still waiting in the queue is never lost. */
   private hint(id: string, glyph: string, html: () => string) {
     const s = this.s;
     if (!s || s.tutorials[id]) return;
-    s.tutorials[id] = true;
-    this.hud.hint(id, glyph, html);
+    this.hud.hint(id, glyph, html, HINT_PRIO[id] ?? 1, () => {
+      if (this.s) this.s.tutorials[id] = true;
+    });
   }
 
   /** Last known position of a ship (it may already be gone from the simulation). */
@@ -569,7 +613,7 @@ export class Game {
       const st = s.stars?.find((x) => x.id === f.star);
       if (!st) return false;
       this.select(null);
-      const v = new THREE.Vector3(Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+      const v = new THREE.Vector3(Math.cos(st.ang) * far(96), 0, Math.sin(st.ang) * far(96));
       this.followFn = () => v;
       this.stage.goal.dist = 70;
       return true;
@@ -678,7 +722,7 @@ export class Game {
       case 'laser': {
         const from = this.worldGetter(f.world);
         const to = this.shipGetter(f.ship);
-        const c = worldTone(f.world);
+        const c = f.wings ? WINGS : worldTone(f.world);
         this.fx.laser(from, to, c);
         setTimeout(() => this.fx.laser(from, to, c), 260);
         sound.laser();
@@ -823,6 +867,35 @@ export class Game {
         this.colonyHint();
         return;
       }
+      case 'bless': {
+        // A golden aurora over the world.
+        const w = s.worlds.find((x) => x.id === f.world);
+        const p = this.systemView.posOf(f.world);
+        if (w && p) {
+          const r = worldRadius(w);
+          this.fx.ring(p.x, p.z, 0xffe1a0, r * 3 + 2, 2.4);
+          setTimeout(() => this.fx.ring(p.x, p.z, 0xfff0c8, r * 5 + 3, 2.8, 0, true), 300);
+          this.fx.flash(p.x, 0, p.z, 0xffe6b0, r * 4 + 3, 1.8);
+        }
+        sound.chime('good');
+        return;
+      }
+      case 'relic': {
+        const p = this.systemView.posOf(f.world);
+        if (p) {
+          this.fx.flash(p.x, 0, p.z, 0x9fd4ff, 10, 2);
+          this.fx.ring(p.x, p.z, 0x6f9bff, 12, 2.6);
+          this.fx.ring(p.x, p.z, 0xffd27a, 7, 2);
+        }
+        sound.chime('good');
+        this.hint('s.relic', '◬', () =>
+          tr(
+            '¡Una reliquia de los Precursores! Con las suficientes, la Orden podrá <b>forjar los Space Patrols</b> desde <b>Proyectos → La fe</b>. Si los Patrols ya existen, cada reliquia arma una compañía más.',
+            'A relic of the Precursors! With enough of them, the Order can <b>forge the Space Patrols</b> from <b>Projects → Faith</b>. If the Patrols already exist, every relic arms one more company.',
+          ),
+        );
+        return;
+      }
       case 'rogueCaught': {
         const p = this.systemView.posOf(f.world) ?? new THREE.Vector3();
         this.fx.ring(p.x, p.z, 0xe8d2a0, 12, 2.4);
@@ -872,8 +945,8 @@ export class Game {
   private colonyHint() {
     this.hint('s.colony', '⌂', () =>
       tr(
-        'Un pueblo ya viaja entre mundos. Tú no eres ninguno de ellos: los observas a todos y decides si intervienes. Cada tipo de mundo aporta algo: los gigantes dan combustible, los helados agua, los rocosos metal y los vivos ciencia.',
-        'A people now travels between worlds. You are none of them: you watch over them all and choose whether to step in. Each kind of world gives something: giants give fuel, icy worlds water, rocky worlds metal and living worlds science.',
+        'Un pueblo ya viaja entre mundos. Tú no eres ninguno de ellos: los observas a todos y decides si intervienes. No todo mundo se terraforma: solo los que valen la pena se vuelven jardines; el resto serán pueblos mineros, pozos de hielo, laboratorios o fortalezas, según el mundo y el carácter de cada pueblo. Toca un mundo para ver qué aporta.',
+        'A people now travels between worlds. You are none of them: you watch over them all and choose whether to step in. Not every world is terraformed: only those worth it become gardens; the rest will be mining towns, ice wells, labs or fortresses, by the world and the character of each people. Tap a world to see what it gives.',
       ),
     );
   }
@@ -932,7 +1005,14 @@ export class Game {
     this.targeting = a;
     this.hud.setActiveTool(a);
     if (!a) return this.hud.showBanner(null);
-    const name = { flare: tr('la llamarada', 'the flare'), volcano: tr('despertar volcanes', 'waking volcanoes'), comets: tr('la lluvia de cometas', 'the comet shower'), migrate: tr('la migración', 'the migration') }[a];
+    const name = {
+      flare: tr('la llamarada', 'the flare'),
+      volcano: tr('despertar volcanes', 'waking volcanoes'),
+      comets: tr('la lluvia de cometas', 'the comet shower'),
+      migrate: tr('la migración', 'the migration'),
+      wrath: tr('la ira de la estrella', 'the wrath of the star'),
+      bless: tr('la bendición (un mundo habitado)', 'the blessing (a peopled world)'),
+    }[a];
     const extra = a === 'flare' ? tr(' (un mundo, una nave visitante o un asteroide)', ' (a world, a visiting ship or an asteroid)') : '';
     this.hud.showBanner(tr(`Elige un objetivo para ${name}${extra}.`, `Choose a target for ${name}${extra}.`));
   }
@@ -941,8 +1021,8 @@ export class Game {
     const sim = this.sim;
     if (!sim) return;
     sound.click();
-    if (!sim.canAfford(COST[a])) {
-      this.hud.showTip(tr(`Necesitas <b>${COST[a]}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${COST[a]}</b> starlight. It refills on its own over time.`), 3.5);
+    if (!sim.canAfford(sim.cost(a))) {
+      this.hud.showTip(tr(`Necesitas <b>${sim.cost(a)}</b> de luz estelar. Se recarga sola con el tiempo.`, `You need <b>${sim.cost(a)}</b> starlight. It refills on its own over time.`), 3.5);
       return;
     }
     if (typeof this.selected === 'number') {
@@ -958,9 +1038,19 @@ export class Game {
     this.setTargeting(null);
     const st = sim.stats(w);
     const say = (es: string, en: string) => this.hud.showTip(tr(es, en), 3.8);
-    if (!sim.canAfford(COST[a])) return say(`Necesitas <b>${COST[a]}</b> de luz estelar.`, `You need <b>${COST[a]}</b> starlight.`);
+    if (!sim.canAfford(sim.cost(a))) return say(`Necesitas <b>${sim.cost(a)}</b> de luz estelar.`, `You need <b>${sim.cost(a)}</b> starlight.`);
     if (a === 'flare') {
       sim.flare(w);
+      return;
+    }
+    if (a === 'wrath') return this.wrathMenu(w);
+    if (a === 'bless') {
+      const lock = sim.blessLock(w);
+      if (lock) return say(lock.es, lock.en);
+      if (sim.bless(w)) {
+        sound.chime('good');
+        s.tutorials.blessUsed = true;
+      }
       return;
     }
     if (a === 'volcano') {
@@ -973,7 +1063,7 @@ export class Game {
     }
     if (a === 'comets') {
       if (st.giant) return say('Los cometas se pierden en las nubes de un gigante. Elige un mundo rocoso o una luna.', 'Comets vanish into a giant’s clouds. Choose a rocky world or a moon.');
-      s.energy -= COST.comets;
+      s.energy -= sim.cost('comets');
       this.hold++;
       playComets(this.ui, w.name, lookOfWorld(w, st), (gain) => {
         this.hold = Math.max(0, this.hold - 1);
@@ -988,7 +1078,8 @@ export class Game {
     }
     if (a === 'migrate') {
       if (w.parent !== null) return say('Las lunas siguen a su planeta: migra el planeta entero.', 'Moons follow their planet: migrate the whole planet.');
-      s.energy -= COST.migrate;
+      const paid = sim.cost('migrate');
+      s.energy -= paid;
       this.hold++;
       const L = s.L * s.dial;
       playMigration(
@@ -1002,11 +1093,77 @@ export class Game {
         (factor) => {
           this.hold = Math.max(0, this.hold - 1);
           if (factor && Math.abs(factor - 1) > 1e-3) sim.migrate(w, factor, false);
-          else if (factor === null) s.energy += COST.migrate;
+          else if (factor === null) s.energy += paid;
           this.save();
         },
       );
     }
+  }
+
+  /** The star's cruelty on one world: every option, what it costs, what it does and why it cannot be done. */
+  private wrathMenu(w: World) {
+    const sim = this.sim!;
+    const info: Record<Wrath, { icon: string; name: string; desc: string }> = {
+      plague: {
+        icon: '☣',
+        name: tr('Plaga', 'Plague'),
+        desc: tr('Una enfermedad diezma a quienes viven allí (también a los invasores) y viaja en sus naves a otros mundos.', 'A disease thins out whoever lives there (invaders too) and travels aboard their ships to other worlds.'),
+      },
+      storm: {
+        icon: '☄',
+        name: tr('Lluvia de meteoritos', 'Meteor storm'),
+        desc: tr('De 4 a 6 rocas caen sobre el mundo: matan a millones, hieren la vida y dispersan a los invasores. Los escudos de los pueblos intentarán detenerte.', '4 to 6 rocks fall on the world: they kill millions, wound life and scatter invaders. The peoples’ shields will try to stop you.'),
+      },
+      winter: {
+        icon: '❄',
+        name: tr('Invierno sin fin', 'Endless winter'),
+        desc: tr('Apartas tu luz: el mundo se hiela, las cosechas fallan y la población cae. Una civilización diezmada puede retroceder.', 'You turn your light away: the world freezes, crops fail and the population falls. A decimated civilization may fall back.'),
+      },
+      discord: {
+        icon: '⚡\uFE0E',
+        name: tr('Discordia', 'Discord'),
+        desc: tr('Sueños inquietos: los pueblos de este mundo desconfían de sus vecinos. Las guerras llegan solas.', 'Restless dreams: the peoples of this world mistrust their neighbours. Wars follow on their own.'),
+      },
+      tithe: {
+        icon: '✝',
+        name: tr('Exigir ofrendas', 'Demand offerings'),
+        desc: tr('Te ofrecen vidas en sacrificio. Su miedo aviva la estrella: ganas luz estelar, más cuanto más poblado sea el mundo (y lo pagas en fe, que se vuelve temor).', 'They offer you lives in sacrifice. Their fear feeds the star: you gain starlight, more the more peopled the world (and you pay for it in faith, which turns to dread).'),
+      },
+    };
+    this.hold++;
+    let close = () => {};
+    const list = h('div', { class: 'wrath-list' });
+    for (const k of WRATHS) {
+      const lock = sim.wrathLock(w, k);
+      const d = info[k];
+      list.append(
+        h(
+          'button',
+          {
+            class: 'wrath-opt',
+            disabled: !!lock,
+            onclick: () => {
+              if (!sim.wrath(w, k)) return;
+              sound.thud(0.8);
+              const p = this.systemView.pos(w);
+              this.fx.flash(p.x, 0, p.z, k === 'winter' ? 0x9fd4e6 : k === 'plague' ? 0x9be36a : 0xff5a3a, worldRadius(w) * 5 + 3, 1.4);
+              close();
+            },
+          },
+          h('span', { class: 'wo-ico' }, d.icon),
+          h('span', { class: 'wo-text' }, h('b', null, d.name), h('small', null, lock ? pick(lock) : d.desc)),
+          h('span', { class: 'wo-cost' }, `☀ ${WRATH_COST[k]}`),
+        ),
+      );
+    }
+    close = modal(this.ui, {
+      title: tr(`La ira de la estrella · ${w.name}`, `The wrath of the star · ${w.name}`),
+      lore: tr('Los pueblos no saben quién eres, pero sabrán temerte. Cada crueldad se recuerda; el miedo, a cambio, aviva tu luz.', 'The peoples do not know who you are, but they will learn to fear you. Every cruelty is remembered; fear, in turn, feeds your light.'),
+      cls: 'wrath-modal',
+      body: [list],
+      buttons: [{ label: tr('Tener piedad', 'Show mercy'), primary: true }],
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
   }
 
   // ------------------------------------------------------------------ selection
@@ -1087,9 +1244,9 @@ export class Game {
       return;
     }
     const n = Number(e.key);
-    if (n >= 1 && n <= 4) {
-      if (this.formation) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
-      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate'] as Action[])[n - 1]);
+    if (n >= 1 && n <= 6) {
+      if (this.formation && n <= 4) this.setTool((['gather', 'heat', 'cool', 'nudge'] as Tool[])[n - 1]);
+      else if (this.sim) this.startAction((['flare', 'volcano', 'comets', 'migrate', 'wrath', 'bless'] as Action[])[n - 1]);
     }
     if (e.key === 'p' || e.key === 'P') this.openProjects();
     if (e.key === 'c' || e.key === 'C') this.openChronicle();
@@ -1420,10 +1577,43 @@ export class Game {
           primary: true,
           onClick: () => {
             const legacy = s.legacy + 1;
-            setTimeout(() => this.newGame({ legacy, legacySpecies: sp, from: s.from }), 350);
+            setTimeout(() => this.chooseHeirloom(s, (heirloom) => this.newGame({ legacy, legacySpecies: sp, from: s.from, heirloom })), 350);
           },
         },
       ],
+      dismissable: false,
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
+  }
+
+  /** Before seeding the next system: one heirloom to carry (a relic only if this system found one). */
+  private chooseHeirloom(s: GameState, go: (h: Heirloom) => void) {
+    this.hold++;
+    const options = (Object.keys(HEIRLOOMS) as Heirloom[]).filter((k) => k !== 'relic' || (s.faith?.relics ?? 0) > 0);
+    let close = () => {};
+    const list = h('div', { class: 'wrath-list heirlooms' });
+    for (const k of options) {
+      const hl = HEIRLOOMS[k];
+      list.append(
+        h(
+          'button',
+          {
+            class: 'wrath-opt heirloom-opt',
+            onclick: () => {
+              close();
+              setTimeout(() => go(k), 300);
+            },
+          },
+          h('span', { class: 'wo-ico' }, hl.icon),
+          h('span', { class: 'wo-text' }, h('b', null, pick(hl.name)), h('small', null, pick(hl.desc))),
+        ),
+      );
+    }
+    close = modal(this.ui, {
+      title: tr('Un legado para el próximo sistema', 'An heirloom for the next system'),
+      lore: tr('El arca no se lleva solo a los pueblos. Elige qué recordará el polvo del próximo sistema.', 'The ark carries more than the peoples. Choose what the dust of the next system will remember.'),
+      cls: 'heirloom-modal',
+      body: [list],
       dismissable: false,
       onClose: () => (this.hold = Math.max(0, this.hold - 1)),
     });
@@ -1467,6 +1657,10 @@ export class Game {
     // Real time spent playing (the peoples' voices wait for a long game).
     if (s && this.mode === 'play' && speed > 0) s.playTime = (s.playTime ?? 0) + dt;
     const L = s ? s.L * s.dial : 1;
+    // The map of the settled system eases towards the player's spread (on settling, the worlds drift
+    // apart from where the disk left them; a change in Options glides too).
+    view.spread = damp(view.spread, this.sim ? this.settings.spread : 1, 2.2, dt);
+    this.guides.scale = this.sim ? view.spread : 1;
     // Simulation.
     if (this.mode === 'title' && this.demo) {
       this.demo.update(Math.min(dt, 1 / 30));
@@ -1485,6 +1679,13 @@ export class Game {
       if (s.time > 22) this.hint('f.snow', '❄', () => tr('El anillo punteado es la <b>línea de nieve</b>: más allá, el hielo se suma a la roca y los cuerpos crecen deprisa. Allí nacen los gigantes.', 'The dotted ring is the <b>snow line</b>: beyond it, ice joins the rock and bodies grow fast. That is where giants are born.'));
       if (s.time > 45) this.hint('f.tools', '♨', () => tr('Prueba <b>Calentar</b> para empujar el gas y el polvo ligero hacia afuera, y <b>Enfriar</b> para que el polvo se condense en piedras nuevas.', 'Try <b>Heat</b> to push gas and light dust outwards, and <b>Cool</b> to make dust condense into new pebbles.'));
       if (s.time > 70) this.hint('f.hz', '❀', () => tr('La franja verde es la <b>zona habitable</b>: ahí un mundo rocoso podría tener mares de agua líquida.', 'The green band is the <b>habitable zone</b>: there a rocky world could have seas of liquid water.'));
+      if (f.progress >= 0.6 && !f.bodies.some((b) => isGiantStuff(b)))
+        this.hint('f.nogiant', '◍', () =>
+          tr(
+            'Aún no hay ningún gigante. Más allá de la línea de nieve, reúne mucho material para que atrape gas: los gigantes darán combustible.',
+            'There is no giant yet. Beyond the snow line, gather a lot of material so it catches gas: giants will give fuel.',
+          ),
+        );
       if (f.gasLeft < 0.45) this.hint('f.gas', '☁', () => tr('La luz de tu estrella está dispersando el gas. Los gigantes deben atraparlo antes de que se acabe.', 'Your star’s light is blowing the gas away. Giants must catch it before it runs out.'));
     } else if (s && this.sim) {
       let left = dt * speed;
@@ -1493,7 +1694,9 @@ export class Game {
         this.sim.update(step);
         left -= step;
       }
-      if (s.threats.length) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
+      // Choices count down in real time while the game runs, whatever its speed.
+      if (speed > 0) this.sim.civ.tickDecisions(dt);
+      if (s.threats.some((t) => !t.storm)) this.hint('s.threat', '☄', () => tr('Un asteroide se acerca. Una <b>llamarada</b> sobre el mundo amenazado, o sobre la roca misma, lo desvía.', 'An asteroid is approaching. A <b>flare</b> on the threatened world, or on the rock itself, deflects it.'));
       if (s.time > 110)
         this.hint('s.names', '✎', () =>
           tr(
@@ -1542,7 +1745,7 @@ export class Game {
     if (this.mode === 'play' && s) {
       this.drawLabels(s, L);
       this.panelT -= dt;
-      const rate = this.sim ? this.sim.energyRate : 0.85 * s.dial;
+      const rate = this.sim ? this.sim.energyRate : 0.85 * s.dial * starOf(s).light;
       if (this.formation) {
         const f = this.formation;
         const canSettle = f.progress >= 0.5 && f.bodies.some((b) => massOf(b) > 0.05);
@@ -1554,12 +1757,12 @@ export class Game {
         }
       } else if (this.sim) {
         const sim = this.sim;
-        const all = s.worlds.filter(colonizable);
+        const all = s.worlds.filter(arkWorld);
         const reached = all.filter((w) => w.colony >= 1 || (w.life?.origin && w.life.stage >= 2)).length;
         const reachedAll = all.filter((w) => isSettled(w) || (w.life?.origin && w.life.stage >= 2)).length;
         this.hud.update(
           s,
-          { energyRate: rate, energyCap: sim.civ.energyCap, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached: Math.max(reached, reachedAll), total: all.length, late: this.lateInfo() },
+          { energyRate: rate, energyCap: sim.civ.energyCap, topStage: sim.topStage, living: s.worlds.filter((w) => w.life).length, reached: Math.max(reached, reachedAll), total: all.length, late: this.lateInfo(), faith: this.faithInfo() },
           dt,
         );
         const civ = s.civ;
@@ -1586,6 +1789,35 @@ export class Game {
               'The <b>Freedom Wings</b> gather ships on their own: more with every living world and with peace between the peoples (they can also be bought with science, at a price). When a distant colony asks for help, pick the size: <b>S</b> for a low risk, <b>M</b> for medium and <b>L</b> for high. A small fleet against a high risk may never come back.',
             ),
           );
+        if (s.peoples?.some((p) => !p.gone && faithOf(p) >= 0.3))
+          this.hint('s.faith', '❂', () =>
+            tr(
+              'Los pueblos empiezan a <b>creer en la estrella</b> (❂ bajo la luz estelar). La fe crece cuando los salvas, los <b>bendices</b> (tecla 6), proteges a los nativos o impones treguas, y da luz estelar y otros dones. Si dos pueblos creen lo bastante, fundarán la <b>Orden de la Estrella</b>.',
+              'The peoples are beginning to <b>believe in the star</b> (❂ under the starlight). Faith grows when you save them, <b>bless</b> them (key 6), shelter natives or force truces, and it brings starlight and other gifts. If two peoples believe enough, they will found the <b>Order of the Star</b>.',
+            ),
+          );
+        if (s.faith?.order)
+          this.hint('s.order', '❂', () =>
+            tr(
+              'Nace la <b>Orden de la Estrella</b>. En <b>Proyectos → La fe</b> puede <b>leer los cielos</b> para encontrar yacimientos de los Precursores en las lunas, excavarlos con peregrinos y, con sus reliquias, <b>forjar los Space Patrols</b>.',
+              'The <b>Order of the Star</b> is born. In <b>Projects → Faith</b> it can <b>read the heavens</b> to find the Precursors’ sites on the moons, dig them with pilgrims and, with their relics, <b>forge the Space Patrols</b>.',
+            ),
+          );
+        if (sim.topStage >= 3)
+          this.hint('s.bless', '❂', () =>
+            tr(
+              'Tus pueblos ya construyen ciudades. La <b>Bendición</b> (tecla 6) cura un mundo habitado, termina sus plagas y calma su clima: los pueblos que la estrella cuida <b>creen en ella</b>, y su fe da dones.',
+              'Your peoples now build cities. The <b>Blessing</b> (key 6) heals a peopled world, ends its plagues and calms its climate: the peoples the star looks after <b>believe in it</b>, and their faith brings gifts.',
+            ),
+          );
+        // The darker path is suggested only once the kinder one is known (or cruelty has already begun).
+        if (sim.topStage >= 3 && (s.tutorials.blessUsed || (s.harm ?? 0) > 10))
+          this.hint('s.wrath', '⚡', () =>
+            tr(
+              'Si quieres ser temido, la <b>Ira</b> (tecla 5) desata plagas, meteoritos, inviernos, discordia u ofrendas sobre un mundo. Los pueblos lo recordarán, pero su miedo aviva tu luz estelar.',
+              'If you want to be feared, <b>Wrath</b> (key 5) unleashes plagues, meteors, winters, discord or offerings on a world. The peoples will remember, but their fear feeds your starlight.',
+            ),
+          );
         if ((s.threat?.level ?? 1) >= 2)
           this.hint('s.danger', '⚠', () =>
             tr(
@@ -1607,8 +1839,8 @@ export class Game {
             this.projects.refresh();
           }
         }
-        const afford: Record<string, { ok: boolean; afford: boolean }> = {};
-        for (const a of ['flare', 'volcano', 'comets', 'migrate'] as Action[]) afford[a] = { ok: true, afford: s.energy >= COST[a] };
+        const afford: Record<string, { ok: boolean; afford: boolean; cost?: number }> = {};
+        for (const a of ['flare', 'volcano', 'comets', 'migrate', 'wrath', 'bless'] as Action[]) afford[a] = { ok: true, afford: s.energy >= sim.cost(a), cost: COST[a] ? sim.cost(a) : undefined };
         this.hud.setActionState(afford);
         if (this.panelT <= 0) {
           this.panelT = 0.3;
@@ -1647,12 +1879,19 @@ export class Game {
     const L = threatOf(s);
     const lv = { fleet: defLevel(s, 'fleet'), shield: defLevel(s, 'shield'), patrol: defLevel(s, 'patrol') };
     // A defence behind the threat that can be raised right now also lights the Projects button.
-    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(p.cost)) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
+    const canBuild = PROJECTS.some((p) => !sim.civ.lock(p.id) && sim.civ.canAfford(sim.civ.upfront(p.cost))) || DEFENCES.some((id) => lv[id] && lv[id] < L && !sim.civ.defenceLock(id)) || !sim.wings.unlockLock();
     return {
       threat: L,
+      allure: allureOf(s, sim.civ.settled().length),
+      ark: civ.done.warp && !civ.done.ark ? sim.civ.arkNeeds() : undefined,
       def: lv,
       era: tr(ERA_NAMES[era].es, ERA_NAMES[era].en),
-      label: def && b ? tr(`Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %`, `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%`) : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
+      label: def && b
+        ? tr(
+            `Construyendo: ${def.name.es} · ${Math.round((b.t / b.dur) * 100)} %${b.stalled ? ' (en pausa: faltan recursos)' : ''}`,
+            `Building: ${def.name.en} · ${Math.round((b.t / b.dur) * 100)}%${b.stalled ? ' (paused: not enough resources)' : ''}`,
+          )
+        : tr(`Grandes obras ${done.length}/${PROJECTS.length}`, `Great works ${done.length}/${PROJECTS.length}`),
       v: b ? b.t / b.dur : done.length / PROJECTS.length,
       res: civ.res,
       rates: sim.civ.rates,
@@ -1660,10 +1899,27 @@ export class Game {
     };
   }
 
+  /** Faith in the star, for the starlight slab. */
+  private faithInfo(): FaithInfo | null {
+    const f = this.s?.faith;
+    if (!f || !this.s) return null;
+    const t = f.tier ? FAITH_TIERS[f.tier - 1] : null;
+    return {
+      believers: f.believers,
+      believersTxt: { es: fmtPopEs(f.believers), en: fmtPopEn(f.believers) },
+      dread: dreadOf(this.s),
+      tier: f.tier,
+      tierName: t?.name ?? { es: '', en: '' },
+      gift: t?.gift ?? null,
+      order: !!f.order,
+      moral: this.s.moral ?? [],
+    };
+  }
+
   private projects: ProjectsPanel | null = null;
   private projectsT = 0;
 
-  openProjects() {
+  openProjects(tab?: ProjTab) {
     const sim = this.sim;
     if (!sim || !this.s?.civ || this.projects || this.mode !== 'play') return;
     sound.click();
@@ -1712,14 +1968,26 @@ export class Game {
         if (sim.civ.upgrade(id)) sound.chime('good');
         panel.refresh();
       },
+      study: () => {
+        if (sim.faith.study()) sound.chime('good');
+        panel.refresh();
+      },
+      dig: (id) => {
+        if (sim.faith.dig(id)) sound.whoosh();
+        panel.refresh();
+      },
+      forge: () => {
+        if (sim.faith.forge()) sound.chime('good');
+        panel.refresh();
+      },
       close: () => {},
-    }, sim.patrols, sim.wings);
+    }, sim.patrols, sim.wings, sim.faith, tab);
     this.projects = panel;
     const close = modal(this.ui, {
-      title: tr('Grandes obras', 'Great works'),
+      title: tr('Proyectos', 'Projects'),
       lore: tr(
-        'Tú inspiras; los pueblos construyen. Cada mundo aporta lo suyo: los gigantes, combustible; los helados, agua; los rocosos, metal; los mundos vivos, ciencia.',
-        'You inspire; the peoples build. Each world contributes its own: giants give fuel, icy worlds water, rocky worlds metal, living worlds science.',
+        'Tú inspiras; los pueblos construyen. Cada colonia aporta según lo que hagan de ella: los jardines y laboratorios, ciencia; las minas y fortalezas, metal; los pozos de hielo, agua; las ciudades flotantes de los gigantes, combustible.',
+        'You inspire; the peoples build. Each colony gives according to what they make of it: gardens and labs, science; mines and fortresses, metal; ice wells, water; the floating cities of the giants, fuel.',
       ),
       wide: true,
       cls: 'works-modal',
@@ -1764,7 +2032,7 @@ export class Game {
       const col = pp ? `hsl(${Math.round(pp.hue * 360)} 70% 68%)` : '#e8d2a0';
       const mark = st.mode === 'dominion' ? '⚑' : '✦';
       const html = `<i style="color:${col}">${mark}</i>${st.name}${st.fort ? `<b class="fort">♜${st.fort}</b>` : ''}${st.trouble ? '<b class="warn">⚠</b>' : ''}${st.strike ? '<b class="pt">⛨</b>' : ''}${st.wing ? '<b class="wg">✈</b>' : ''}`;
-      this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * 96, 0, Math.sin(st.ang) * 96);
+      this.labels.put(`st${st.id}`, `star-label ${st.mode}${st.trouble ? ' trouble' : ''}`, html, Math.cos(st.ang) * far(96), 0, Math.sin(st.ang) * far(96));
     }
     // The Space Patrols' battle barge.
     const pt = s.patrol;

@@ -14,6 +14,19 @@ export const SCALE_K = 16;
 export const toWorld = (au: number) => SCALE_K * Math.pow(au, SCALE_EXP);
 /** World units → orbit radius (AU). */
 export const toAU = (w: number) => Math.pow(Math.max(0, w) / SCALE_K, 1 / SCALE_EXP);
+
+/** How far apart the player wants the finished system's worlds and moons (Options): 1 is the old, tight map. */
+export const SPREAD_MIN = 0.8;
+export const SPREAD_MAX = 2.4;
+export const SPREAD_DEFAULT = 1.4;
+/** The spread in use right now (it eases towards the player's setting, so changes glide). */
+export const view = { spread: SPREAD_DEFAULT };
+/** Orbit radius (AU) → world units on the finished system's map (planets spread out by the player's setting). */
+export const sysWorld = (au: number) => toWorld(au) * view.spread;
+/** World units on the finished system's map → orbit radius (AU). */
+export const sysAU = (w: number) => toAU(w / view.spread);
+/** A fixed distance of the old map (deep space, distant stars) on the current one. */
+export const far = (d: number) => d * view.spread;
 /** Angular speed (rad/s at game speed 1). Gentler than Kepler so inner orbits stay readable. */
 export const omega = (au: number) => 0.5 * Math.pow(Math.max(au, 0.05), -0.75);
 
@@ -33,6 +46,10 @@ export const habZone = (L: number): [number, number] => {
 export const diskTemp = (au: number, L: number) => (280 * Math.pow(L, 0.25)) / Math.sqrt(au);
 
 export type Phase = 'formation' | 'system';
+/** Kind of star the system is born around. */
+export type StarType = 'orange' | 'yellow' | 'white';
+/** What a system that reached the stars hands on to the next one. */
+export type Heirloom = 'faith' | 'fertile' | 'relic';
 
 /** Material amounts in Earth masses. */
 export interface Stuff {
@@ -64,11 +81,20 @@ export interface Life {
   stage: number;
   progress: number;
   health: number;
+  /** Intelligent beings living here (millions), from intelligence on. */
+  pop?: number;
+  /** Seconds spent below what its stage needs to hold on (too few people, or a dying biosphere). */
+  strain?: number;
   /** True on the world where this species was born. */
   origin: boolean;
   /** The people this life became (people id), once it reached intelligence. */
   people?: number;
 }
+
+/** What a people makes of a world it settles. */
+export type Use = 'garden' | 'lab' | 'mine' | 'ice' | 'gas' | 'fort';
+/** A people's character. */
+export type Ethos = 'science' | 'industry' | 'war' | 'trade';
 
 /** A people of the system. The player is none of them: they only watch, and sometimes intervene. */
 export interface People {
@@ -84,6 +110,10 @@ export interface People {
   arrived?: boolean;
   gone?: boolean;
   nextShip: number;
+  /** Their character: what they do with the worlds they settle and how they treat others. */
+  ethos?: Ethos;
+  /** How much they believe in the star (0..1). */
+  faith?: number;
 }
 
 /** How two peoples get along. */
@@ -151,6 +181,20 @@ export interface World extends Stuff {
   debrisRing?: boolean;
   /** People living on this world as a colony (people id); none: unclaimed. */
   owner?: number;
+  /** What the settlers make of it: a terraformed garden, mines, ice wells, a lab, a fortress, floating cities. */
+  use?: Use;
+  /** How far its towns, mines or bases have grown (0..1). */
+  dev?: number;
+  /** Settlers living here (millions). */
+  cpop?: number;
+  /** Seconds a plague still rages here. */
+  plague?: number;
+  /** What the star decided about natives sharing the world with settlers. */
+  natives?: 'asked' | 'protect' | 'purge';
+  /** Earliest time the star may demand offerings here again. */
+  tithe?: number;
+  /** Earliest time the star may bless this world again. */
+  blessed?: number;
 }
 
 export type ShipKind =
@@ -168,7 +212,10 @@ export type ShipKind =
   | 'mother'
   | 'ark'
   | 'pod'
-  | 'gunship';
+  | 'gunship'
+  | 'looter'
+  | 'bomber'
+  | 'pilgrim';
 
 export interface Ship {
   id: number;
@@ -201,6 +248,8 @@ export interface Ship {
   people?: number;
   /** Distant star it comes from or goes to (OuterStar id). */
   star?: number;
+  /** What invading looters carry away (given back if they are shot down). */
+  loot?: Partial<Resources>;
 }
 
 export interface Resources {
@@ -212,7 +261,7 @@ export interface Resources {
 
 export interface Decision {
   id: number;
-  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea';
+  kind: 'trade' | 'refugees' | 'signal' | 'artifact' | 'rogue' | 'tension' | 'war' | 'incident' | 'alliance' | 'peace' | 'outpost' | 'annex' | 'plea' | 'natives' | 'sign' | 'prayer';
   /** Distant star involved (outpost and annex). */
   star?: number;
   /** Legacy: rival people involved. */
@@ -226,6 +275,14 @@ export interface Decision {
   give?: Partial<Resources>;
   get?: Partial<Resources>;
   species?: string;
+  /** A people's prayer: what they ask the star for, who prays, and what it was like when they started. */
+  goal?: 'warm' | 'cool' | 'deflect';
+  people?: number;
+  threat?: number;
+  dial0?: number;
+  a0?: number;
+  /** The star already did what they asked (woke the volcanoes, blessed them). */
+  done?: boolean;
 }
 
 export interface Mission {
@@ -241,7 +298,11 @@ export interface Mission {
 export interface CivState {
   res: Resources;
   done: Record<string, boolean>;
-  building: { id: string; t: number; dur: number } | null;
+  /**
+   * The great work under way. `paid` is the share of its cost already paid (old saves paid it all
+   * up front); `stalled` while the next installment cannot be paid.
+   */
+  building: { id: string; t: number; dur: number; paid?: number; stalled?: boolean } | null;
   missions: Mission[];
   decisions: Decision[];
   armada: { phase: 'rally' | 'hold' | 'away' | 'battle' | 'return'; t: number; x: number; z: number; launched: number; gathered: number; vsAliens: boolean; vsRival?: number; crew?: number[] } | null;
@@ -301,12 +362,16 @@ export interface WingsState {
   lost: number;
   /** Batches of ships bought with science (each one dearer). */
   bought?: number;
+  /** Looters and bombers shot down at home. */
+  shot?: number;
   sorties: { id: number; star: number; size: WingSize; units: number; t: number; dur: number }[];
 }
 
 /** The Space Patrols: armoured warriors the peoples raise when invaders become a real threat. */
 export interface PatrolState {
   barge: { es: string; en: string };
+  /** How they were founded: forged by the Order of the Star with ancient technology, or raised in a hurry against invaders. */
+  origin?: 'faith' | 'war';
   born: number;
   /** rising from its shipyard · orbit · approach (to a target) · assault · return · away (at another star). */
   phase: 'rising' | 'orbit' | 'approach' | 'assault' | 'return' | 'away';
@@ -339,6 +404,40 @@ export interface PatrolState {
   strikes: number;
 }
 
+/** A moon (or a bare rock) where the Order's astronomers saw something no rock should have. */
+export interface DigSite {
+  world: number;
+  /** open: nothing found yet · sure: an archive points the way · done: its relic was found. */
+  state: 'open' | 'sure' | 'done';
+  tries: number;
+}
+
+/** Faith in the star: who believes, the Order of the Star and its search for the Precursors' relics. */
+export interface FaithState {
+  /** Benefit tier (0–4), and the highest one ever reached. */
+  tier: number;
+  peak?: number;
+  /** Believers (millions), and those who believe out of love rather than fear. */
+  believers: number;
+  devout: number;
+  /** Seconds the conditions to found the Order have held. */
+  formT?: number;
+  order?: { born: number; members: number[] } | null;
+  /** "Reading the Heavens": the research that finds the dig sites. */
+  study?: { t: number; dur: number } | null;
+  read?: boolean;
+  sites: DigSite[];
+  /** Pilgrims digging at a site. */
+  digs: { world: number; t: number; dur: number }[];
+  relics: number;
+  /** Relics the forge needs (set once the sites are known). */
+  need?: number;
+  forge?: { t: number; dur: number } | null;
+  /** The forge is done: the Space Patrols rise as soon as a people can crew them. */
+  forged?: boolean;
+  nextSign?: number;
+}
+
 export interface Threat {
   id: number;
   target: number;
@@ -347,6 +446,8 @@ export interface Threat {
   angle: number;
   /** The shields already tried to stop it. */
   tried?: boolean;
+  /** Part of a meteor storm the star itself hurled. */
+  storm?: boolean;
 }
 
 /** What a piece of news points at, for the camera. */
@@ -410,7 +511,8 @@ export interface GameState {
   worlds: World[];
   ships: Ship[];
   threats: Threat[];
-  belts: { r: number; th: number; s: number }[];
+  /** Asteroid belts; debris left by impacts and collisions carries the time it was made, and fades. */
+  belts: { r: number; th: number; s: number; born?: number }[];
   species: Species | null;
   alienSpecies: Species | null;
   invasion: { next: number; waves: number; signal: number };
@@ -433,6 +535,15 @@ export interface GameState {
   wings?: WingsState | null;
   /** How dangerous the galaxy has become for this system (1–10): it grows with the system's power. */
   threat?: { level: number; power: number };
+  /** Faith in the star. */
+  faith?: FaithState;
+  /** When the worlds settled (system time): the clock for the late invasions. */
+  sysStart?: number;
+  /** Kind of star (old saves: yellow), and the heirloom brought from the previous system. */
+  star?: StarType;
+  heirloom?: Heirloom;
+  /** Why faith and fear changed lately (the last few reasons, newest last). */
+  moral?: { t: number; sign: 1 | -1; es: string; en: string }[];
   peoples?: People[];
   relations?: Relation[];
   /** Legacy. */
@@ -452,4 +563,6 @@ export interface Settings {
   sfx: number;
   quality: 'low' | 'high';
   speed: number;
+  /** How far apart worlds and moons are drawn (SPREAD_MIN…SPREAD_MAX). */
+  spread: number;
 }

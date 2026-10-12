@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { omega, toWorld, type GameState, type Ship, type ShipKind, type World } from '../core/state';
+import { far, omega, sysWorld, type GameState, type Ship, type ShipKind, type World } from '../core/state';
 import { worldStats, isGiantStuff } from '../sim/worlds';
 import { isSettled } from '../sim/civ';
 import { peopleOf } from '../sim/peoples';
@@ -10,15 +10,15 @@ import { Rng, TAU, easeInOut } from '../util';
 import { ShipHulls, type Hull } from './Ships';
 import { BARGE_Y } from '../sim/patrols';
 
-const MAX_SHIPS = 96;
+const MAX_SHIPS = 140;
 /** Ships plus armada formation slots plus patrols. */
-const MAX_POINTS = 220;
+const MAX_POINTS = 280;
 const TRAIL = 12;
 const MAX_SATS = 220;
 const DYSON = 900;
 
 /** Engine glow size per kind. */
-const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8 };
+const KIND_SIZE: Partial<Record<ShipKind, number>> = { freight: 0.5, tanker: 0.6, miner: 0.45, trader: 0.9, refugee: 0.9, expedition: 0.9, flotilla: 0.8, armada: 0.9, alien: 0.9, mother: 2.4, ark: 2.2, pod: 0.9, gunship: 0.8, looter: 0.8, bomber: 1, pilgrim: 0.8 };
 /** Hull shape, true size (world units) and smallest on-screen size (pixels) per kind. */
 const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   colony: { hull: 'challenger', size: 0.6, px: 15 },
@@ -36,6 +36,11 @@ const HULL_OF: Record<ShipKind, { hull: Hull; size: number; px: number }> = {
   ark: { hull: 'ark', size: 1.8, px: 22 },
   pod: { hull: 'pod', size: 0.42, px: 6 },
   gunship: { hull: 'executioner', size: 0.65, px: 8 },
+  // Invaders who come for the stores, and those who come to burn cities from orbit.
+  looter: { hull: 'insurgent', size: 0.7, px: 15 },
+  bomber: { hull: 'striker', size: 0.85, px: 17 },
+  // The Order's pilgrims on their way to a dig.
+  pilgrim: { hull: 'zenith', size: 0.6, px: 14 },
 };
 /**
  * The battle barge's true size. It keeps it at every zoom, like the worlds (no minimum size on
@@ -255,7 +260,7 @@ export class SystemView {
     const b = this.beltData[i % Math.max(1, this.beltData.length)];
     if (!b) return (out.x = out.z = 0), out;
     const th = b.th + omega(b.r) * 0.42 * s.time;
-    const rw = toWorld(b.r);
+    const rw = sysWorld(b.r);
     out.x = Math.cos(th) * rw;
     out.z = Math.sin(th) * rw;
     return out;
@@ -300,8 +305,8 @@ export class SystemView {
     else {
       // Visitors come from deep space.
       const a = (Math.abs(sh.from) * 2.399) % TAU;
-      this.tmp.x = Math.cos(a) * 110;
-      this.tmp.z = Math.sin(a) * 110;
+      this.tmp.x = Math.cos(a) * far(110);
+      this.tmp.z = Math.sin(a) * far(110);
     }
     // End point.
     if (sh.to >= 0) {
@@ -344,10 +349,11 @@ export class SystemView {
 
   /** The colour that tells who a ship belongs to. */
   private shipColor(s: GameState, sh: Ship, kind: ShipKind, out: THREE.Color) {
-    if (sh.alien) return out.setHSL(s.alienSpecies?.hue ?? 0.86, 0.85, kind === 'mother' ? 0.5 : 0.58);
+    if (sh.alien) return out.setHSL(s.alienSpecies?.hue ?? 0.86, 0.85, kind === 'mother' ? 0.5 : kind === 'bomber' ? 0.5 : kind === 'looter' ? 0.66 : 0.58);
     if (kind === 'trader') return out.copy(FACTION.trader);
     if (kind === 'refugee') return out.copy(FACTION.refugee);
     if (kind === 'ark') return out.setRGB(1, 0.95, 0.82);
+    if (kind === 'pilgrim') return out.setRGB(1, 0.86, 0.45);
     if (kind === 'pod') return out.copy(PATROL_GLOW);
     if (kind === 'gunship') return out.copy(PATROL_ACCENT);
     const cargo = kind === 'freight' || kind === 'miner' || kind === 'tanker';
@@ -408,7 +414,7 @@ export class SystemView {
       const sel = this.selected === w.id ? 1 : this.hovered === w.id ? 0.55 : 0;
       e.mesh.update(dt, time, sel);
       if (e.orbit) {
-        e.orbit.scale.setScalar(toWorld(w.a));
+        e.orbit.scale.setScalar(sysWorld(w.a));
         (e.orbit.material as THREE.LineBasicMaterial).opacity = this.selected === w.id ? 0.55 : this.hovered === w.id ? 0.32 : 0.14;
       }
       const am = e.aura.material as THREE.SpriteMaterial;
@@ -431,7 +437,7 @@ export class SystemView {
       for (let i = 0; i < this.beltData.length; i++) {
         const b = this.beltData[i];
         const th = b.th + omega(b.r) * 0.42 * s.time;
-        const rw = toWorld(b.r);
+        const rw = sysWorld(b.r);
         arr[i * 3] = Math.cos(th) * rw;
         arr[i * 3 + 1] = ((i * 37) % 11 - 5) * 0.06;
         arr[i * 3 + 2] = Math.sin(th) * rw;
@@ -449,7 +455,11 @@ export class SystemView {
     this.hulls.begin();
     let n = 0;
     const civ = s.civ;
-    for (const sh of s.ships) {
+    // Invaders first, then the Space Patrols' craft: when there are too many ships to draw, the ones
+    // the player must see (and target) are never the ones left out.
+    const rank = (x: Ship) => (x.alien ? 0 : x.kind === 'pod' || x.kind === 'gunship' ? 1 : 2);
+    const ships = s.ships.length > MAX_SHIPS ? [...s.ships].sort((a, b) => rank(a) - rank(b)) : s.ships;
+    for (const sh of ships) {
       if (n >= MAX_SHIPS) break;
       const k = sh.t / sh.dur;
       if (k < 0) continue;
@@ -670,7 +680,7 @@ export class SystemView {
       const target = this.byId.get(t.target);
       if (!target) continue;
       const p = worldXZ(target, this.byId, this.tmp);
-      const d = 90 * (1 - t.t / t.dur) + worldRadius(target);
+      const d = far(90) * (1 - t.t / t.dur) + worldRadius(target);
       rock.position.set(p.x + Math.cos(t.angle) * d, 2 * (1 - t.t / t.dur), p.z + Math.sin(t.angle) * d);
       rock.rotation.x += dt * 0.7;
       rock.rotation.y += dt * 0.4;
@@ -735,7 +745,7 @@ export class SystemView {
         dir.set(bx - ax, 0, bz - az);
       } else {
         const a = time * (0.05 + 0.01 * (i % 3)) + i * 1.9;
-        const r = 18 + (i % 4) * 7;
+        const r = far(18 + (i % 4) * 7);
         at.set(Math.cos(a) * r, alt, Math.sin(a) * r);
         dir.set(-Math.sin(a), 0, Math.cos(a));
       }
@@ -808,8 +818,8 @@ export class SystemView {
         this.group.add(this.rogue.group);
       }
       const k = rg.t / rg.dur;
-      const d = toWorld(9) + rg.off;
-      const along = (k - 0.5) * 260;
+      const d = sysWorld(9) + rg.off;
+      const along = (k - 0.5) * far(260);
       const nx = Math.cos(rg.ang);
       const nz = Math.sin(rg.ang);
       this.rogue.group.position.set(nx * d - nz * along, 0.5, nz * d + nx * along);

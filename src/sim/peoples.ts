@@ -1,10 +1,12 @@
-import type { Decision, GameState, People, Relation, Ship, World } from '../core/state';
+import type { Decision, GameState, People, Relation, Ship, Use, World } from '../core/state';
 import { Rng, clamp } from '../util';
 import { colonizable } from './worlds';
 import { capName, speciesName } from '../content/names';
-import { worldXZ } from '../render/layout';
+import { travel, worldXZ } from '../render/layout';
 import type { CivFx } from './civ';
 import { addHarm } from './voices';
+import { ETHOS, USE_INFO, ethosOf } from './uses';
+import { FAITH_START, HEIRLOOM_FAITH, addFaith, faithOf, inOrder, note } from './faith';
 
 /** What the peoples simulation needs from the system. */
 export interface PeopleHost {
@@ -14,6 +16,10 @@ export interface PeopleHost {
   world(id: number): World | undefined;
   news(icon: string, es: string, en: string, kind?: 'info' | 'good' | 'warn' | 'life' | 'alien' | 'fact'): void;
   fx(f: CivFx | PeopleFx): void;
+  /** A people has just established a colony: what they will make of it. */
+  assignUse(w: World, p: People): Use;
+  /** A blow that kills a share of everyone on a world. */
+  kill(w: World, frac: number): number;
 }
 
 export type PeopleFx =
@@ -120,7 +126,11 @@ export class PeopleSim {
   private add(p: Omit<People, 'id' | 'born' | 'nextShip'>) {
     const s = this.h.s;
     const id = this.list.reduce((m, x) => Math.max(m, x.id), 0) + 1;
-    const people: People = { ...p, id, born: s.time, nextShip: s.time + 50 };
+    // No two peoples share a name (two blends of the same peoples would).
+    let name = p.name;
+    for (let k = 0; k < 8 && this.list.some((x) => x.name === name); k++) name = speciesName(this.h.rng);
+    // Every people has a character of its own: scholars, builders, warriors or traders.
+    const people: People = { ...p, name, id, born: s.time, nextShip: s.time + 50, ethos: p.ethos ?? this.h.rng.pick(ETHOS), faith: p.faith ?? (s.heirloom === 'faith' ? HEIRLOOM_FAITH : FAITH_START) };
     for (const o of this.alive()) {
       this.relations.push({ a: o.id, b: id, mood: this.h.rng.range(-0.2, 0.3), state: 'peace', warT: 0, nextTalk: s.time + this.h.rng.range(60, 120), nextSkirmish: 0 });
     }
@@ -147,15 +157,23 @@ export class PeopleSim {
     return best;
   }
 
-  /** A living world just reached intelligence: a new people is born. */
-  emerge(w: World): boolean {
-    if (this.alive().length >= MAX_PEOPLES || w.colony >= 1) return false;
+  /** A living world just reached intelligence: a new people is born (`under` the colony of another, sometimes). */
+  emerge(w: World, under?: People): boolean {
+    if (this.alive().length >= MAX_PEOPLES) return false;
     const legacy = this.h.s.legacySpecies;
-    const name = legacy && !this.list.length ? legacy.name : speciesName(this.h.rng);
-    const p = this.add({ name, hue: this.hue(), home: w.id });
+    const base = legacy && !this.list.length ? legacy.name : speciesName(this.h.rng);
+    const p = this.add({ name: base, hue: this.hue(), home: w.id });
+    const name = p.name;
     w.life!.people = p.id;
     const n = this.alive().length;
-    if (n > 1)
+    if (under)
+      this.h.news(
+        '✧',
+        `En ${w.name}, a la sombra de las ciudades de los ${under.name}, surge un pueblo nativo: los ${name}. Tendrán que sobrevivir a los colonos para llegar a construir sus propias ciudades.`,
+        `On ${w.name}, in the shadow of the cities of the ${capName(under.name)}, a native people arises: the ${capName(name)}. They will have to survive the settlers to build cities of their own.`,
+        'life',
+      );
+    else if (n > 1)
       this.h.news(
         '✧',
         `En ${w.name} surge otro pueblo que mira las estrellas: los ${name}. Ya son ${n} pueblos en el sistema.`,
@@ -229,7 +247,15 @@ export class PeopleSim {
     }
     const rng = this.h.rng;
     if (r.state === 'war') r.warT += dt;
-    else r.mood = clamp(r.mood + (r.state === 'alliance' ? 0.0025 : -r.mood * 0.002) * dt, -1, 1);
+    else {
+      // Warriors take offence easily; traders make friends.
+      const ea = ethosOf(a);
+      const eb = ethosOf(b);
+      const drift = (ea === 'war' ? -0.0012 : ea === 'trade' ? 0.0008 : 0) + (eb === 'war' ? -0.0012 : eb === 'trade' ? 0.0008 : 0);
+      r.mood = clamp(r.mood + ((r.state === 'alliance' ? 0.0025 : -r.mood * 0.002) + drift) * dt, -1, 1);
+      // Brothers and sisters of the Order of the Star do not go to war with each other.
+      if (inOrder(s, a.id) && inOrder(s, b.id)) r.mood = Math.max(-0.55, r.mood + 0.001 * dt);
+    }
     if (r.state !== 'war' && r.state !== 'alliance') r.state = r.mood < -0.3 ? 'tension' : 'peace';
     // Allies trade all the time.
     if (r.state === 'alliance' && rng.next() < dt * 0.05) this.tradeShip(a, b);
@@ -288,8 +314,8 @@ export class PeopleSim {
     if (!candidates.length) return;
     const w = this.h.rng.pick(candidates);
     r.mixed = true;
-    const name = blendNames(a.name, b.name);
-    const p = this.add({ name, hue: this.hue(), home: w.id, parents: [a.id, b.id] });
+    const p = this.add({ name: blendNames(a.name, b.name), hue: this.hue(), home: w.id, parents: [a.id, b.id], ethos: this.h.rng.pick([ethosOf(a), ethosOf(b)]), faith: (faithOf(a) + faithOf(b)) / 2 });
+    const name = p.name;
     w.owner = p.id;
     w.colony = 1;
     for (const id of [a.id, b.id]) {
@@ -305,6 +331,57 @@ export class PeopleSim {
       `En ${w.name}, ${a.name} y ${b.name} conviven desde hace siglos. De esa mezcla nace un pueblo nuevo: los ${name}.`,
       `On ${w.name}, the ${capName(a.name)} and the ${capName(b.name)} have lived together for centuries. From that blend a new people is born: the ${capName(name)}.`,
       'life',
+    );
+  }
+
+  /** Natives and settlers who lived side by side for centuries become one people, with the settlers' ships and the natives' world. */
+  blendNatives(w: World, settlers: People, natives: People) {
+    const life = w.life;
+    if (!life) return;
+    natives.gone = true;
+    for (const r of this.relations) if (r.a === natives.id || r.b === natives.id) r.state = 'peace';
+    const p = this.add({ name: blendNames(natives.name, settlers.name), hue: this.hue(), home: w.id, parents: [settlers.id, natives.id], ethos: this.h.rng.next() < 0.5 ? ethosOf(settlers) : ethosOf(natives), faith: (faithOf(settlers) + faithOf(natives)) / 2 });
+    const name = p.name;
+    life.people = p.id;
+    life.stage = Math.max(life.stage, 4);
+    life.pop = (life.pop ?? 0) + (w.cpop ?? 0);
+    w.owner = p.id;
+    w.colony = 1;
+    w.cpop = undefined;
+    w.natives = undefined;
+    const rel = this.relation(p.id, settlers.id);
+    if (rel) {
+      rel.mood = 0.55;
+      rel.state = 'alliance';
+      rel.met = true;
+    }
+    this.h.fx({ kind: 'settled', world: w.id });
+    this.h.news(
+      '❦',
+      `En ${w.name}, los nativos ${natives.name} y los colonos ${settlers.name} llevan siglos conviviendo: se mezclan en un pueblo nuevo, los ${name}, con las naves de unos y el mundo de los otros.`,
+      `On ${w.name}, the native ${capName(natives.name)} and the ${capName(settlers.name)} settlers have lived together for centuries: they blend into a new people, the ${capName(name)}, with the ships of one and the world of the other.`,
+      'life',
+    );
+  }
+
+  /** Natives rise against the settlers and take their world back. */
+  reconquer(w: World, settlers: People, natives: People) {
+    w.owner = undefined;
+    w.colony = 0;
+    w.use = undefined;
+    w.dev = 0;
+    w.cpop = 0;
+    w.natives = undefined;
+    const rel = this.relation(settlers.id, natives.id);
+    if (rel) {
+      rel.mood = -0.55;
+      rel.state = 'tension';
+    }
+    this.h.news(
+      '⚑',
+      `¡Los ${natives.name} se alzan en ${w.name} y expulsan a los colonos ${settlers.name}! Recuperan su mundo, y no lo olvidarán.`,
+      `The ${capName(natives.name)} rise up on ${w.name} and drive out the ${capName(settlers.name)} settlers! They take their world back, and they will not forget.`,
+      'warn',
     );
   }
 
@@ -341,8 +418,8 @@ export class PeopleSim {
     this.h.fx({ kind: 'truce', a: a.id, b: b.id });
     this.h.news(
       '⛨',
-      `Los Space Patrols imponen la paz entre los ${a.name} y los ${b.name} a punta de bólter. Nadie se atreve a protestar… todavía.`,
-      `The Space Patrols impose peace between the ${capName(a.name)} and the ${capName(b.name)} at bolter-point. Nobody dares to complain… yet.`,
+      `Los Space Patrols imponen la paz entre los ${a.name} y los ${b.name} a punta de lanza. Nadie se atreve a protestar… todavía.`,
+      `The Space Patrols impose peace between the ${capName(a.name)} and the ${capName(b.name)} at lance-point. Nobody dares to complain… yet.`,
       'warn',
     );
     return true;
@@ -369,10 +446,12 @@ export class PeopleSim {
     const b = this.get(ib);
     const r = a && b ? this.relation(a.id, b.id) : undefined;
     if (r && !accept) {
-      // Choosing to let a war run its course weighs on the player.
+      // Choosing to let a war run its course weighs on the player — and on their faith.
       if (d.kind === 'war') {
         r.ignored = true;
         addHarm(s, 5);
+        addFaith(s, [r.a, r.b], -0.06);
+        if (a && b) note(s, -1, `Dejaste correr la guerra entre los ${a.name} y los ${b.name}`, `You let the war between the ${capName(a.name)} and the ${capName(b.name)} run`);
       } else addHarm(s, 1.5);
     }
     if (r && accept) addHarm(s, d.kind === 'war' ? -5 : -2);
@@ -380,10 +459,14 @@ export class PeopleSim {
     if (d.kind === 'tension' && s.energy >= 25) {
       s.energy -= 25;
       r.mood = clamp(r.mood + 0.35, -1, 1);
+      addFaith(s, [a.id, b.id], 0.05);
+      note(s, 1, `Calmaste a los ${a.name} y los ${b.name}`, `You calmed the ${capName(a.name)} and the ${capName(b.name)}`);
       this.h.news('☀', `Una aurora inesperada ilumina a los ${a.name} y los ${b.name}. Lo toman como una señal y se calman.`, `An unexpected aurora lights up the ${capName(a.name)} and the ${capName(b.name)}. They take it as a sign and calm down.`, 'good');
     } else if (d.kind === 'war' && s.energy >= 40 && r.state === 'war') {
       s.energy -= 40;
       this.peace(r, a, b, true);
+      addFaith(s, [a.id, b.id], 0.08);
+      note(s, 1, `Tregua entre los ${a.name} y los ${b.name}`, `Truce between the ${capName(a.name)} and the ${capName(b.name)}`);
     }
   }
 
@@ -392,7 +475,7 @@ export class PeopleSim {
     const a = this.pos(from);
     const b = this.pos(to);
     const d = Math.hypot(a.x - b.x, a.z - b.z);
-    this.h.s.ships.push({ id: this.h.nid(), from: from.id, to: to.id, t: 0, dur: 7 + d * 0.24, alien: false, kind, people, ...extra });
+    this.h.s.ships.push({ id: this.h.nid(), from: from.id, to: to.id, t: 0, dur: 7 + travel(d) * 0.24, alien: false, kind, people, ...extra });
   }
 
   private tradeShip(a: People, b: People) {
@@ -413,7 +496,8 @@ export class PeopleSim {
     if (!from.length || !to.length) return;
     const src = rng.pick(from);
     const dst = rng.pick(to);
-    for (let k = 0; k < 3; k++) this.ship(src, dst, att.id, 'raider', { t: -k * 0.6 });
+    const n = ethosOf(att) === 'war' ? 4 : 3;
+    for (let k = 0; k < n; k++) this.ship(src, dst, att.id, 'raider', { t: -k * 0.6 });
   }
 
   /** A people's colony ship reached its target. Returns true when handled here. */
@@ -427,22 +511,28 @@ export class PeopleSim {
     const pid = sh.people ?? this.leader()?.id;
     const p = this.get(pid);
     if (!p) return false;
-    if (w.colony >= 1 || (w.colony > 0 && w.owner !== p.id) || (w.life && w.life.stage >= 2)) return true;
+    // A world with a people of its own is not taken — but settlers already living among natives may top up their colony.
+    if (w.colony >= 1 || (w.colony > 0 && w.owner !== p.id) || (w.life && w.life.stage >= 2 && !(w.owner === p.id && w.colony > 0))) return true;
     w.owner = p.id;
     w.colony = Math.min(1, w.colony + 0.34);
     w.invaded = Math.max(0, w.invaded - 0.15);
     if (w.colony >= 1) {
       this.h.fx({ kind: 'settled', world: w.id });
       const first = this.h.s.worlds.filter((x) => x.owner === p.id && x.colony >= 1).length === 1;
-      if (w.gas / Math.max(1e-6, w.metal + w.rock + w.water + w.gas + w.org) > 0.3)
-        this.h.news('⌂', `Los ${p.name} levantan ciudades flotantes en las nubes de ${w.name}.`, `The ${capName(p.name)} raise floating cities in the clouds of ${w.name}.`, 'good');
-      else
-        this.h.news(
-          '⌂',
-          `Los ${p.name} fundan una colonia en ${w.name}${first ? ': su primer hogar fuera de casa' : ''}.`,
-          `The ${capName(p.name)} found a colony on ${w.name}${first ? ': their first home away from home' : ''}.`,
-          'good',
-        );
+      // Not every world is worth terraforming: each people makes of it what suits the world and themselves.
+      const use = this.h.assignUse(w, p);
+      const n = p.name;
+      const N = capName(n);
+      const lines: Record<Use, [string, string]> = {
+        gas: [`Los ${n} levantan ciudades flotantes en las nubes de ${w.name}`, `The ${N} raise floating cities in the clouds of ${w.name}`],
+        garden: [`Los ${n} fundan una colonia en ${w.name} y empiezan a terraformarla: vale la pena`, `The ${N} found a colony on ${w.name} and begin to terraform it: it is worth it`],
+        mine: [`Los ${n} levantan pueblos mineros en ${w.name}`, `The ${N} raise mining towns on ${w.name}`],
+        ice: [`Los ${n} perforan pozos de hielo en ${w.name}`, `The ${N} drill ice wells on ${w.name}`],
+        lab: [`Los ${n} instalan un puesto de investigación en ${w.name}`, `The ${N} set up a research outpost on ${w.name}`],
+        fort: [`Los ${n} convierten ${w.name} en una fortaleza`, `The ${N} turn ${w.name} into a fortress`],
+      };
+      const [es, en] = lines[use];
+      this.h.news(USE_INFO[use].icon, `${es}${first ? ': su primer hogar fuera de casa' : ''}.`, `${en}${first ? ': their first home away from home' : ''}.`, 'good');
     }
     return true;
   }
@@ -453,10 +543,11 @@ export class PeopleSim {
     const defId = peopleOf(w);
     const def = this.get(defId);
     if (!att || !def || defId === att.id) return;
-    const defence = 0.4 + 0.05 * Math.max(0, this.stage(def) - 4) + (s.civ?.done.shield ? 0.08 : 0);
+    const defence = 0.4 + 0.05 * Math.max(0, this.stage(def) - 4) + (s.civ?.done.shield ? 0.08 : 0) + (w.use === 'fort' ? 0.25 : 0);
     const hit = this.h.rng.next() > defence;
     this.h.fx({ kind: 'raid', world: w.id, ship: sh.id, hit });
     if (!hit) return;
+    this.h.kill(w, 0.03);
     // A native home world is not taken: its people suffer, but hold.
     if (w.life?.people === defId) {
       w.life.health -= 0.02;

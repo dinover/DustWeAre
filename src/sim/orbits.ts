@@ -1,15 +1,18 @@
-import { R_MAX, massOf, toAU, toWorld, type Encounter, type GameState, type NewsFocus, type World } from '../core/state';
+import { R_MAX, massOf, sysWorld, toAU, toWorld, type Encounter, type GameState, type NewsFocus, type World } from '../core/state';
 import { moonOrbit, worldRadius } from '../render/layout';
 import { Rng, clamp } from '../util';
 import { isGiantStuff } from './worlds';
 import { moonName, worldName } from '../content/names';
 import { peopleOf, type PeopleSim } from './peoples';
 
-/** How far a world's look reaches from its centre: the planet, its ring and part of its moons. */
+/**
+ * How far a world's look reaches from its centre: the planet, its ring and part of its moons. Measured
+ * on the old, tight map: orbits spaced for it stay clear at any spread the player picks.
+ */
 export function reach(w: World, worlds: World[]) {
   const body = worldRadius(w) * (w.ring ? 2.2 : 1.15);
   const moons = worlds.filter((m) => m.parent === w.id).length;
-  return moons ? Math.max(body, moonOrbit(w, moons - 1) * 0.7 + 0.5) : body;
+  return moons ? Math.max(body, moonOrbit(w, moons - 1, 1) * 0.7 + 0.5) : body;
 }
 
 /** Room two neighbouring planets need so they never overlap on screen (world units). */
@@ -49,6 +52,8 @@ export interface OrbitHost {
   fx(f: OrbitFx): void;
   launch(from: number, to: number, alien: boolean, dur?: number, people?: number): void;
   removeWorld(id: number): void;
+  /** A blow that kills a share of everyone on a world. */
+  kill(w: World, frac: number): number;
   readonly peoples: PeopleSim;
 }
 
@@ -200,7 +205,7 @@ export class OrbitSim {
     const mb = massOf(big);
     const ms = massOf(small);
     const a = (big.a * mb + small.a * ms) / (mb + ms);
-    const r = toWorld(a);
+    const r = sysWorld(a);
     this.h.fx({ kind: 'collision', world: big.id, x: Math.cos(big.th) * r, z: Math.sin(big.th) * r, big: ms > 0.3 });
     const giant = isGiantStuff(big);
     // Peoples and life: the smaller world is gone, the larger one is scorched.
@@ -221,6 +226,7 @@ export class OrbitSim {
     big.sats = 0;
     big.colony *= 0.25;
     if (big.life) big.life.health -= 0.75;
+    this.h.kill(big, 0.85);
     // Moons: the small world's moons join the big one.
     for (const m of s.worlds) if (m.parent === small.id) m.parent = big.id;
     this.h.removeWorld(small.id);
@@ -244,7 +250,7 @@ export class OrbitSim {
       big.ring = true;
       big.debrisRing = !giant;
     }
-    for (let i = 0; i < 60; i++) s.belts.push({ r: a * (1 + rng.gauss(0, 0.02)), th: big.th - 0.05 - rng.range(0, 1.4), s: 0.0006 });
+    for (let i = 0; i < 60; i++) s.belts.push({ r: a * (1 + rng.gauss(0, 0.02)), th: big.th - 0.05 - rng.range(0, 1.4), s: 0.0006, born: s.time });
     // The largest fragment may escape and gather into a new world of its own.
     let fresh: World | null = null;
     if (ms > 0.05 && rng.next() < 0.45) fresh = this.fragment(big, ms, rng);

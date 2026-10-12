@@ -3,6 +3,7 @@ import { NOISE } from './glsl';
 import { massOf, type Stuff, type World } from '../core/state';
 import type { WorldStats } from '../sim/worlds';
 import { Rng, clamp, smoothstep } from '../util';
+import { nativeCap } from '../sim/population';
 
 export type RGB = [number, number, number];
 
@@ -33,6 +34,12 @@ export interface Look {
   invade: number;
   atm: number;
   atmCol: RGB;
+  /** Quarries, pits and haul roads of mining towns (and the drill scars of ice wells). */
+  mine: number;
+  /** Colour of the lights on the night side: warm cities, orange foundries, red fortresses, cold labs. */
+  cityCol: RGB;
+  /** Lights of floating cities in a giant's clouds. */
+  float: number;
 }
 
 export interface RingStyle {
@@ -132,6 +139,9 @@ const baseLook = (seed: number): Look => ({
   invade: 0,
   atm: 0,
   atmCol: [0.5, 0.7, 1],
+  mine: 0,
+  cityCol: [1, 0.72, 0.36],
+  float: 0,
 });
 export { baseLook };
 
@@ -168,7 +178,36 @@ export function lookOfWorld(w: World, st: WorldStats): Look {
   const life = w.life;
   const stage = life ? life.stage : -1;
   const veg = Math.max(stage >= 1 ? 0.55 + 0.1 * stage : stage === 0 ? 0.18 : 0, w.terra * 0.9);
-  const city = Math.max(stage >= 3 && life?.origin ? 0.7 + 0.1 * (stage - 3) : 0, w.colony >= 1 ? 0.55 : w.colony * 0.3);
+  // A people's own cities glow as bright as they are full.
+  const cap = stage >= 3 ? nativeCap(w, st) : 0;
+  const crowd = cap > 0 && life?.pop !== undefined ? 0.35 + 0.65 * clamp(life.pop / cap) : 1;
+  const native = stage >= 3 && life?.origin ? (0.7 + 0.1 * (stage - 3)) * crowd : 0;
+  // A colony looks like what its settlers made of it: each people uses its worlds its own way.
+  const use = w.colony >= 1 ? w.use : undefined;
+  const dev = w.dev ?? 0.6;
+  let colony = w.colony >= 1 ? 0.55 : w.colony * 0.3;
+  let cityCol: RGB = [1, 0.72, 0.36];
+  let mine = 0;
+  let float = 0;
+  if (use === 'garden') colony = 0.3 + 0.35 * dev * (0.4 + 0.6 * w.terra);
+  else if (use === 'mine') {
+    colony = 0.25 + 0.3 * dev;
+    cityCol = [1, 0.52, 0.16];
+    mine = 0.3 + 0.7 * dev;
+  } else if (use === 'ice') {
+    colony = 0.2 + 0.25 * dev;
+    cityCol = [0.72, 0.9, 1];
+    mine = 0.15 + 0.35 * dev;
+  } else if (use === 'lab') {
+    colony = 0.15 + 0.2 * dev;
+    cityCol = [0.62, 0.95, 1];
+  } else if (use === 'fort') {
+    colony = 0.35 + 0.35 * dev;
+    cityCol = [1, 0.3, 0.24];
+    mine = 0.25 * dev;
+  } else if (use === 'gas') float = 0.45 + 0.55 * dev;
+  if (native >= colony) cityCol = [1, 0.72, 0.36];
+  const city = Math.max(native, colony);
   const ice = kind === 'ice' ? 0.95 : st.T < 255 ? 0.55 : st.T < 280 ? 0.25 : st.T < 300 ? 0.12 : 0;
   const icegiant = kind === 'icegiant';
   const g = giantLook(w.seed, icegiant, st.giant && st.T > 420);
@@ -199,6 +238,9 @@ export function lookOfWorld(w: World, st: WorldStats): Look {
     invade: clamp(w.invaded),
     atm: st.giant ? 0.7 : thick ? 0.9 : clamp(Math.sqrt(st.atm) * 0.6),
     atmCol,
+    mine: st.giant ? 0 : mine,
+    cityCol,
+    float: st.giant ? float : 0,
   };
 }
 
@@ -258,6 +300,9 @@ const PLANET_FS = /* glsl */ `
   uniform float uCrack;
   uniform float uInvade;
   uniform vec3 uInvadeCol;
+  uniform float uMine;
+  uniform vec3 uCityCol;
+  uniform float uFloat;
   uniform float uTime;
   uniform float uSel;
   varying vec3 vObj;
@@ -299,6 +344,7 @@ const PLANET_FS = /* glsl */ `
     float lat = abs(n.y);
     vec3 col;
     float land = 1.0;
+    float scar = 0.0;
     vec3 emit = vec3(0.0);
     if (uGas > 0.5) {
       float warp = fbm3(p * vec3(0.8, 2.6, 0.8) + vec3(uTime * 0.01, 0.0, 0.0));
@@ -323,6 +369,11 @@ const PLANET_FS = /* glsl */ `
         col = mix(col, vec3(0.12, 0.08, 0.07), bruise * min(1.0, uLava * 1.3));
       }
       emit += vec3(1.0, 0.32, 0.1) * uHot * (1.0 - day) * (0.25 + 0.45 * (b1 * 0.5 + 0.5));
+      // Floating cities twinkle along the bands of the night side.
+      if (uFloat > 0.0) {
+        float fc = smoothstep(0.84, 0.97, snoise(n * 30.0 + uSeed) * 0.5 + 0.5) * smoothstep(0.75, 0.2, abs(n.y));
+        emit += uCityCol * fc * uFloat * (1.0 - day) * 1.6;
+      }
       land = 0.0;
     } else {
       float d = fbm3(p * 3.4 + 7.0) * 0.5 + 0.5;
@@ -352,6 +403,12 @@ const PLANET_FS = /* glsl */ `
         float c = pow(1.0 - abs(snoise(p * 4.5 + 9.0)), 14.0) + 0.6 * pow(1.0 - abs(snoise(p * 10.0)), 18.0);
         col = mix(col, vec3(0.58, 0.34, 0.24), clamp(c * uCrack, 0.0, 0.8) * iceMask);
       }
+      // Mining towns: quarries and terraced pits, grey and raw against the rock.
+      if (uMine > 0.0) {
+        float pit = worley(p * 5.0 + 17.0);
+        scar = (1.0 - smoothstep(0.16, 0.34, pit)) * smoothstep(0.3, 0.7, snoise(p * 1.7 + 4.0) * 0.5 + 0.5) * land;
+        col = mix(col, vec3(0.32, 0.29, 0.26) * (0.8 + 0.4 * fract(pit * 9.0)), scar * uMine * 0.8);
+      }
       // Molten crust: dark rock with glowing cracks.
       if (uLava > 0.0) {
         float crack = pow(1.0 - abs(snoise(p * 3.5 + uTime * 0.02)), 7.0);
@@ -370,7 +427,12 @@ const PLANET_FS = /* glsl */ `
     // City lights glitter on the night side.
     if (uCity > 0.0) {
       float lights = smoothstep(0.55, 0.85, snoise(n * 26.0 + uSeed) * 0.5 + 0.5) * (0.6 + 0.4 * snoise(n * 7.0 + 3.0));
-      emit += vec3(1.0, 0.72, 0.36) * lights * uCity * land * (1.0 - day) * 1.3;
+      emit += uCityCol * lights * uCity * land * (1.0 - day) * 1.3;
+    }
+    // Foundries along the pits glow through the night.
+    if (uMine > 0.0) {
+      float sparks = smoothstep(0.68, 0.9, snoise(n * 34.0 + uSeed * 1.3) * 0.5 + 0.5);
+      emit += uCityCol * sparks * scar * uMine * (1.0 - day) * 1.8;
     }
     if (uInvade > 0.0) {
       float veins = pow(1.0 - abs(snoise(p * 4.0 + 31.0 + uTime * 0.05)), 9.0);
@@ -469,6 +531,9 @@ export class PlanetMesh {
         uCrack: { value: 0 },
         uInvade: { value: 0 },
         uInvadeCol: { value: new THREE.Vector3(0.75, 0.35, 1) },
+        uMine: { value: 0 },
+        uCityCol: { value: v3(L.cityCol) },
+        uFloat: { value: 0 },
         uTime: { value: 0 },
         uSel: { value: 0 },
       },
@@ -518,6 +583,9 @@ export class PlanetMesh {
     u.uCrater.value = l.crater;
     u.uCrack.value = l.crack;
     u.uInvade.value = l.invade;
+    u.uMine.value = l.mine;
+    u.uCityCol.value.set(...l.cityCol);
+    u.uFloat.value = l.float;
     this.atmoMat.uniforms.uColor.value.set(...l.atmCol);
     this.atmoMat.uniforms.uStrength.value = l.atm;
     this.atmo.visible = l.atm > 0.04;
