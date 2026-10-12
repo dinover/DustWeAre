@@ -680,6 +680,7 @@ export class Game {
         no: tr('Cerrar', 'Close'),
         left: Math.max(0, e.dur - e.t),
         dur: e.dur,
+        urgent: true,
       });
     }
     return out;
@@ -830,8 +831,19 @@ export class Game {
         this.fx.flash(p.x, 0, p.z, 0xffe6b0, 12, 1.6);
         if (f.id === 'dyson') this.fx.ring(0, 0, 0xffd28a, 30, 3);
         sound.chime('good');
+        const def = PROJECTS.find((x) => x.id === f.id);
+        if (def) this.hud.milestone(def.icon, tr('Obra completada', 'Work completed'), pick(def.name));
         return;
       }
+      case 'faithTier':
+        this.hud.milestone('❂', tr('La fe crece', 'Faith grows'), pick(f.name));
+        return;
+      case 'order':
+        this.hud.milestone('❂', tr('Nace la Orden', 'The Order is born'), tr('La Orden de la Estrella', 'The Order of the Star'));
+        return;
+      case 'forged':
+        this.hud.milestone('⛨', 'Space Patrols', `«${pick(f.barge)}»`);
+        return;
       case 'raid': {
         // Defenders fire on the raider; it either explodes or gets through.
         const to = this.shipGetter(f.ship);
@@ -881,6 +893,7 @@ export class Game {
         return;
       }
       case 'relic': {
+        this.hud.milestone('◬', tr('Reliquia hallada', 'Relic found'), pick(f.name));
         const p = this.systemView.posOf(f.world);
         if (p) {
           this.fx.flash(p.x, 0, p.z, 0x9fd4ff, 10, 2);
@@ -1229,7 +1242,10 @@ export class Game {
   }
 
   private onKey(e: KeyboardEvent) {
-    if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+    const target = e.target as HTMLElement | null;
+    if (target?.tagName === 'INPUT') return;
+    // Enter and Space on a control reached with the keyboard press that control: no pause, no shortcut.
+    if ((e.code === 'Space' || e.key === 'Enter') && target?.closest('button, [role="button"], [role="tab"]') && target.matches(':focus-visible')) return;
     if (e.key === 'Escape') {
       if (closeTopModal()) return;
       if (this.mode !== 'play') return;
@@ -1495,13 +1511,14 @@ export class Game {
         h(
           'div',
           { class: 'menu', style: 'margin:0 auto' },
+          // Resuming is what one does most: it leads the column, as the primary.
+          h('button', { class: 'btn primary', onclick: () => closeTopModal() }, tr('Seguir', 'Resume')),
           h('button', { class: 'btn', onclick: () => (closeTopModal(), this.s && chronicle(this.ui, this.s, this.hud)) }, tr('Crónica del sistema', 'System chronicle')),
           h('button', { class: 'btn', onclick: () => (closeTopModal(), howToPlay(this.ui)) }, tr('Cómo se juega', 'How to play')),
           h('button', { class: 'btn', onclick: () => (closeTopModal(), this.options()) }, tr('Opciones', 'Options')),
-          h('button', { class: 'btn', onclick: () => (closeTopModal(), this.toTitle()) }, tr('Guardar y salir', 'Save and quit')),
+          h('button', { class: 'btn ghost', onclick: () => (closeTopModal(), this.toTitle()) }, tr('Guardar y salir', 'Save and quit')),
         ),
       ],
-      buttons: [{ label: tr('Seguir', 'Resume'), primary: true }],
       onClose: () => (this.hold = Math.max(0, this.hold - 1)),
     });
   }
@@ -1599,9 +1616,14 @@ export class Game {
           'button',
           {
             class: 'wrath-opt heirloom-opt',
-            onclick: () => {
-              close();
-              setTimeout(() => go(k), 300);
+            onclick: (e: Event) => {
+              // The choice is sealed in gold for a moment before the next system begins.
+              (e.currentTarget as HTMLElement).classList.add('chosen');
+              list.style.pointerEvents = 'none';
+              setTimeout(() => {
+                close();
+                setTimeout(() => go(k), 300);
+              }, 450);
             },
           },
           h('span', { class: 'wo-ico' }, hl.icon),
@@ -1841,6 +1863,8 @@ export class Game {
         }
         const afford: Record<string, { ok: boolean; afford: boolean; cost?: number }> = {};
         for (const a of ['flare', 'volcano', 'comets', 'migrate', 'wrath', 'bless'] as Action[]) afford[a] = { ok: true, afford: s.energy >= sim.cost(a), cost: COST[a] ? sim.cost(a) : undefined };
+        // Wrath has a price per curse: it is out of reach only when even the cheapest one is.
+        afford.wrath.afford = s.energy >= Math.min(...Object.values(WRATH_COST));
         this.hud.setActionState(afford);
         if (this.panelT <= 0) {
           this.panelT = 0.3;

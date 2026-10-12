@@ -119,7 +119,8 @@ export class ProjectsPanel {
 
   private build() {
     clear(this.el);
-    this.el.append(this.res, this.tabBar);
+    // The resources and the tabs stay pinned on top while the cards scroll beneath them.
+    this.el.append(h('div', { class: 'proj-sticky' }, this.res, this.tabBar));
     const names: Record<ProjTab, string> = {
       works: tr('Obras', 'Works'),
       def: tr('Defensa', 'Defence'),
@@ -141,6 +142,8 @@ export class ProjectsPanel {
       const b = (e.target as Element).closest('button[data-def]') as HTMLButtonElement | null;
       if (b && !b.disabled) this.on.upgrade(b.dataset.def as DefenceId);
     });
+    // How works are paid, said once instead of on every card.
+    P.works.pane.append(h('div', { class: 'small muted proj-intro' }, tr('Cada obra empieza con el 25 % de su coste; el resto se paga mientras se construye.', 'Each work starts with 25% of its cost; the rest is paid while it is built.')));
     for (const era of [1, 2, 3] as const) {
       const grid = h('div', { class: 'proj-grid' });
       P.works.pane.append(h('h3', { class: 'proj-era' }, pick(ERA_NAMES[era])), grid);
@@ -277,13 +280,28 @@ export class ProjectsPanel {
     return { open, urgent };
   }
 
-  /** "⚠ +1,5 de poder de amenaza (sube la amenaza a nivel 4)". */
+  /** A short chip ("⚠ +1,5 amenaza → nivel 4"), with the whole story in its tooltip. */
   private threatNote(add: number) {
     const s = this.civ.state;
     const L = threatOf(s);
     const after = levelFor((s.threat?.power ?? 0) + add);
     const n = num(add, 1);
-    return after > L ? tr(`⚠ +${n} de poder de amenaza (sube la amenaza a nivel ${after})`, `⚠ +${n} threat power (raises the threat to level ${after})`) : tr(`⚠ +${n} de poder de amenaza`, `⚠ +${n} threat power`);
+    const up = after > L;
+    return {
+      text: up ? tr(`⚠ +${n} amenaza → nivel ${after}`, `⚠ +${n} threat → level ${after}`) : tr(`⚠ +${n} amenaza`, `⚠ +${n} threat`),
+      tip: up
+        ? tr(`Añade ${n} de poder de amenaza: <b>la amenaza sube a nivel ${after}</b>. Las invasiones llegarán antes y con más naves.`, `Adds ${n} threat power: <b>the threat rises to level ${after}</b>. Invasions will come sooner and with more ships.`)
+        : tr(`Añade ${n} de poder de amenaza. La amenaza crece con el poder del sistema.`, `Adds ${n} threat power. The threat grows with the system's power.`),
+    };
+  }
+
+  private setWarn(el: HTMLElement, w: { text: string; tip: string } | null) {
+    const text = w?.text ?? '';
+    if (el.textContent !== text) el.textContent = text;
+    if (w) {
+      if (el.dataset.tip !== w.tip) el.dataset.tip = w.tip;
+    } else delete el.dataset.tip;
+    el.style.display = w ? '' : 'none';
   }
 
   /** The threat level, and one card per defence with its level and what the next one costs. */
@@ -645,14 +663,13 @@ export class ProjectsPanel {
             ? pick(lock)
             : short
               ? tr('Faltan recursos para empezar (el 25 %).', 'Not enough resources to start (25%).')
-              : tr('25 % al empezar, el resto mientras se construye.', '25% to start, the rest while it is built.');
+              : '';
       if (c.checks) {
         const html = done ? '' : this.civ.arkNeeds().map((n) => `<li class="${n.ok ? 'ok' : ''}">${n.ok ? '✓' : '·'} ${tr(n.es, n.en)}</li>`).join('');
         if (c.checks.innerHTML !== html) c.checks.innerHTML = html;
       }
       // What it would add to the threat, before it is built.
-      const warn = done || building ? '' : this.threatNote(WORK_POWER);
-      if (c.warn.textContent !== warn) c.warn.textContent = warn;
+      this.setWarn(c.warn, done || building ? null : this.threatNote(WORK_POWER));
     }
     if (this.research) {
       const R = this.research;
@@ -667,8 +684,7 @@ export class ProjectsPanel {
       R.btn.disabled = !!lock;
       R.btn.textContent = civ.research ? tr('Investigando…', 'Researching…') : tr('Investigar', 'Research');
       R.note.textContent = civ.research ? '' : lock ? pick(lock) : tr(`Tecnologías dominadas: ${lvl}`, `Technologies mastered: ${lvl}`);
-      const warn = civ.research ? '' : this.threatNote(TECH_POWER);
-      if (R.warn.textContent !== warn) R.warn.textContent = warn;
+      this.setWarn(R.warn, civ.research ? null : this.threatNote(TECH_POWER));
     }
     for (const m of this.mission) {
       const lock = this.civ.missionLock(m.kind);

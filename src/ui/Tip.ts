@@ -17,6 +17,8 @@ export function installTips(host: HTMLElement) {
   let timer = 0;
   let mouse: { x: number; y: number } | null = null;
   let shown = '';
+  /** The tooltip on screen belongs to the keyboard focus, not to the mouse. */
+  let kbd = false;
 
   const place = (t: HTMLElement) => {
     const r = t.getBoundingClientRect();
@@ -62,6 +64,7 @@ export function installTips(host: HTMLElement) {
 
   document.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') return;
+    kbd = false;
     mouse = { x: e.clientX, y: e.clientY };
     const t = tipOf(e);
     if (!t) {
@@ -83,9 +86,27 @@ export function installTips(host: HTMLElement) {
     true,
   );
   window.addEventListener('blur', hide);
+  // Keyboard users read the same explanations: focusing something with a tip shows it.
+  document.addEventListener('focusin', (e) => {
+    const el = e.target as HTMLElement | null;
+    const t = el?.closest?.('[data-tip]') as HTMLElement | null;
+    if (t && el?.matches(':focus-visible')) {
+      kbd = true;
+      show(t);
+    }
+  });
+  document.addEventListener('focusout', () => {
+    if (!kbd) return;
+    kbd = false;
+    hide();
+  });
   // Panels re-render under a still mouse: follow the new element there (or let go), and keep
   // the text fresh as values change.
   window.setInterval(() => {
+    if (kbd) {
+      if (cur && cur.isConnected) place(cur);
+      return;
+    }
     if (!mouse) return;
     const under = tipAt(mouse.x, mouse.y);
     if (!under) {

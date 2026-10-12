@@ -336,7 +336,14 @@ a { color: var(--dust); }
 /* ------------------------------------------------------------------ modals */
 .veil { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; background: radial-gradient(ellipse at center, rgba(10, 7, 5, .55), rgba(5, 4, 3, .88)); backdrop-filter: blur(3px); animation: fade .35s ease; z-index: 20; }
 @keyframes fade { from { opacity: 0; } }
-.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 24px 26px 22px; animation: lift .5s cubic-bezier(.2, .9, .3, 1.1); scrollbar-width: thin; scrollbar-color: #5a4633 transparent; }
+.modal { --mpx: 26px; width: min(560px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; padding: 24px var(--mpx) 22px; animation: lift .5s cubic-bezier(.2, .9, .3, 1.1); }
+/* Title and buttons stay put; only the body scrolls, so the carved inner bevel never crosses the text. */
+.modal > .modal-head { flex: 0 0 auto; }
+.modal > .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-inline: calc(-1 * var(--mpx)); padding: 0 var(--mpx) 4px; scrollbar-width: thin; scrollbar-color: #5a4633 transparent; }
+.modal > .modal-body.can-down { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
+.modal > .modal-body.can-up { -webkit-mask-image: linear-gradient(180deg, transparent, #000 14px); mask-image: linear-gradient(180deg, transparent, #000 14px); }
+.modal > .modal-body.can-up.can-down { -webkit-mask-image: linear-gradient(180deg, transparent, #000 14px, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(180deg, transparent, #000 14px, #000 calc(100% - 14px), transparent); }
+.modal > .buttons { flex: 0 0 auto; }
 .modal.wide { width: min(760px, 100%); }
 @keyframes lift { from { opacity: 0; transform: translateY(18px) scale(.98); } }
 .modal h1 { margin: 0 0 4px; font: 700 26px var(--title); letter-spacing: .12em; color: var(--dust); text-align: center; text-shadow: 0 -1px 0 #000, 0 0 22px rgba(255, 180, 90, .2); }
@@ -355,9 +362,11 @@ a { color: var(--dust); }
 .howto-text { line-height: 1.55; }
 .howto-text b { font-size: inherit; font-family: inherit; letter-spacing: 0; color: var(--dust); }
 .howto-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(220, 187, 122, .14); }
-.howto-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
-.howto-dot { width: 10px; height: 10px; padding: 0; border: 0; border-radius: 50%; background: rgba(220, 187, 122, .22); cursor: pointer; transition: background .2s, box-shadow .2s; }
-.howto-dot.on { background: #ffe1a0; box-shadow: 0 0 8px rgba(255, 190, 110, .8); }
+.howto-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; }
+.howto-dot { position: relative; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.howto-dot::before { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: rgba(220, 187, 122, .3); transition: background .2s, box-shadow .2s; }
+.howto-dot:hover::before { background: rgba(255, 225, 160, .6); }
+.howto-dot.on::before { background: #ffe1a0; box-shadow: 0 0 8px rgba(255, 190, 110, .8); }
 .howto-keys { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
 .howto-keys dt { color: #ffe1a0; font: 600 12.5px var(--title); letter-spacing: .06em; white-space: nowrap; }
 .howto-keys dd { margin: 0; color: var(--sand); }
@@ -375,7 +384,7 @@ a { color: var(--dust); }
 .summary { display: grid; gap: 6px; margin: 12px 0; }
 .summary .w { display: grid; grid-template-columns: 14px 1fr auto; gap: 10px; align-items: center; padding: 6px 10px; border-radius: 6px; background: rgba(0, 0, 0, .25); font-size: 14px; }
 .summary .w .muted { font-size: 12.5px; }
-.chron { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; padding-right: 4px; }
+.chron { display: flex; flex-direction: column; gap: 6px; }
 .chron .news-item { animation: none; }
 
 input[type='range'] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer; }
@@ -444,7 +453,7 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
   .mg .top h1 { font-size: 16px; }
   .mg .chips { gap: 5px; }
   .chip { font-size: 12px; padding: 2px 8px; }
-  .modal { padding: 18px 16px; }
+  .modal { --mpx: 16px; padding: 18px var(--mpx); }
   .modal h1 { font-size: 21px; }
 }
 
@@ -850,3 +859,82 @@ input[type='range']::-moz-range-thumb { width: 20px; height: 20px; border-radius
   .btn:hover:not(:disabled), .tool:hover:not(.disabled) { transform: none; }
   .res-tablet .res.threat.bad { box-shadow: 0 0 12px rgba(255, 90, 60, .5); }
 }
+
+/* R13 · Projects: the resources and the tabs stay in sight while the cards scroll. */
+.proj-sticky { position: sticky; top: 0; z-index: 3; display: flex; flex-direction: column; gap: 8px; margin: 0 calc(-1 * var(--mpx)); padding: 4px var(--mpx) 0; background-color: #2f2720; background-image: var(--grain), linear-gradient(180deg, rgba(255, 226, 180, .03), rgba(0, 0, 0, .12)); box-shadow: 0 10px 14px -10px rgba(0, 0, 0, .75); }
+.works-modal .lore { font-size: 15.5px; max-width: 720px; margin: 0 auto 6px; line-height: 1.4; }
+/* With a sticky band on top, the body only fades at the bottom. */
+.works-modal > .modal-body.can-up, .works-modal > .modal-body.can-up.can-down { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
+.works-modal > .modal-body.can-up:not(.can-down) { -webkit-mask-image: none; mask-image: none; }
+
+/* R05 · The tools are real buttons now: they keep their stone look. */
+button.tool { font: inherit; line-height: inherit; text-align: center; background-color: #2a211a; }
+
+/* R08 · Decisions: urgent ones burn, the time running out burns too, and the column never covers the bar. */
+/* The column scrolls if it must; its padding leaves room for the cards' halos. */
+.decisions { width: min(492px, calc(100vw - 24px)); padding: 6px 16px 26px; max-height: calc(100% - 118px - var(--tb-h, 96px) - 20px - var(--safe-t) - var(--safe-b)); overflow-y: auto; scrollbar-width: none; }
+.late .decisions { max-height: calc(100% - 150px - var(--tb-h, 96px) - 20px - var(--safe-t) - var(--safe-b)); }
+.decisions::-webkit-scrollbar { display: none; }
+.decision.urgent { border-color: #c0512a; box-shadow: inset 0 1px 0 rgba(255, 232, 190, .14), inset 0 -3px 7px rgba(0, 0, 0, .5), 0 0 0 1px rgba(255, 110, 50, .35), 0 0 22px rgba(255, 90, 30, .18), 0 14px 30px -10px rgba(0, 0, 0, .85); }
+.decision.urgent .glyph { color: #ffb08a; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .8), 0 0 14px rgba(255, 100, 40, .55); }
+.decision .d-timer.low > i { background: linear-gradient(90deg, #7a220a, #e2481a 60%, #ff8d3a); box-shadow: 0 0 10px rgba(255, 90, 30, .7); animation: flow 7s linear infinite, pulse 1s ease-in-out infinite; }
+.d-more { align-self: center; pointer-events: auto; }
+
+/* R10 · News: danger is marked, and the date reads. */
+.news-item.warn { border-color: #a4502a; box-shadow: inset 3px 0 0 var(--ember), inset 0 1px 0 rgba(255, 232, 190, .14), inset 0 -3px 7px rgba(0, 0, 0, .5), 0 14px 30px -10px rgba(0, 0, 0, .85); }
+.news-item.alien { box-shadow: inset 3px 0 0 var(--violet), inset 0 1px 0 rgba(255, 232, 190, .14), inset 0 -3px 7px rgba(0, 0, 0, .5), 0 14px 30px -10px rgba(0, 0, 0, .85); }
+.news-item .age:empty { display: none; }
+.news-item .go { opacity: .85; }
+
+/* R15 · One word on how works are paid, and the threat as a short chip. */
+.proj-intro { margin: 2px 2px 0; }
+.threat-note { display: inline-flex; align-self: flex-start; gap: 4px; margin-top: 4px; padding: 1px 8px; border-radius: 8px; background: rgba(255, 90, 40, .12); color: var(--ember-text); font-size: 12px; cursor: help; }
+
+/* R19 · Milestones carved for a moment above the tool bar. */
+.milestone { position: absolute; bottom: calc(14px + var(--tb-h, 96px) + 16px + var(--safe-b)); left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; padding: 12px 24px 13px 18px; min-width: 320px; max-width: min(560px, calc(100vw - 24px)); z-index: 6; pointer-events: none; animation: engrave .7s cubic-bezier(.2, .9, .3, 1.2) both; }
+.milestone .ms-ico { font-size: 28px; line-height: 1; color: #ffe1a0; text-shadow: 0 0 14px rgba(255, 200, 110, .9); animation: ignite 1.2s ease-out both; }
+.milestone b { display: block; font: 700 12px var(--title); letter-spacing: .24em; text-transform: uppercase; color: var(--dust-dim); }
+.milestone strong { display: block; font: 700 19px var(--title); letter-spacing: .1em; color: var(--dust); text-shadow: 0 -1px 0 #000, 0 0 18px rgba(255, 180, 90, .3); }
+.milestone.out { transition: opacity .8s, transform .8s; opacity: 0; transform: translate(-50%, -10px); }
+@keyframes engrave { from { opacity: 0; transform: translate(-50%, 10px) scale(.96); filter: blur(2px); } }
+
+/* R21 · The pause menu: leaving is the quiet option. */
+.menu .btn.ghost { margin-top: 6px; }
+
+/* R22 · Options: the destructive action looks it; values are shown; help sits under its row. */
+.btn.danger { color: #ffb8a0; border-color: rgba(255, 110, 80, .45); background: rgba(120, 30, 12, .18); box-shadow: none; }
+.btn.danger:hover:not(:disabled) { border-color: #ff7a5a; box-shadow: inset 0 0 16px rgba(255, 80, 50, .25); }
+.opt-row output { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.opt-help { margin: -6px 0 12px; text-align: left; }
+
+/* R24 · The chronicle: light reliefs inside one slab, dated once. */
+.chron .news-item { background-image: none; background-color: rgba(0, 0, 0, .2); border-color: rgba(220, 187, 122, .1); box-shadow: inset 0 1px 0 rgba(255, 232, 190, .05); }
+.chron .news-item::after { display: none; }
+.chron .news-item.warn { box-shadow: inset 3px 0 0 var(--ember); }
+.chron .news-item.alien { box-shadow: inset 3px 0 0 var(--violet); }
+.chron-age { margin: 10px 2px 2px; font: 700 11.5px var(--title); letter-spacing: .18em; color: var(--dust-dim); display: flex; gap: 10px; align-items: center; }
+.chron-age:first-child { margin-top: 0; }
+.chron-age::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(220, 187, 122, .3), transparent); }
+
+/* R29 · A hint shows how long it stays, and waits while it is read. */
+.hint .life { position: absolute; left: 14px; right: 14px; bottom: 5px; height: 2px; border-radius: 2px; background: rgba(150, 210, 110, .35); transform-origin: left; animation: hint-life var(--life) linear forwards; }
+.hint:hover .life { animation-play-state: paused; }
+@keyframes hint-life { to { transform: scaleX(0); } }
+
+/* R30 · A tool without enough light is still stone; costs short of resources are ringed, never struck out. */
+.tool.disabled { opacity: .55; filter: grayscale(.6) saturate(.6); }
+.tool .cost.short { color: var(--ember-text); }
+.cost-chip.short { text-decoration: none; box-shadow: inset 0 0 0 1px rgba(255, 110, 80, .55); }
+
+/* R31 · The reason a curse is out of reach reads; a chosen heirloom is sealed in gold. */
+.wrath-opt:disabled { opacity: 1; }
+.wrath-opt:disabled .wo-ico, .wrath-opt:disabled .wo-cost, .wrath-opt:disabled .wo-text b { opacity: .45; }
+.wrath-opt:disabled .wo-text small { color: #e8c99a; }
+.heirloom-modal h1 { font-size: 22px; }
+.heirloom-opt.chosen { border-color: #ffd27a !important; box-shadow: inset 0 0 22px rgba(255, 210, 122, .4), 0 0 24px rgba(255, 200, 110, .35) !important; transition: box-shadow .3s, border-color .3s; }
+
+/* R32 · Cards rise one after another when a tab opens. */
+.proj-grid > * { animation: rise-d .4s cubic-bezier(.2, .9, .3, 1.1) both; }
+.proj-grid > :nth-child(2) { animation-delay: .04s; }
+.proj-grid > :nth-child(3) { animation-delay: .08s; }
+.proj-grid > :nth-child(n + 4) { animation-delay: .12s; }

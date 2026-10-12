@@ -53,7 +53,9 @@ export function decisionView(d: Decision, s: GameState, civ: CivSim, forces?: { 
   const nameOf = (id: number | undefined) => s.peoples?.find((p) => p.id === id)?.name ?? '';
   const local = w ? nameOf(peopleOf(w)) : '';
   const [pa, pb] = (d.pair ?? [0, 0]).map(nameOf);
-  const base = { id: d.id, left: d.left, dur: d.dur };
+  // Lives are at stake in these: they go first and burn brighter.
+  const urgent = (['prayer', 'plea', 'war', 'tension', 'natives', 'incident'] as Decision['kind'][]).includes(d.kind);
+  const base = { id: d.id, left: d.left, dur: d.dur, urgent };
   switch (d.kind) {
     case 'trade':
       return {

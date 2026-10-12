@@ -18,7 +18,13 @@ import { MAX_LEVEL, defLevel } from './threat';
  * digs up their relics — and with that ancient technology forges the Space Patrols.
  */
 
-export type FaithFx = { kind: 'bless'; world: number } | { kind: 'relic'; world: number };
+export type FaithFx =
+  | { kind: 'bless'; world: number }
+  | { kind: 'relic'; world: number; name: Bi }
+  /** Milestones of the faith: a tier reached for the first time, the Order founded, the Patrols forged. */
+  | { kind: 'faithTier'; name: Bi }
+  | { kind: 'order' }
+  | { kind: 'forged'; barge: Bi };
 
 /** Faith a new people starts with (below the first tier: the star has to earn it). */
 export const FAITH_START = 0.12;
@@ -187,6 +193,7 @@ export class FaithSim {
       f.peak = tier;
       const t = FAITH_TIERS[tier - 1];
       this.h.news('❂', `La fe en la estrella crece: ${t.name.es}. ${t.gift.es}`, `Faith in the star grows: ${t.name.en}. ${t.gift.en}`, 'good');
+      this.h.fx({ kind: 'faithTier', name: t.name });
     }
     f.tier = tier;
     this.order(f, alive, share, dt);
@@ -256,6 +263,7 @@ export class FaithSim {
     );
     const home = this.h.peoples.home(members[0]);
     if (home) this.h.fx({ kind: 'bless', world: home.id });
+    this.h.fx({ kind: 'order' });
   }
 
   /** Now and then the Order asks the star for a sign. */
@@ -464,7 +472,7 @@ export class FaithSim {
     f.relics++;
     addFaith(s, 'all', 0.06);
     note(s, 1, `Reliquia hallada en ${w.name}`, `Relic found on ${w.name}`);
-    this.h.fx({ kind: 'relic', world: w.id });
+    this.h.fx({ kind: 'relic', world: w.id, name: r.name });
     this.h.news('◬', `¡Una reliquia! En ${w.name}, los peregrinos desentierran ${r.name.es}: ${r.desc.es}.`, `A relic! On ${w.name}, the pilgrims unearth ${r.name.en}: ${r.desc.en}.`, 'good');
     // Once the Space Patrols exist, every relic arms one more company.
     const civ = s.civ;
@@ -521,7 +529,11 @@ export class FaithSim {
       }
     }
     // The forge is done: the Patrols rise as soon as a spacefaring people can crew them.
-    if (f.forged && !s.patrol && this.h.patrols.raise('faith', 2)) f.forged = false;
+    if (f.forged && !s.patrol && this.h.patrols.raise('faith', 2)) {
+      f.forged = false;
+      const raised = this.h.s.patrol;
+      if (raised) this.h.fx({ kind: 'forged', barge: raised.barge });
+    }
   }
 
   /** A world disappeared (a collision): its site and dig go with it. */

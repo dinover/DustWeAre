@@ -597,7 +597,7 @@ export class Inspector {
     }
     // Once the peoples have an economy, spare light can be condensed into fuel.
     if (s.phase === 'system' && s.civ && !this.condenseBtn) {
-      const btn = h('button', { class: 'btn small', onclick: () => this.on.condense() }, tr(`Condensar luz en combustible: ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`, `Condense light into fuel: ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`)) as HTMLButtonElement;
+      const btn = h('button', { class: 'btn small', onclick: () => this.on.condense() }, tr(`Condensar ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`, `Condense ☀ ${CONDENSE.light} → ◍ ${CONDENSE.fuel}`)) as HTMLButtonElement;
       this.condenseBtn = btn;
       this.extra.append(
         h(

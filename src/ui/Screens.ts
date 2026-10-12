@@ -134,6 +134,19 @@ export function howToPlay(host: HTMLElement) {
     next.disabled = at === pages.length - 1;
   };
   go(0);
+  // The page area is as tall as the tallest page, so the buttons below never jump.
+  const fit = () => {
+    if (!page.isConnected) return;
+    let tallest = 0;
+    page.style.minHeight = '';
+    for (let i = 0; i < pages.length; i++) {
+      go(i);
+      tallest = Math.max(tallest, page.offsetHeight);
+    }
+    page.style.minHeight = `${tallest}px`;
+    go(0);
+  };
+  requestAnimationFrame(fit);
   // ← → turn the pages while the dialog is open.
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'ArrowLeft') go(at - 1);
@@ -178,10 +191,26 @@ export function optionsDialog(host: HTMLElement, st: Settings, on: { apply(s: Se
   const slider = (v: number, set: (v: number) => void) => {
     const s = h('input', { type: 'range', min: '0', max: '100', step: '1', style: 'width:160px' }) as HTMLInputElement;
     s.value = String(Math.round(v * 100));
-    s.addEventListener('input', () => set(Number(s.value) / 100));
-    return s;
+    // The value is shown beside it.
+    const out = h('output', { class: 'small muted' }, `${s.value} %`);
+    s.addEventListener('input', () => {
+      set(Number(s.value) / 100);
+      out.textContent = `${s.value} %`;
+    });
+    return h('div', { class: 'spread-ctrl' }, s, out);
   };
-  const row = (label: string, ctrl: HTMLElement) => h('div', { class: 'opt-row' }, h('label', null, label), ctrl);
+  let ids = 0;
+  // Each label belongs to its control; a group of buttons is a radio group named by its label.
+  const row = (label: string, ctrl: HTMLElement) => {
+    const input = (ctrl.matches('input') ? ctrl : ctrl.querySelector('input')) as HTMLInputElement | null;
+    const id = `opt-${++ids}`;
+    if (input) input.id = id;
+    else {
+      ctrl.setAttribute('role', 'radiogroup');
+      ctrl.setAttribute('aria-label', label);
+    }
+    return h('div', { class: 'opt-row' }, h('label', input ? { for: id } : null, label), ctrl);
+  };
   // One slider for planets and moons alike: left brings them together, right spreads them apart.
   const spread = () => {
     const s = h('input', { type: 'range', min: String(SPREAD_MIN * 100), max: String(SPREAD_MAX * 100), step: '5', style: 'width:160px' }) as HTMLInputElement;
@@ -221,16 +250,16 @@ export function optionsDialog(host: HTMLElement, st: Settings, on: { apply(s: Se
           (q) => on.apply({ ...st, quality: (st.quality = q) }),
         ),
       ),
-      h('p', { class: 'small muted', style: 'text-align:center' }, tr('La calidad completa se aplica al volver a abrir el juego.', 'Full quality changes apply the next time you open the game.')),
+      h('p', { class: 'small muted opt-help' }, tr('La calidad completa se aplica al volver a abrir el juego.', 'Full quality changes apply the next time you open the game.')),
       row(tr('Distancia entre mundos', 'Distance between worlds'), spread()),
-      h('p', { class: 'small muted', style: 'text-align:center' }, tr('Acerca o aleja los planetas y sus lunas en el mapa del sistema. Solo cambia la vista: la partida sigue igual.', 'Brings the planets and their moons closer together or farther apart on the system map. It only changes the view: the game plays the same.')),
+      h('p', { class: 'small muted opt-help' }, tr('Acerca o aleja los planetas y sus lunas en el mapa del sistema. Solo cambia la vista: la partida sigue igual.', 'Brings the planets and their moons closer together or farther apart on the system map. It only changes the view: the game plays the same.')),
       h(
         'div',
         { style: 'text-align:center;margin-top:12px' },
         h(
           'button',
           {
-            class: 'btn small ghost',
+            class: 'btn small danger',
             onclick: () => confirmBox(host, tr('Borrar partida', 'Erase game'), tr('Tu sistema y todo lo que vive en él se perderán para siempre.', 'Your system and everything living in it will be lost forever.'), tr('Borrar', 'Erase'), () => {
               close();
               on.erase();
@@ -249,8 +278,15 @@ export function chronicle(host: HTMLElement, s: GameState, hud: Hud, go?: (n: Ga
   const items = [...s.news].reverse();
   if (!items.length) list.append(h('p', { class: 'muted', style: 'text-align:center' }, tr('Todavía no ha pasado nada digno de contarse.', 'Nothing worth telling has happened yet.')));
   let close = () => {};
+  // The date is written once, as a heading, whenever it changes.
+  let lastAge = '';
   for (const n of items) {
-    const el = hud.newsItem(n, fmtAge(n.age));
+    const age = fmtAge(n.age);
+    if (age !== lastAge) {
+      list.append(h('div', { class: 'chron-age' }, age));
+      lastAge = age;
+    }
+    const el = hud.newsItem(n, '');
     // Events that happened somewhere: a tap takes the camera there.
     if (n.focus && go)
       el.addEventListener('click', () => {

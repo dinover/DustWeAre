@@ -2,7 +2,7 @@ import { int, num, pick, tr } from '../i18n';
 import type { GameState, NewsItem, Resources } from '../core/state';
 import { RES_ICON, RES_KEYS } from '../sim/civ';
 import type { Tool } from '../sim/formation';
-import { COST } from '../sim/system';
+import { COST, WRATH_COST } from '../sim/system';
 import { h, stone, clear, ICONS } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
@@ -138,7 +138,12 @@ export interface DecisionView {
   dur: number;
   /** Several ways to say yes (they replace the yes button): `choice` goes back with the answer. */
   options?: { label: string; ok: boolean; tip?: string; choice: number; primary?: boolean }[];
+  /** Lives are at stake: it goes first and burns brighter. */
+  urgent?: boolean;
 }
+
+/** Decisions on screen at once before the rest fold into “+N more”. */
+const MAX_DECISIONS = 3;
 
 /** Faith in the star, for the starlight slab. */
 export interface FaithInfo {
@@ -192,6 +197,10 @@ export class Hud {
   private hintEl: HTMLElement | null = null;
   private hintQueue: { id: string; glyph: string; html: () => string; prio: number; onShow?: () => void }[] = [];
   private hintTimer = 0;
+  /** The pointer rests on the hint: it is being read, so it waits. */
+  private hintHold = false;
+  /** Every pending decision is shown, not just the first three. */
+  private decisionsOpen = false;
   private banner: HTMLElement | null = null;
   tagEl: HTMLElement;
   private mode: 'formation' | 'system' | null = null;
@@ -238,12 +247,13 @@ export class Hud {
       [2, '▶▶'],
       [4, '▶▶▶'],
     ];
-    const speed = stone('speed', ...speeds.map(([v, t]) => {
-      const b = h('button', { class: 'btn small', onclick: () => this.on.speed(v) }, t) as HTMLButtonElement;
+    const speedNames = [tr('Pausa', 'Pause'), tr('Velocidad normal', 'Normal speed'), tr('Velocidad ×2', 'Speed ×2'), tr('Velocidad ×4', 'Speed ×4')];
+    const speed = stone('speed', ...speeds.map(([v, t], i) => {
+      const b = h('button', { class: 'btn small', 'aria-label': speedNames[i], 'aria-pressed': 'false', onclick: () => this.on.speed(v) }, t) as HTMLButtonElement;
       b.dataset.v = String(v);
       this.speedBtns.push(b);
       return b;
-    }), h('button', { class: 'btn small', 'data-tip': tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
+    }), h('button', { class: 'btn small', 'data-tip': tr('Menú', 'Menu'), 'aria-label': tr('Menú', 'Menu'), onclick: () => this.on.menu() }, '☰'));
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
     this.resEl.dataset.tip = tr('<b>Recursos</b><br>Lo que reúnen los pueblos del sistema. Toca para abrir Proyectos.', '<b>Resources</b><br>What the peoples of the system gather. Tap to open Projects.');
@@ -254,7 +264,7 @@ export class Hud {
     this.toolbar = stone('toolbar');
     this.tip = stone('tool-tip');
     this.toolbar.append(this.tip);
-    this.newsEl = h('div', { class: 'news' });
+    this.newsEl = h('div', { class: 'news', role: 'log', 'aria-live': 'polite' });
     this.tagEl = stone('tag');
     this.tagEl.style.display = 'none';
     this.root.append(top, this.toolbar, this.newsEl, this.tagEl, this.decisionsEl);
@@ -288,64 +298,52 @@ export class Hud {
     this.toolEls.clear();
     const defs = (mode === 'formation' ? FORMATION_TOOLS : SYSTEM_ACTIONS) as ToolDef<string>[];
     for (const d of defs) {
-      const el = h(
-        'div',
-        { class: 'tool', 'data-tool': d.id, role: 'button', tabindex: '0' },
-        h('span', { class: 'key' }, d.key),
-        h('span', { html: ICONS[d.icon], style: 'display:contents' }),
-        h('span', { class: 't' }, d.name()),
-        d.cost ? h('span', { class: 'cost' }, `☀ ${d.cost}`) : d.id === 'wrath' ? h('span', { class: 'cost' }, '☀ …') : null,
-      );
-      el.addEventListener('click', () => {
-        if (mode === 'formation') this.on.tool(d.id as Tool);
-        else this.on.action(d.id as Action);
-      });
-      el.addEventListener('pointerenter', (e) => {
-        if ((e as PointerEvent).pointerType === 'mouse') this.showTip(d.tip());
-      });
-      el.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
-      this.toolbar.append(el);
+      const el = this.toolButton(d.id, d.icon, d.name(), d.key, () => d.tip(), () => (mode === 'formation' ? this.on.tool(d.id as Tool) : this.on.action(d.id as Action)));
+      const cost = d.cost ? `☀ ${d.cost}` : d.id === 'wrath' ? `☀ ${Math.min(...Object.values(WRATH_COST))}+` : '';
+      if (cost) el.append(h('span', { class: 'cost' }, cost));
       this.toolEls.set(d.id, el);
     }
     if (mode === 'system') {
       this.toolbar.append(h('div', { class: 'divider' }));
-      const star = h('div', { class: 'tool', 'data-tool': 'star', role: 'button', tabindex: '0' }, h('span', { html: ICONS.star, style: 'display:contents' }), h('span', { class: 't' }, tr('Estrella', 'Star')));
-      star.addEventListener('click', () => this.on.star());
-      this.toolbar.append(star);
-      const works = h(
-        'div',
-        { class: 'tool works', 'data-tool': 'works', role: 'button', tabindex: '0' },
-        h('span', { class: 'key' }, 'P'),
-        h('span', { html: ICONS.works, style: 'display:contents' }),
-        h('span', { class: 't' }, tr('Proyectos', 'Projects')),
-        h('span', { class: 'badge' }),
-      );
-      works.addEventListener('click', () => this.on.works());
-      works.addEventListener('pointerenter', (e) => {
-        if ((e as PointerEvent).pointerType === 'mouse')
-          this.showTip(tr('<b>Proyectos</b> · Grandes obras, expediciones a otras estrellas y la armada. Se pagan con lo que aporta cada mundo.', '<b>Projects</b> · Great works, expeditions to other stars and the armada. Paid for with what each world contributes.'));
-      });
-      works.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
+      this.toolButton('star', 'star', tr('Estrella', 'Star'), '', () => tr('<b>La estrella</b> · Su brillo, su luz estelar y la fe de los pueblos.', '<b>The star</b> · Its brightness, its starlight and the peoples’ faith.'), () => this.on.star());
+      const works = this.toolButton('works', 'works', tr('Proyectos', 'Projects'), 'P', () => tr('<b>Proyectos</b> · Grandes obras, expediciones a otras estrellas y la armada. Se pagan con lo que aporta cada mundo.', '<b>Projects</b> · Great works, expeditions to other stars and the armada. Paid for with what each world contributes.'), () => this.on.works());
+      works.classList.add('works');
+      works.append(h('span', { class: 'badge' }));
       this.worksEl = works;
-      this.toolbar.append(works);
     }
     // The chronicle: every event so far, and where it happened.
-    const chron = h(
-      'div',
-      { class: 'tool chron', 'data-tool': 'chronicle', role: 'button', tabindex: '0' },
-      h('span', { class: 'key' }, 'C'),
-      h('span', { html: ICONS.chronicle, style: 'display:contents' }),
-      h('span', { class: 't' }, tr('Crónica', 'Chronicle')),
-    );
-    chron.addEventListener('click', () => this.on.chronicle());
-    chron.addEventListener('pointerenter', (e) => {
-      if ((e as PointerEvent).pointerType === 'mouse') this.showTip(tr('<b>Crónica</b> · Todo lo que ha pasado. Toca un suceso para ir a verlo.', '<b>Chronicle</b> · Everything that has happened. Tap an event to go and see it.'));
-    });
-    chron.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
     if (mode === 'formation') this.toolbar.append(h('div', { class: 'divider' }));
-    this.toolbar.append(chron);
+    const chron = this.toolButton('chronicle', 'chronicle', tr('Crónica', 'Chronicle'), 'C', () => tr('<b>Crónica</b> · Todo lo que ha pasado. Toca un suceso para ir a verlo.', '<b>Chronicle</b> · Everything that has happened. Tap an event to go and see it.'), () => this.on.chronicle());
+    chron.classList.add('chron');
     this.refreshLanguage();
     this.layoutNews();
+  }
+
+  /**
+   * One tool of the bar: a real button (Tab reaches it, Enter and Space press it) that shows its
+   * explanation on hover or keyboard focus. A mouse click does not leave the focus on it, so Space
+   * keeps pausing the game.
+   */
+  private toolButton(id: string, icon: keyof typeof ICONS, name: string, key: string, tip: () => string, fire: () => void) {
+    const el = h(
+      'button',
+      { type: 'button', class: 'tool', 'data-tool': id, 'aria-label': name },
+      key ? h('span', { class: 'key', 'aria-hidden': 'true' }, key) : null,
+      h('span', { html: ICONS[icon], style: 'display:contents' }),
+      h('span', { class: 't' }, name),
+    );
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', fire);
+    el.addEventListener('pointerenter', (e) => {
+      if ((e as PointerEvent).pointerType === 'mouse') this.showTip(tip());
+    });
+    el.addEventListener('pointerleave', () => this.tip.classList.remove('show'));
+    el.addEventListener('focus', () => {
+      if (el.matches(':focus-visible')) this.showTip(tip());
+    });
+    el.addEventListener('blur', () => this.tip.classList.remove('show'));
+    this.toolbar.append(el);
+    return el;
   }
 
   showTip(html: string, seconds = 0) {
@@ -360,11 +358,19 @@ export class Hud {
       const el = this.toolEls.get(d.id);
       const t = el?.querySelector('.t');
       if (t) t.textContent = d.name();
+      el?.setAttribute('aria-label', d.name());
     }
-    const star = this.toolbar.querySelector('[data-tool="star"] .t');
-    if (star) star.textContent = tr('Estrella', 'Star');
-    const works = this.toolbar.querySelector('[data-tool="works"] .t');
-    if (works) works.textContent = tr('Proyectos', 'Projects');
+    const named: [string, string][] = [
+      ['star', tr('Estrella', 'Star')],
+      ['works', tr('Proyectos', 'Projects')],
+      ['chronicle', tr('Crónica', 'Chronicle')],
+    ];
+    for (const [id, name] of named) {
+      const el = this.toolbar.querySelector(`[data-tool="${id}"]`);
+      const t = el?.querySelector('.t');
+      if (t) t.textContent = name;
+      el?.setAttribute('aria-label', name);
+    }
     this.decisionKey = '';
     const lbl = this.root.querySelector('.energy .lbl');
     if (lbl) lbl.textContent = tr('Luz estelar', 'Starlight');
@@ -382,18 +388,24 @@ export class Hud {
       const st = state[k];
       if (!st) continue;
       el.classList.toggle('disabled', !st.afford);
+      el.setAttribute('aria-disabled', String(!st.afford));
       const c = el.querySelector('.cost') as HTMLElement | null;
       if (c) {
-        c.style.color = st.afford ? '' : '#ff7a5a';
+        c.classList.toggle('short', !st.afford);
         // Deep faith makes the star's actions cheaper.
         const txt = st.cost ? `☀ ${st.cost}` : c.textContent;
         if (txt && c.textContent !== txt) c.textContent = txt;
+        const label = `${el.querySelector('.t')?.textContent ?? ''} · ${txt}`;
+        if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
       }
     }
   }
 
   setSpeed(v: number) {
-    for (const b of this.speedBtns) b.classList.toggle('on', Number(b.dataset.v) === v);
+    for (const b of this.speedBtns) {
+      b.classList.toggle('on', Number(b.dataset.v) === v);
+      b.setAttribute('aria-pressed', String(Number(b.dataset.v) === v));
+    }
   }
 
   update(
@@ -569,7 +581,7 @@ export class Hud {
     }
     // Hints rotate one at a time.
     if (this.hintEl) {
-      this.hintTimer -= dt;
+      if (!this.hintHold) this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.closeHint();
     } else if (this.hintQueue.length) this.openHint();
   }
@@ -597,15 +609,19 @@ export class Hud {
 
   // ------------------------------------------------------------------ decisions
   showDecisions(list: DecisionView[]) {
-    // Newest first: it is shown in full, older ones fold into a single line.
-    list = [...list].reverse();
-    const key = list.map((d) => `${d.id}:${d.yesOk}:${d.body}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
+    // Urgent ones first (lives at stake), newest first within each group. The first is shown in full,
+    // the others fold into a line, and no more than three are shown unless the player asks.
+    list = [...list].reverse().sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent));
+    if (list.length <= MAX_DECISIONS) this.decisionsOpen = false;
+    const shown = this.decisionsOpen ? list : list.slice(0, MAX_DECISIONS);
+    const hidden = list.length - shown.length;
+    const key = `${hidden}|` + shown.map((d) => `${d.id}:${d.yesOk}:${d.body}:${(d.options ?? []).map((o) => `${o.ok}${o.tip ?? ''}`).join('')}`).join(',');
     if (key !== this.decisionKey) {
       this.decisionKey = key;
       clear(this.decisionsEl);
-      list.forEach((d, i) => {
+      shown.forEach((d, i) => {
         const card = stone(
-          `decision veined ${i > 0 ? 'compact' : ''}`,
+          `decision veined ${i > 0 ? 'compact' : ''}${d.urgent ? ' urgent' : ''}`,
           h('div', { class: 'd-head' }, h('span', { class: 'glyph' }, d.icon), h('b', null, d.title)),
           h('div', { class: 'd-body', html: d.body }),
           h(
@@ -622,13 +638,32 @@ export class Hud {
           ),
           h('div', { class: 'vessel thin gold d-timer', 'data-tip': tr(`Si no decides: «${d.no}»`, `If you do not decide: “${d.no}”`) }, h('i')),
         );
+        if (d.urgent) card.append(h('div', { class: 'seam top' }));
         card.dataset.id = String(d.id);
         this.decisionsEl.append(card);
       });
+      if (hidden > 0)
+        this.decisionsEl.append(
+          h(
+            'button',
+            {
+              class: 'btn small d-more',
+              onclick: () => {
+                this.decisionsOpen = true;
+                this.decisionKey = '';
+              },
+            },
+            tr(`+${hidden} ${hidden === 1 ? 'decisión más' : 'decisiones más'}`, `+${hidden} more ${hidden === 1 ? 'decision' : 'decisions'}`),
+          ),
+        );
     }
-    for (const d of list) {
-      const bar = this.decisionsEl.querySelector(`[data-id="${d.id}"] .d-timer i`) as HTMLElement | null;
-      bar?.style.setProperty('--v', `${Math.max(0, (d.left / d.dur) * 100)}%`);
+    for (const d of shown) {
+      const bar = this.decisionsEl.querySelector(`[data-id="${d.id}"] .d-timer`) as HTMLElement | null;
+      if (!bar) continue;
+      const v = Math.max(0, d.left / d.dur);
+      (bar.firstChild as HTMLElement).style.setProperty('--v', `${v * 100}%`);
+      // The last quarter of the time burns.
+      bar.classList.toggle('low', v < 0.25);
     }
   }
 
@@ -647,10 +682,21 @@ export class Hud {
     for (let k = 1; k < this.hintQueue.length; k++) if (this.hintQueue[k].prio > this.hintQueue[i].prio) i = k;
     const q = this.hintQueue.splice(i, 1)[0];
     q.onShow?.();
-    const el = stone('hint', h('span', { class: 'glyph' }, q.glyph), h('div', { html: q.html() }), h('button', { class: 'x', title: tr('Entendido', 'Got it'), onclick: () => this.closeHint() }, '✕'));
-    el.dataset.id = q.id;
-    this.hintEl = el;
     this.hintTimer = q.prio >= 2 ? 18 : 14;
+    // A thread of moss along the bottom shows how long it stays; it waits while the pointer rests on it.
+    const el = stone(
+      'hint',
+      h('span', { class: 'glyph' }, q.glyph),
+      h('div', { html: q.html() }),
+      h('button', { class: 'x', title: tr('Entendido', 'Got it'), 'aria-label': tr('Entendido', 'Got it'), onclick: () => this.closeHint() }, '✕'),
+      h('i', { class: 'life', style: `--life:${this.hintTimer}s` }),
+    );
+    el.setAttribute('role', 'status');
+    el.dataset.id = q.id;
+    el.addEventListener('pointerenter', () => (this.hintHold = true));
+    el.addEventListener('pointerleave', () => (this.hintHold = false));
+    this.hintHold = false;
+    this.hintEl = el;
     this.root.append(el);
   }
 
@@ -658,6 +704,7 @@ export class Hud {
     if (!this.hintEl) return;
     const el = this.hintEl;
     this.hintEl = null;
+    this.hintHold = false;
     el.style.transition = 'opacity .5s';
     el.style.opacity = '0';
     setTimeout(() => el.remove(), 500);
@@ -667,6 +714,36 @@ export class Hud {
     this.hintQueue = [];
     this.hintEl?.remove();
     this.hintEl = null;
+  }
+
+  // ------------------------------------------------------------------ milestones
+  private msEl: HTMLElement | null = null;
+  private msTimers: number[] = [];
+
+  /**
+   * A milestone carved for a moment above the tool bar: an obsidian slab with two lava seams, a
+   * glyph that lights up, a small heading and a name. A new one replaces the one on screen.
+   */
+  milestone(icon: string, kicker: string, title: string) {
+    this.msEl?.remove();
+    for (const id of this.msTimers) clearTimeout(id);
+    const el = stone(
+      'obsidian milestone',
+      h('div', { class: 'seam top' }),
+      h('span', { class: 'ms-ico', 'aria-hidden': 'true' }, icon),
+      h('div', null, h('b', null, kicker), h('strong', null, title)),
+      h('div', { class: 'seam bottom' }),
+    );
+    el.setAttribute('role', 'status');
+    this.msEl = el;
+    this.root.append(el);
+    this.msTimers = [
+      window.setTimeout(() => el.classList.add('out'), 3600),
+      window.setTimeout(() => {
+        el.remove();
+        if (this.msEl === el) this.msEl = null;
+      }, 4400),
+    ];
   }
 
   // ------------------------------------------------------------------ targeting
