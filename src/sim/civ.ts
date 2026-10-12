@@ -1099,10 +1099,10 @@ export class CivSim {
     } else if (pick === 'superflare') {
       this.h.fx({ kind: 'superflare' });
       s.energy = Math.min(this.energyCap, s.energy + 40);
-      if (civ.done.shield) this.h.news('☀', 'La estrella lanza una superllamarada. Los escudos la desvían y su luz llena tus reservas.', 'The star throws a superflare. The shields deflect it and its light fills your stores.', 'info');
+      if (civ.done.shield) this.h.news('☀', 'La estrella, inquieta, lanza una superllamarada que nadie pidió. Los escudos la desvían y su luz llena tus reservas.', 'The restless star throws a superflare nobody asked for. The shields deflect it and its light fills your stores.', 'info');
       else {
         for (const w of s.worlds) w.sats = Math.floor(w.sats * 0.5);
-        this.h.news('☀', `Una superllamarada de la estrella deja sin satélites a medio sistema. Los pueblos vuelven a empezar.`, `A superflare from the star knocks out half the satellites in the system. The peoples start again.`, 'warn');
+        this.h.news('☀', `La estrella, inquieta, lanza una superllamarada que nadie pidió: medio sistema se queda sin satélites. Los pueblos vuelven a empezar.`, `The restless star throws a superflare nobody asked for: half the system loses its satellites. The peoples start again.`, 'warn');
       }
     }
   }

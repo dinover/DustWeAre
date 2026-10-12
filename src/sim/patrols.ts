@@ -231,15 +231,15 @@ export class PatrolSim {
     if (origin === 'faith')
       this.h.news(
         '⛨',
-        'Con la tecnología de los Precursores, la Orden de la Estrella arma a sus mejores: guerreros con armadura azul y oro, los Space Patrols. No conocerán el miedo.',
-        'With the Precursors’ technology, the Order of the Star arms its finest: warriors in blue and gold armour, the Space Patrols. They shall know no fear.',
+        'Con la tecnología de los Precursores, la Orden de la Estrella arma a sus mejores: guerreros con armadura azul y oro, los Space Patrols. Jamás retrocederán.',
+        'With the Precursors’ technology, the Order of the Star arms its finest: warriors in blue and gold armour, the Space Patrols. They will never yield.',
         'good',
       );
     else
       this.h.news(
         '⛨',
-        `Ante la amenaza de los ${al}, los pueblos del sistema fundan los Space Patrols: guerreros acorazados que juran proteger la estrella. No conocerán el miedo.`,
-        `Facing the threat of the ${AL}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They shall know no fear.`,
+        `Ante la amenaza de los ${al}, los pueblos del sistema fundan los Space Patrols: guerreros acorazados que juran proteger la estrella. Jamás retrocederán.`,
+        `Facing the threat of the ${AL}, the peoples of the system found the Space Patrols: armoured warriors sworn to protect the star. They will never yield.`,
         'good',
       );
     this.h.news('⛨', `La barcaza de batalla «${barge.es}» se eleva desde ${home.name}. ¡Por la Estrella!`, `The battle barge “${barge.en}” rises from ${home.name}. For the Star!`, 'good');
@@ -416,7 +416,7 @@ export class PatrolSim {
     this.phase(p, 'approach');
     if (goal === 'purge') {
       const [al, AL] = invaderNames(this.h.s.alienSpecies);
-      this.h.news('⛨', `La «${p.barge.es}» pone rumbo a ${w.name}: los ${al} serán purgados. Ningún xenos quedará en pie.`, `The “${p.barge.en}” sets course for ${w.name}: the ${AL} will be purged. No xenos shall be left standing.`, 'info');
+      this.h.news('⛨', `La «${p.barge.es}» pone rumbo a ${w.name}: los ${al} serán purgados. Ningún invasor quedará en pie.`, `The “${p.barge.en}” sets course for ${w.name}: the ${AL} will be purged. No invader shall be left standing.`, 'info');
     } else if (pair) {
       const a = peoples.get(pair[0]);
       const b = peoples.get(pair[1]);
@@ -607,7 +607,7 @@ export class PatrolSim {
       pirates: { es: `Los piratas de ${st.name} ya no saquearán a nadie.`, en: `The pirates of ${st.name} will plunder no one again.` },
       natives: { es: `La revuelta de ${st.name} ha sido aplastada.`, en: `The revolt on ${st.name} has been crushed.` },
       invaders: { es: `Los ${al} huyen de ${st.name}.`, en: `The ${AL} flee from ${st.name}.` },
-      plague: { es: `Los apotecarios de los Space Patrols contienen la plaga de ${st.name}.`, en: `The Space Patrol apothecaries contain the plague on ${st.name}.` },
+      plague: { es: `Los sanadores de los Space Patrols contienen la plaga de ${st.name}.`, en: `The Space Patrol healers contain the plague on ${st.name}.` },
       none: { es: `Nadie en ${st.name} pudo resistirse.`, en: `No one on ${st.name} could resist.` },
     };
     const l = lines[kind ?? 'none'];

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { onLangChange, pick, tr, num } from '../i18n';
 import { Rng, clamp, damp, randomSeed } from '../util';
-import { far, massOf, solidsOf, toWorld, habZone, view, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
+import { far, massOf, solidsOf, toWorld, habZone, view, type Heirloom, type StarType, type Body, type GameState, type NewsItem, type Settings, type World } from './state';
 import { clearSave, hasSave, loadSettings, loadState, newState, saveSettings, saveState } from './save';
 import { Formation, bodyRadius, type FormationEvent, type Tool } from '../sim/formation';
 import { SystemSim, COST, WRATHS, WRATH_COST, type Fx, type Wrath } from '../sim/system';
@@ -18,6 +18,7 @@ import { worldRadius, worldXZ } from '../render/layout';
 import { Hud, type Action, type DecisionView, type FaithInfo } from '../ui/Hud';
 import { FAITH_TIERS, dreadOf, faithOf } from '../sim/faith';
 import { fmtPopEn, fmtPopEs } from '../content/pop';
+import { HEIRLOOMS, STAR_TYPES, starOf } from '../content/stars';
 import { Inspector, Ledger, kindDot } from '../ui/Panels';
 import { Labels } from '../ui/Labels';
 import { TitleScreen, howToPlay, optionsDialog, chronicle } from '../ui/Screens';
@@ -28,7 +29,7 @@ import { capName, worldName } from '../content/names';
 import { renameDialog } from '../ui/Rename';
 import { spaceOrbits } from '../sim/orbits';
 import { playComets } from '../minigames/Comets';
-import { ProjectsPanel } from '../ui/Projects';
+import { ProjectsPanel, type ProjTab } from '../ui/Projects';
 import { decisionView } from '../ui/decisions';
 import { installTips } from '../ui/Tip';
 import { isSettled } from '../sim/civ';
@@ -126,7 +127,7 @@ export class Game {
         if (!this.focusNews(n)) this.openChronicle();
       },
       cancelTarget: () => this.setTargeting(null),
-      works: () => this.openProjects(),
+      works: (tab) => this.openProjects(tab),
       decide: (id, accept, choice) => {
         sound.click();
         // Negative ids are collision alerts (not choices for the peoples).
@@ -235,12 +236,14 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ start / load
-  newGame(o: { legacy?: number; legacySpecies?: GameState['legacySpecies']; from?: 'uib' | null }) {
+  newGame(o: { legacy?: number; legacySpecies?: GameState['legacySpecies']; from?: 'uib' | null; heirloom?: Heirloom }) {
     sound.start();
     this.title?.destroy();
     this.title = null;
     this.clearWorld();
-    const s = newState(o);
+    // The first system is born around a yellow star; those seeded by an ark, around any kind.
+    const star: StarType = o.legacy ? new Rng(randomSeed()).pick(['orange', 'yellow', 'white'] as StarType[]) : 'yellow';
+    const s = newState({ ...o, star });
     this.s = s;
     const f = Formation.create(this.particles, new Rng(s.seed), () => s.nextId++);
     s.bodies = f.bodies;
@@ -258,6 +261,14 @@ export class Game {
           en: `From the dust your nebula returned to space, ${s.name} is born: a young star wrapped in gas, dust and ice.`,
         };
     this.news('✦', intro.es, intro.en, 'good');
+    if (star !== 'yellow') {
+      const t = STAR_TYPES[star];
+      this.news('☀', `${s.name} es una ${t.name.es.toLowerCase()}. ${t.desc.es}`, `${s.name} is ${star === 'orange' ? 'an' : 'a'} ${t.name.en.toLowerCase()}. ${t.desc.en}`, 'info');
+    }
+    if (o.heirloom) {
+      const hl = HEIRLOOMS[o.heirloom];
+      this.news(hl.icon, `Del sistema que dejaste atrás llega un legado: ${hl.name.es}. ${hl.desc.es}`, `A heirloom comes from the system you left behind: ${hl.name.en}. ${hl.desc.en}`, 'good');
+    }
     this.hint('f.start', '✋', () =>
       tr(
         'Mantén pulsado sobre el disco para <b>reunir</b> polvo en una piedra. Suéltala y crecerá sola, barriendo su órbita.',
@@ -393,7 +404,7 @@ export class Game {
     s.phase = 'system';
     s.sysStart = s.time;
     s.age = Math.max(s.age, 100);
-    s.energy = 70;
+    s.energy = s.heirloom === 'fertile' ? 100 : 70;
     s.nextEvent = s.time + 140;
     const flash = () => {
       for (const b of keep) {
@@ -1566,10 +1577,43 @@ export class Game {
           primary: true,
           onClick: () => {
             const legacy = s.legacy + 1;
-            setTimeout(() => this.newGame({ legacy, legacySpecies: sp, from: s.from }), 350);
+            setTimeout(() => this.chooseHeirloom(s, (heirloom) => this.newGame({ legacy, legacySpecies: sp, from: s.from, heirloom })), 350);
           },
         },
       ],
+      dismissable: false,
+      onClose: () => (this.hold = Math.max(0, this.hold - 1)),
+    });
+  }
+
+  /** Before seeding the next system: one heirloom to carry (a relic only if this system found one). */
+  private chooseHeirloom(s: GameState, go: (h: Heirloom) => void) {
+    this.hold++;
+    const options = (Object.keys(HEIRLOOMS) as Heirloom[]).filter((k) => k !== 'relic' || (s.faith?.relics ?? 0) > 0);
+    let close = () => {};
+    const list = h('div', { class: 'wrath-list heirlooms' });
+    for (const k of options) {
+      const hl = HEIRLOOMS[k];
+      list.append(
+        h(
+          'button',
+          {
+            class: 'wrath-opt heirloom-opt',
+            onclick: () => {
+              close();
+              setTimeout(() => go(k), 300);
+            },
+          },
+          h('span', { class: 'wo-ico' }, hl.icon),
+          h('span', { class: 'wo-text' }, h('b', null, pick(hl.name)), h('small', null, pick(hl.desc))),
+        ),
+      );
+    }
+    close = modal(this.ui, {
+      title: tr('Un legado para el próximo sistema', 'An heirloom for the next system'),
+      lore: tr('El arca no se lleva solo a los pueblos. Elige qué recordará el polvo del próximo sistema.', 'The ark carries more than the peoples. Choose what the dust of the next system will remember.'),
+      cls: 'heirloom-modal',
+      body: [list],
       dismissable: false,
       onClose: () => (this.hold = Math.max(0, this.hold - 1)),
     });
@@ -1701,7 +1745,7 @@ export class Game {
     if (this.mode === 'play' && s) {
       this.drawLabels(s, L);
       this.panelT -= dt;
-      const rate = this.sim ? this.sim.energyRate : 0.85 * s.dial;
+      const rate = this.sim ? this.sim.energyRate : 0.85 * s.dial * starOf(s).light;
       if (this.formation) {
         const f = this.formation;
         const canSettle = f.progress >= 0.5 && f.bodies.some((b) => massOf(b) > 0.05);
@@ -1875,7 +1919,7 @@ export class Game {
   private projects: ProjectsPanel | null = null;
   private projectsT = 0;
 
-  openProjects() {
+  openProjects(tab?: ProjTab) {
     const sim = this.sim;
     if (!sim || !this.s?.civ || this.projects || this.mode !== 'play') return;
     sound.click();
@@ -1937,10 +1981,10 @@ export class Game {
         panel.refresh();
       },
       close: () => {},
-    }, sim.patrols, sim.wings, sim.faith);
+    }, sim.patrols, sim.wings, sim.faith, tab);
     this.projects = panel;
     const close = modal(this.ui, {
-      title: tr('Grandes obras', 'Great works'),
+      title: tr('Proyectos', 'Projects'),
       lore: tr(
         'Tú inspiras; los pueblos construyen. Cada colonia aporta según lo que hagan de ella: los jardines y laboratorios, ciencia; las minas y fortalezas, metal; los pozos de hielo, agua; las ciudades flotantes de los gigantes, combustible.',
         'You inspire; the peoples build. Each colony gives according to what they make of it: gardens and labs, science; mines and fortresses, metal; ice wells, water; the floating cities of the giants, fuel.',

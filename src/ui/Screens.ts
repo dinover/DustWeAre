@@ -7,26 +7,148 @@ import type { Hud } from './Hud';
 
 export const UIB_URL = 'https://dinover.github.io/UniverseIsBorn/';
 
+/** One page of "How to play": an icon, a title and its text (HTML). */
+interface HowPage {
+  icon: string;
+  title: string;
+  text: string;
+}
+
+function howPages(): HowPage[] {
+  const keys = (rows: [string, string][]) => `<dl class="howto-keys">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+  return [
+    {
+      icon: '✺',
+      title: tr('Formación', 'Formation'),
+      text: tr(
+        'Tu estrella nace rodeada de un disco de gas, polvo y hielo. Mantén pulsado para <b>juntar</b> material en piedras; cada cuerpo barre su órbita y crece. Con <b>Empujar</b> cambias órbitas y provocas choques: así nacen los planetas y, a veces, sus lunas.<br><br><b>Calentar</b> aleja el gas y el polvo ligero; <b>Enfriar</b> calma el disco y hace nacer piedras. Más allá de la <b>línea de nieve</b> el hielo ayuda a crecer rápido: allí nacen los gigantes, si atrapan el gas antes de que la estrella lo disperse. Cuando el disco esté listo, <b>asienta</b> el sistema.<br><br>Desde el segundo sistema, la estrella puede ser una <b>enana naranja</b> (más tenue, pero la vida aparece antes), una <b>estrella amarilla</b> como el Sol o una <b>blanco-amarilla</b> (más luz estelar, pero su viento arranca antes el aire de los mundos).',
+        'Your star is born inside a disk of gas, dust and ice. Hold to <b>gather</b> material into pebbles; each body sweeps its orbit and grows. With <b>Nudge</b> you change orbits and cause collisions: that is how planets, and sometimes their moons, are born.<br><br><b>Heat</b> pushes gas and light dust away; <b>Cool</b> calms the disk and makes pebbles form. Beyond the <b>snow line</b> ice helps bodies grow fast: that is where giants are born, if they catch the gas before the star blows it away. When the disk is ready, <b>settle</b> the system.<br><br>From the second system on, the star may be an <b>orange dwarf</b> (dimmer, but life appears sooner), a <b>yellow star</b> like the Sun or a <b>yellow-white</b> one (more starlight, but its wind strips the worlds’ air sooner).',
+      ),
+    },
+    {
+      icon: '◍',
+      title: tr('Mundos habitables', 'Habitable worlds'),
+      text: tr(
+        'Toca un mundo para ver qué le falta. Atrae <b>cometas</b> para darle agua, orgánicos, aire o hierro; despierta sus <b>volcanes</b>; o <b>migra</b> su órbita hacia la franja verde, la zona habitable. El brillo de la estrella (toca la estrella) también calienta o enfría todos los mundos.<br><br>Ojo con las órbitas demasiado cercanas: esos mundos se atraen y acaban <b>chocando</b> (con <b>Migrar</b> se puede evitar). Los choques dejan escombros que, con el tiempo, se dispersan.<br><br>Si el mapa se ve apretado o demasiado disperso, ajusta la <b>distancia entre mundos</b> en Opciones: solo cambia la vista.',
+        'Tap a world to see what it lacks. Bring in <b>comets</b> for water, organics, air or iron; wake its <b>volcanoes</b>; or <b>migrate</b> its orbit towards the green band, the habitable zone. The star’s brightness (tap the star) also warms or cools every world.<br><br>Beware of orbits that are too close: those worlds pull at each other and end up <b>colliding</b> (<b>Migrate</b> can avert it). Collisions leave debris that scatters over time.<br><br>If the map looks cramped or too spread out, set the <b>distance between worlds</b> in Options: it only changes the view.',
+      ),
+    },
+    {
+      icon: '❦',
+      title: tr('Vida y población', 'Life and population'),
+      text: tr(
+        'Cuando las condiciones son buenas, la vida aparece sola y avanza por etapas: vida microbiana, vida compleja, inteligencia, civilización, era espacial y era interplanetaria. Mantén su mundo estable: eras glaciales, calentamientos y asteroides lo pondrán todo a prueba. Una <b>llamarada</b> desvía asteroides.<br><br>Cada mundo cuenta su <b>población</b>. Catástrofes, guerras, plagas e invasores la diezman, y vuelve a crecer despacio hasta lo que el mundo puede alimentar. Un pueblo que cae demasiado bajo <b>retrocede una etapa</b>; uno que se queda sin nadie se <b>extingue</b>.<br><br>Cuando una catástrofe los golpea, a veces un pueblo <b>reza</b> por algo concreto: calor, frescor o que desvíes una roca. Si lo haces a tiempo, creerán más en la estrella.',
+        'When conditions are right, life appears on its own and moves up through stages: microbial life, complex life, intelligence, civilization, space age and interplanetary age. Keep its world steady: ice ages, warming and asteroids will test everything. A <b>flare</b> deflects asteroids.<br><br>Every world counts its <b>population</b>. Catastrophes, wars, plagues and invaders thin it out, and it slowly grows back to what the world can feed. A people that falls too low <b>falls back a stage</b>; one left with nobody <b>dies out</b>.<br><br>When a catastrophe strikes, a people sometimes <b>prays</b> for something concrete: warmth, coolness or for you to turn a rock aside. Do it in time and they will believe in the star more.',
+      ),
+    },
+    {
+      icon: '⚑',
+      title: tr('Pueblos y uso de los mundos', 'Peoples and their worlds'),
+      text: tr(
+        'No eres ningún pueblo: eres quien los observa a todos, como a un hormiguero. Cada mundo vivo puede dar su propio pueblo; viajan entre mundos, comercian, se mezclan, se alían y a veces se declaran la guerra, por su cuenta. Cuando la tensión crece puedes intervenir con la luz de la estrella… o dejarlos ser. Si no decides a tiempo, la respuesta es «no».<br><br>Cada pueblo tiene su carácter (científico, industrial, guerrero o mercader) y hace de cada mundo lo que le conviene. Solo terraforma los que valen la pena: los <b>jardines</b> ☘ (ciencia). El resto son <b>pueblos mineros</b> ⛏ (metal, mejor en mundos calientes o metálicos), <b>pozos de hielo</b> ❄ (agua y algo de combustible), <b>puestos de investigación</b> ⚗ (ciencia) o <b>fortalezas</b> ♜ (algo de metal, y disparan a los invasores); los gigantes llevan <b>ciudades flotantes</b> ◍ (combustible). Con el tiempo, el sistema cambia de cara según quién lo habite.',
+        'You are no people: you watch over them all, like an ant farm. Every living world may give rise to its own people; they travel between worlds, trade, blend, ally and sometimes go to war, on their own. When tension grows you may step in with the light of the star… or let them be. If you do not decide in time, the answer is “no”.<br><br>Each people has its character (scholarly, industrious, warlike or mercantile) and makes of each world what suits it. They only terraform the worlds worth it: <b>gardens</b> ☘ (science). The rest become <b>mining towns</b> ⛏ (metal, best on hot or metal-rich worlds), <b>ice wells</b> ❄ (water and a little fuel), <b>research outposts</b> ⚗ (science) or <b>fortresses</b> ♜ (a little metal, and they shoot at invaders); giants carry <b>floating cities</b> ◍ (fuel). Over time, the system changes its face according to who lives there.',
+      ),
+    },
+    {
+      icon: '❧',
+      title: tr('Nativos', 'Natives'),
+      text: tr(
+        'La vida también puede nacer en un mundo ya colonizado, si tiene las condiciones. Entonces nativos y colonos comparten el mundo, y lo que hacen los colonos (sobre todo las minas y las fortalezas) los arrincona.<br><br>La estrella decide: <b>protegerlos</b> (☀ 15: una reserva, y creerán en ti), dejar que <b>convivan</b> como puedan, o dejar que los <b>exterminen</b> (los colonos ganan metal y crecen más rápido, pero los pueblos lo recuerdan).<br><br>Si los nativos sobreviven hasta construir ciudades, <b>recuperarán su mundo</b>… o <b>se mezclarán</b> con los colonos.',
+        'Life can also arise on a world already settled, if it has the conditions. Then natives and settlers share the world, and what the settlers do there (above all mines and fortresses) pushes the natives aside.<br><br>The star decides: <b>protect them</b> (☀ 15: a reserve, and they will believe in you), let them <b>get along</b> as best they can, or let them be <b>wiped out</b> (the settlers gain metal and grow faster, but the peoples will remember).<br><br>If the natives survive to build cities, they will <b>take their world back</b>… or <b>blend</b> with the settlers.',
+      ),
+    },
+    {
+      icon: '⚒',
+      title: tr('Grandes obras y economía', 'Great works and economy'),
+      text: tr(
+        'En <b>Proyectos</b> (P) inspiras lo que los pueblos construyen: <b>grandes obras</b> (ascensor espacial, escudos, flota, motor de curvatura, enjambre de Dyson…), <b>investigación</b> (cada tecnología, +10 % de producción), <b>expediciones</b> a otras estrellas y la <b>armada</b>. Una obra empieza con el <b>25 %</b> de su coste y el resto se paga mientras se construye: si faltan recursos, se detiene hasta que lleguen.<br><br>Los recursos (⛏ metal, ◍ combustible, ❄ agua, ✦ ciencia) salen de lo que cada pueblo hace de sus mundos. Si falta combustible, la estrella puede <b>condensar</b> su luz desde su panel (☀ 25 → ◍ 30).<br><br>Las obras y las tecnologías hacen crecer la <b>amenaza</b>: cada tarjeta avisa cuánto antes de empezarla.',
+        'In <b>Projects</b> (P) you inspire what the peoples build: <b>great works</b> (space elevator, shields, fleet, warp drive, Dyson swarm…), <b>research</b> (each technology, +10% output), <b>expeditions</b> to other stars and the <b>armada</b>. A work starts with <b>25%</b> of its cost and the rest is paid while it is built: if resources run short, it stops until they come.<br><br>Resources (⛏ metal, ◍ fuel, ❄ water, ✦ science) come from what each people makes of its worlds. If fuel runs short, the star can <b>condense</b> its light from its panel (☀ 25 → ◍ 30).<br><br>Works and technologies raise the <b>threat</b>: each card tells you by how much before you start it.',
+      ),
+    },
+    {
+      icon: '⚠',
+      title: tr('Amenaza e invasiones', 'Threat and invasions'),
+      text: tr(
+        'Cuanto más fuerte es el sistema, más alta la <b>amenaza</b> (⚠): la suben los mundos habitados, las grandes obras, las tecnologías y las colonias lejanas. Las invasiones empiezan cuando un pueblo llega a la era espacial, cuando terminas la primera gran obra o, como muy tarde, a los 25 minutos de asentar el sistema.<br><br>Con la amenaza alta, las invasiones llegan antes y con más naves; y cuantos más mundos y recursos acumules, más grandes son las oleadas: llegan <b>saqueadores</b> que roban tus reservas y <b>bombarderos</b> que queman ciudades. Tus llamaradas también los derriban.<br><br>Defiéndete en <b>Proyectos → Defensa</b>: la <b>flota</b> intercepta naves, los <b>escudos</b> paran asteroides y frenan desembarcos, y los <b>Space Patrols</b> lanzan cápsulas y disparan su lanza. Las <b>fortalezas</b> y las <b>Freedom Wings</b> derriban saqueadores y bombarderos.',
+        'The stronger the system, the higher the <b>threat</b> (⚠): settled worlds, great works, technologies and distant colonies all raise it. Invasions begin when a people reaches the space age, when you finish the first great work or, at the latest, 25 minutes after the system is settled.<br><br>With a high threat, invasions come sooner and with more ships; and the more worlds and resources you pile up, the bigger the waves: <b>looters</b> come to steal your stores and <b>bombers</b> to burn cities. Your flares shoot them down too.<br><br>Defend yourself in <b>Projects → Defence</b>: the <b>fleet</b> intercepts ships, <b>shields</b> stop asteroids and slow down landings, and the <b>Space Patrols</b> drop pods and fire their lance. <b>Fortresses</b> and the <b>Freedom Wings</b> shoot down looters and bombers.',
+      ),
+    },
+    {
+      icon: '✶',
+      title: tr('Más allá del sistema', 'Beyond the system'),
+      text: tr(
+        'Los pueblos fundarán colonias junto a <b>otras estrellas</b>. Si piden ayuda, envía a los <b>Space Patrols</b> (una compañía basta para un riesgo bajo o medio; dos para uno alto; con la amenaza alta pueden volver con bajas) o a las <b>Freedom Wings</b> en escuadrillas S, M o L. Puedes <b>conquistarlas</b>: los dominios pagan más que el comercio, pero atraen enemigos. Cada colonia puede <b>fortificarse</b>: sufre menos ataques y más leves.<br><br>Al final, el <b>arca estelar</b> sembrará otro sistema. Necesita el motor de curvatura, todos los mundos colonizables habitados, ninguna guerra y ninguna otra obra en marcha (su tarjeta lo marca). Al partir, eliges un <b>legado</b> para el sistema siguiente: <b>Memoria de la fe</b>, <b>Polvo fértil</b> o una <b>Reliquia de los Precursores</b>.',
+        'The peoples will found colonies around <b>other stars</b>. If they ask for help, send the <b>Space Patrols</b> (one company is enough for a low or medium risk, two for a high one; with a high threat they may come back with losses) or the <b>Freedom Wings</b> in S, M or L squadrons. You can <b>conquer</b> them: dominions pay more than trade, but they attract enemies. Each colony can be <b>fortified</b>: it suffers fewer and milder attacks.<br><br>In the end, the <b>star ark</b> will seed another system. It needs the warp drive, every colonizable world settled, no wars and no other work under way (its card ticks them off). When it leaves, you choose an <b>heirloom</b> for the next system: <b>Memory of faith</b>, <b>Fertile dust</b> or a <b>Relic of the Precursors</b>.',
+      ),
+    },
+    {
+      icon: '❂',
+      title: tr('Fe, Bendición e Ira', 'Faith, Blessing and Wrath'),
+      text: tr(
+        'Si prefieres ser amado, la <b>Bendición</b> (6) cura y calma un mundo. Los pueblos que la estrella salva, bendice y escucha <b>creen en ella</b>; su <b>fe</b> sube por niveles y te da más luz estelar, más capacidad de luz y acciones más baratas.<br><br>Si quieres ser temido, la <b>Ira</b> (5) desata plagas, lluvias de meteoritos, inviernos sin fin, discordia u ofrendas. La crueldad no borra la fe: la vuelve <b>miedo</b>, que también aviva tu luz. Pero los pueblos lo recuerdan.<br><br>Cuando muchos crean por amor y dos pueblos la veneren juntos, fundarán la <b>Orden de la Estrella</b>: leerá los cielos, excavará en las lunas las <b>reliquias de los Precursores</b> y con ellas forjará los <b>Space Patrols</b>. Si antes los invasores dominan varios mundos, los pueblos los fundan de urgencia, pero sin reliquias no pasan de dos compañías.',
+        'If you would rather be loved, the <b>Blessing</b> (6) heals and calms a world. The peoples the star saves, blesses and listens to <b>believe in it</b>; their <b>faith</b> rises through levels and brings more starlight, a larger store of light and cheaper actions.<br><br>If you want to be feared, <b>Wrath</b> (5) unleashes plagues, meteor storms, endless winters, discord or offerings. Cruelty does not erase faith: it turns it into <b>fear</b>, which also feeds your light. But the peoples remember.<br><br>When many believe out of love and two peoples worship together, they will found the <b>Order of the Star</b>: it will read the heavens, dig up the <b>Precursors’ relics</b> on the moons and with them forge the <b>Space Patrols</b>. If invaders hold several worlds first, the peoples raise them in a hurry, but without relics they cannot grow past two companies.',
+      ),
+    },
+    {
+      icon: '⌨',
+      title: tr('Controles', 'Controls'),
+      text: keys([
+        [tr('Arrastrar · flechas', 'Drag · arrows'), tr('Moverse por el sistema (botón izquierdo o un dedo)', 'Move around the system (left button or one finger)')],
+        [tr('Botón derecho · dos dedos', 'Right button · two fingers'), tr('Girar y mirar alrededor', 'Turn and look around')],
+        [tr('Rueda · pellizco · + −', 'Wheel · pinch · + −'), tr('Zoom', 'Zoom')],
+        [tr('Clic en un mundo', 'Click a world'), tr('Centrarlo y seguirlo (también la estrella)', 'Centre and follow it (the star too)')],
+        [tr('Espacio', 'Space'), tr('Pausa', 'Pause')],
+        ['1–4', tr('En la formación: juntar, calentar, enfriar, empujar', 'During formation: gather, heat, cool, nudge')],
+        ['1–6', tr('Con el sistema asentado: llamarada, volcán, cometas, migrar, ira, bendición', 'Once the system is settled: flare, volcano, comets, migrate, wrath, blessing')],
+        ['P', tr('Proyectos (toca ⚠ para ir directo a Defensa; la línea de fe abre La fe)', 'Projects (tap ⚠ to go straight to Defence; the faith line opens Faith)')],
+        ['C', tr('Crónica: toca un suceso con ◎ para ir a verlo', 'Chronicle: tap an event marked ◎ to go and see it')],
+        ['Esc', tr('Cerrar una ventana, soltar una herramienta o abrir el menú', 'Close a window, drop a tool or open the menu')],
+        [tr('Opciones', 'Options'), tr('Idioma, sonido, calidad y distancia entre mundos', 'Language, sound, quality and distance between worlds')],
+      ]),
+    },
+  ];
+}
+
 export function howToPlay(host: HTMLElement) {
-  const step = (n: string, title: string, text: string) => h('div', { class: 'step' }, h('div', { class: 'num' }, n), h('div', null, h('b', null, title), h('div', { html: text })));
+  const pages = howPages();
+  let at = 0;
+  const page = h('div', { class: 'howto-page' });
+  const dots = h('div', { class: 'howto-dots' });
+  const dotEls = pages.map((p, i) => {
+    const d = h('button', { class: 'howto-dot', 'aria-label': p.title, 'data-tip': p.title, onclick: () => go(i) }) as HTMLButtonElement;
+    dots.append(d);
+    return d;
+  });
+  const prev = h('button', { class: 'btn small', onclick: () => go(at - 1) }, `← ${tr('Anterior', 'Previous')}`) as HTMLButtonElement;
+  const next = h('button', { class: 'btn small', onclick: () => go(at + 1) }, `${tr('Siguiente', 'Next')} →`) as HTMLButtonElement;
+  const go = (i: number) => {
+    at = Math.max(0, Math.min(pages.length - 1, i));
+    const p = pages[at];
+    clear(page);
+    page.append(
+      h('div', { class: 'step' }, h('div', { class: 'num' }, p.icon), h('div', null, h('div', { class: 'howto-count small muted' }, `${at + 1} / ${pages.length}`), h('b', null, p.title))),
+      h('div', { class: 'howto-text', html: p.text }),
+    );
+    dotEls.forEach((d, j) => d.classList.toggle('on', j === at));
+    prev.disabled = at === 0;
+    next.disabled = at === pages.length - 1;
+  };
+  go(0);
+  // ← → turn the pages while the dialog is open.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') go(at - 1);
+    else if (e.key === 'ArrowRight') go(at + 1);
+    else return;
+    e.preventDefault();
+  };
+  window.addEventListener('keydown', onKey);
   modal(host, {
     title: tr('Cómo se juega', 'How to play'),
     lore: tr('Somos polvo de estrellas. Este juego trata de devolverle al polvo su forma de mundo.', 'We are stardust. This game is about giving dust back its shape as worlds.'),
     wide: true,
-    body: [
-      h(
-        'div',
-        { class: 'howto' },
-        step('I', tr('Reúne el polvo', 'Gather the dust'), tr('Tu estrella nace rodeada de un disco de gas, polvo y hielo. Mantén pulsado para juntar material en piedras; cada cuerpo barre su órbita y crece. Con <b>Empujar</b> puedes cambiar órbitas y provocar choques: así nacen los planetas y, a veces, sus lunas.', 'Your star is born inside a disk of gas, dust and ice. Hold to pull material into pebbles; each body sweeps its orbit and grows. With <b>Nudge</b> you can change orbits and cause collisions: that is how planets, and sometimes their moons, are born.')),
-        step('II', tr('Da forma al disco', 'Shape the disk'), tr('<b>Calentar</b> aleja el gas y el polvo ligero; <b>Enfriar</b> calma el disco y hace nacer piedras. Más allá de la <b>línea de nieve</b> el hielo ayuda a crecer rápido: allí nacen los gigantes, si atrapan el gas antes de que la estrella lo disperse.', '<b>Heat</b> pushes gas and light dust away; <b>Cool</b> calms the disk and makes pebbles form. Beyond the <b>snow line</b> ice helps bodies grow fast: that is where giants are born, if they catch the gas before the star blows it away.')),
-        step('III', tr('Haz habitable un mundo', 'Make a world habitable'), tr('Toca un mundo para ver qué le falta. Atrae <b>cometas</b> para darle agua, orgánicos, aire o hierro; despierta sus <b>volcanes</b>; o <b>migra</b> su órbita hacia la franja verde, la zona habitable.', 'Tap a world to see what it lacks. Bring in <b>comets</b> for water, organics, air or iron; wake its <b>volcanoes</b>; or <b>migrate</b> its orbit towards the green band, the habitable zone.')),
-        step('IV', tr('Cuida la vida', 'Look after life'), tr('Cuando las condiciones son buenas, la vida aparece sola. Mantén su mundo estable: eras glaciales, calentamientos y asteroides pondrán todo a prueba. Una <b>llamarada</b> desvía asteroides.', 'When conditions are right, life appears on its own. Keep its world steady: ice ages, warming and asteroids will test it. A <b>flare</b> deflects asteroids.')),
-        step('V', tr('Una civilización', 'A civilization'), tr('No eres ningún pueblo: eres quien los observa a todos, como a un hormiguero. Cada mundo vivo puede dar su propio pueblo; viajan entre mundos, comercian, se mezclan, se alían y a veces se declaran la guerra, por su cuenta. Cuando la tensión crece puedes intervenir con la luz de la estrella… o dejarlos ser. Cada pueblo tiene su carácter (científico, industrial, guerrero o mercader) y hace de cada mundo lo que le conviene: solo terraforma los que valen la pena (<b>jardines</b>, que dan ciencia); el resto son <b>pueblos mineros</b> (metal), <b>pozos de hielo</b> (agua), <b>laboratorios</b> (ciencia) o <b>fortalezas</b>, y los gigantes llevan <b>ciudades flotantes</b> (combustible). Cada mundo cuenta su <b>población</b>: catástrofes, guerras, plagas e invasores la diezman, y un pueblo diezmado puede retroceder de etapa o extinguirse. La vida también puede nacer en un mundo ya colonizado: si sobrevive a los colonos, recuperará su mundo o se mezclará con ellos. Si quieres ser temido, la <b>Ira</b> (tecla 5) desata plagas, meteoritos, inviernos, discordia u ofrendas; el miedo aviva tu luz. Si prefieres ser amado, la <b>Bendición</b> (tecla 6) cura y calma un mundo: los pueblos que la estrella salva y bendice <b>creen en ella</b>, y su <b>fe</b> te da más luz estelar, acciones más baratas y otros dones. Cuando dos pueblos crean lo bastante fundarán la <b>Orden de la Estrella</b>: leerá los cielos, excavará en las lunas las reliquias de los Precursores y con ellas forjará los <b>Space Patrols</b>.', 'You are no people: you watch over them all, like an ant farm. Every living world may give rise to its own people; they travel between worlds, trade, blend, ally and sometimes go to war, on their own. When tension grows you may step in with the light of the star… or let them be. Each people has its character (scholarly, industrious, warlike or mercantile) and makes of each world what suits it: they only terraform the worlds worth it (<b>gardens</b>, which give science); the rest are <b>mining towns</b> (metal), <b>ice wells</b> (water), <b>labs</b> (science) or <b>fortresses</b>, and giants carry <b>floating cities</b> (fuel). Every world counts its <b>population</b>: catastrophes, wars, plagues and invaders thin it out, and a decimated people may fall back a stage or die out. Life can also arise on a world already settled: if it survives the settlers, it will take its world back or blend with them. If you want to be feared, <b>Wrath</b> (key 5) unleashes plagues, meteors, winters, discord or offerings; fear feeds your light. If you would rather be loved, the <b>Blessing</b> (key 6) heals and calms a world: the peoples the star saves and blesses <b>believe in it</b>, and their <b>faith</b> brings more starlight, cheaper actions and other gifts. When two peoples believe enough they will found the <b>Order of the Star</b>: it will read the heavens, dig up the Precursors’ relics on the moons and with them forge the <b>Space Patrols</b>.')),
-        step('VI', tr('Hacia las estrellas', 'To the stars'), tr('Inspira <b>grandes obras</b> (ascensor espacial, escudos, flota, motor de curvatura, enjambre de Dyson), tecnologías, expediciones y la <b>armada</b>. Llegarán mercaderes, refugiados, planetas errantes e invasores. Los <b>Space Patrols</b>, con su barcaza de batalla, los forja la Orden de la Estrella; si antes los invasores dominan varios mundos, los pueblos los fundan de urgencia. Ojo con las órbitas demasiado cercanas: esos mundos se atraen y acaban <b>chocando</b> (con <b>Migrar</b> se puede evitar). Toca una noticia para ir a verla; la <b>Crónica</b> (C) guarda todo lo ocurrido. Los pueblos fundarán colonias junto a <b>otras estrellas</b>: si piden ayuda, puedes enviar a los Patrols, y también <b>conquistarlas</b>: los dominios pagan más que el comercio, pero atraen enemigos. Cada compañía de Space Patrols es una barcaza: una basta para un riesgo bajo o medio y dos para uno alto. Las <b>Freedom Wings</b> (una tecnología) suman naves con la vida y la paz: envíalas en escuadrillas S, M o L según el riesgo. Cada colonia lejana puede <b>fortificarse</b>: sufre menos ataques y más leves. Cuanto más fuerte es el sistema, más alta la <b>amenaza</b> (⚠): las invasiones llegan antes y con más naves (y cuantos más mundos y recursos acumules, más grandes son las oleadas: llegan saqueadores que roban tus reservas y bombarderos que queman ciudades), así que mejora la flota, los escudos y las compañías de Space Patrols en <b>Proyectos</b>. Al final, el <b>arca estelar</b> sembrará otro sistema.', 'Inspire <b>great works</b> (space elevator, shields, fleet, warp drive, Dyson swarm), technologies, expeditions and the <b>armada</b>. Traders, refugees, wandering planets and invaders will come. The <b>Space Patrols</b>, with their battle barge, are forged by the Order of the Star; if invaders hold several worlds first, the peoples raise them in a hurry. Beware of orbits that are too close: those worlds pull at each other and end up <b>colliding</b> (<b>Migrate</b> can avert it). Tap a piece of news to go and see it; the <b>Chronicle</b> (C) keeps everything that happened. The peoples will found colonies around <b>other stars</b>: if they ask for help, you can send the Patrols, and you can also <b>conquer</b> them: dominions pay more than trade, but they attract enemies. Each Space Patrol company is a barge: one is enough for a low or medium risk, two for a high one. The <b>Freedom Wings</b> (a technology) gather ships with life and peace: send them in S, M or L squadrons by risk. Each distant colony can be <b>fortified</b>: it suffers fewer and milder attacks. The stronger the system, the higher the <b>threat</b> (⚠): invasions come sooner and with more ships (and the more worlds and resources you pile up, the bigger the waves: looters come to steal your stores and bombers to burn cities), so raise the fleet, the shields and the Space Patrol companies in <b>Projects</b>. In the end, the <b>star ark</b> will seed another system.')),
-      ),
-      h('p', { class: 'small muted', style: 'text-align:center;margin-top:14px', html: tr('Arrastrar (botón izquierdo, un dedo o flechas): moverse por el sistema · Botón derecho o dos dedos: girar y mirar alrededor · Rueda o pellizco: zoom · Clic en un mundo o en la estrella: centrarla y seguirla · Espacio: pausa · 1–6: herramientas · P: proyectos · C: crónica · Opciones: distancia entre mundos', 'Drag (left button, one finger or arrows): move around the system · Right button or two fingers: turn and look around · Wheel or pinch: zoom · Click a world or the star: centre and follow it · Space: pause · 1–6: tools · P: projects · C: chronicle · Options: distance between worlds') }),
-    ],
+    body: [h('div', { class: 'howto' }, page, h('div', { class: 'howto-nav' }, prev, dots, next))],
     buttons: [{ label: tr('Entendido', 'Got it'), primary: true }],
+    onClose: () => window.removeEventListener('keydown', onKey),
   });
 }
 

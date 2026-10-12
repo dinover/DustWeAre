@@ -6,7 +6,7 @@ import { travel, worldXZ } from '../render/layout';
 import type { CivFx } from './civ';
 import { addHarm } from './voices';
 import { ETHOS, USE_INFO, ethosOf } from './uses';
-import { FAITH_START, addFaith, faithOf, inOrder, note } from './faith';
+import { FAITH_START, HEIRLOOM_FAITH, addFaith, faithOf, inOrder, note } from './faith';
 
 /** What the peoples simulation needs from the system. */
 export interface PeopleHost {
@@ -130,7 +130,7 @@ export class PeopleSim {
     let name = p.name;
     for (let k = 0; k < 8 && this.list.some((x) => x.name === name); k++) name = speciesName(this.h.rng);
     // Every people has a character of its own: scholars, builders, warriors or traders.
-    const people: People = { ...p, name, id, born: s.time, nextShip: s.time + 50, ethos: p.ethos ?? this.h.rng.pick(ETHOS), faith: p.faith ?? FAITH_START };
+    const people: People = { ...p, name, id, born: s.time, nextShip: s.time + 50, ethos: p.ethos ?? this.h.rng.pick(ETHOS), faith: p.faith ?? (s.heirloom === 'faith' ? HEIRLOOM_FAITH : FAITH_START) };
     for (const o of this.alive()) {
       this.relations.push({ a: o.id, b: id, mood: this.h.rng.range(-0.2, 0.3), state: 'peace', warT: 0, nextTalk: s.time + this.h.rng.range(60, 120), nextSkirmish: 0 });
     }
@@ -418,8 +418,8 @@ export class PeopleSim {
     this.h.fx({ kind: 'truce', a: a.id, b: b.id });
     this.h.news(
       '⛨',
-      `Los Space Patrols imponen la paz entre los ${a.name} y los ${b.name} a punta de bólter. Nadie se atreve a protestar… todavía.`,
-      `The Space Patrols impose peace between the ${capName(a.name)} and the ${capName(b.name)} at bolter-point. Nobody dares to complain… yet.`,
+      `Los Space Patrols imponen la paz entre los ${a.name} y los ${b.name} a punta de lanza. Nadie se atreve a protestar… todavía.`,
+      `The Space Patrols impose peace between the ${capName(a.name)} and the ${capName(b.name)} at lance-point. Nobody dares to complain… yet.`,
       'warn',
     );
     return true;

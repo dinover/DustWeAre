@@ -46,6 +46,10 @@ export const habZone = (L: number): [number, number] => {
 export const diskTemp = (au: number, L: number) => (280 * Math.pow(L, 0.25)) / Math.sqrt(au);
 
 export type Phase = 'formation' | 'system';
+/** Kind of star the system is born around. */
+export type StarType = 'orange' | 'yellow' | 'white';
+/** What a system that reached the stars hands on to the next one. */
+export type Heirloom = 'faith' | 'fertile' | 'relic';
 
 /** Material amounts in Earth masses. */
 export interface Stuff {
@@ -535,6 +539,9 @@ export interface GameState {
   faith?: FaithState;
   /** When the worlds settled (system time): the clock for the late invasions. */
   sysStart?: number;
+  /** Kind of star (old saves: yellow), and the heirloom brought from the previous system. */
+  star?: StarType;
+  heirloom?: Heirloom;
   /** Why faith and fear changed lately (the last few reasons, newest last). */
   moral?: { t: number; sign: 1 | -1; es: string; en: string }[];
   peoples?: People[];

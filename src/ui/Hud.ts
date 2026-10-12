@@ -6,6 +6,7 @@ import { COST } from '../sim/system';
 import { h, stone, clear, ICONS } from './dom';
 import { fmtAge } from './text';
 import { capName } from '../content/names';
+import type { ProjTab } from './Projects';
 
 export type Action = 'flare' | 'volcano' | 'comets' | 'migrate' | 'wrath' | 'bless';
 
@@ -116,7 +117,8 @@ export interface HudHandlers {
   settle(): void;
   chronicle(): void;
   cancelTarget(): void;
-  works(): void;
+  /** Opens Projects (on a given tab, or the last one opened). */
+  works(tab?: ProjTab): void;
   decide(id: number, accept: boolean, choice?: number): void;
   /** A piece of news was clicked: take the camera there. */
   news(n: NewsItem): void;
@@ -224,6 +226,8 @@ export class Hud {
     tablet.addEventListener('click', () => this.on.star());
     const prog = stone('progress-slab', this.progLabel, this.progBar, this.row2, this.settleBtn);
     this.progSlab = prog;
+    // The faith line opens Projects on the faith tab.
+    this.faithEl.addEventListener('click', () => this.on.works('faith'));
     const energy = stone('energy', h('div', { class: 'top' }, h('span', null, h('span', { class: 'sun-glyph' }), ' ', h('span', { class: 'lbl' })), this.energyVal), this.energyBar, this.faithEl);
     const speeds: [number, string][] = [
       [0, '❚❚'],
@@ -240,7 +244,14 @@ export class Hud {
     this.resEl = stone('res-tablet');
     this.resEl.style.display = 'none';
     this.resEl.dataset.tip = tr('<b>Recursos</b><br>Lo que reúnen los pueblos del sistema. Toca para abrir Proyectos.', '<b>Resources</b><br>What the peoples of the system gather. Tap to open Projects.');
-    this.resEl.addEventListener('click', () => this.on.works());
+    // The threat pill opens straight on the defences. The pills are redrawn as resources tick, so the
+    // click may land on the tablet itself: what was under the pointer when it went down decides.
+    let toDef = false;
+    this.resEl.addEventListener('pointerdown', (e) => (toDef = !!(e.target as Element).closest('.threat')));
+    this.resEl.addEventListener('click', (e) => {
+      this.on.works(toDef || (e.target as Element).closest('.threat') ? 'def' : undefined);
+      toDef = false;
+    });
     const top = h('div', { class: 'hud-top' }, tablet, prog, h('div', { class: 'right-cluster' }, this.resEl, energy, speed));
     this.decisionsEl = h('div', { class: 'decisions' });
     this.toolbar = stone('toolbar');

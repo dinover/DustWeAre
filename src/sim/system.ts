@@ -13,6 +13,7 @@ import { capName, moonName, speciesName, invaderName, invaderNames } from '../co
 import { CRIT, coexists, colonyCap, grow, nativeCap, pressureOn } from './population';
 import { USE_INFO, USE_PRESSURE, chooseUse, ethosOf } from './uses';
 import { fmtPopEn, fmtPopEs } from '../content/pop';
+import { starOf } from '../content/stars';
 import type { Bi } from '../i18n';
 import { FACTS } from '../content/facts';
 
@@ -31,6 +32,9 @@ const AGE_RATE = [12, 5, 0.6, 0.002, 0.0005, 0.0003];
 
 export const COST = { flare: 30, flareShip: 12, volcano: 12, comets: 25, migrate: 35, wrath: 0, bless: 20 };
 export type CostKey = keyof typeof COST;
+/** Seconds a world must stay habitable before life appears (a steady star and fertile dust shorten it). */
+export const sparkNeed = (s: GameState) => (s.heirloom === 'fertile' ? 14 : 30) * starOf(s).spark;
+
 /** Starlight condensed into fuel at the star: how much light, for how much fuel. */
 export const CONDENSE = { light: 25, fuel: 30 };
 
@@ -226,7 +230,7 @@ export class SystemSim {
     s.time += dt;
     const top = this.topStage;
     s.age += AGE_RATE[Math.max(0, top)] * dt * (top < 0 ? 1.4 : 1);
-    s.L = 1 + 0.07 * (s.age / 1000);
+    s.L = starOf(s).lum * (1 + 0.07 * (s.age / 1000));
     s.energy = Math.min(this.civ.energyCap, s.energy + dt * this.energyRate);
     for (const w of s.worlds) {
       if (w.parent === null) w.th += omega(w.a) * dt * 0.42;
@@ -270,7 +274,7 @@ export class SystemSim {
 
   /** Starlight gained per second. The peoples' fear feeds the star too — and their faith. */
   get energyRate() {
-    return 0.85 * this.s.dial * (this.s.civ?.done.dyson ? 3 : 1) * (1 + this.fear + this.faith.grace());
+    return 0.85 * this.s.dial * starOf(this.s).light * (this.s.civ?.done.dyson ? 3 : 1) * (1 + this.fear + this.faith.grace());
   }
 
   /** What one of the star's actions costs right now (deep faith makes them cheaper). */
@@ -295,7 +299,7 @@ export class SystemSim {
       const st = this.stats(w);
       if (st.giant) continue;
       // Without a magnetic shield, the stellar wind slowly strips the air.
-      if (w.mag < 0.25 && w.atm > 0.02) w.atm = Math.max(0, w.atm - dt * 0.0012 * (0.25 - w.mag) * 4 * s.dial);
+      if (w.mag < 0.25 && w.atm > 0.02) w.atm = Math.max(0, w.atm - dt * 0.0012 * (0.25 - w.mag) * 4 * s.dial * starOf(s).wind);
       if (st.T > 345 && w.ocean > 0) w.ocean = Math.max(0, w.ocean - dt * 0.003);
       // Climate wanders; a civilization keeps it calmer.
       if (w.life || w.colony >= 1) {
@@ -334,7 +338,7 @@ export class SystemSim {
         // Settlers' towns and mines get in the way: among them, life sparks more slowly — but it does.
         const crowd = w.colony >= 1 ? 0.6 * (1 - 0.8 * (w.use ? USE_PRESSURE[w.use] : 0)) : 1;
         w.spark += dt * crowd;
-        if (w.spark > 30) {
+        if (w.spark > sparkNeed(this.s)) {
           w.life = { stage: 0, progress: 0, health: 0.6, origin: true };
           w.spark = 0;
           this.onFx({ kind: 'life', world: w.id });

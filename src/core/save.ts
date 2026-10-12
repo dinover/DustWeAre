@@ -1,11 +1,12 @@
 import { Rng, randomSeed } from '../util';
-import { SPREAD_DEFAULT, SPREAD_MAX, SPREAD_MIN, type GameState, type Settings, type Species } from './state';
+import { SPREAD_DEFAULT, SPREAD_MAX, SPREAD_MIN, type GameState, type Heirloom, type Settings, type Species, type StarType } from './state';
+import { STAR_TYPES } from '../content/stars';
 import { worldName } from '../content/names';
 
 const KEY = 'dwa.save.v1';
 const SKEY = 'dwa.settings';
 
-export function newState(opts: { legacy?: number; legacySpecies?: Species | null; from?: 'uib' | null } = {}): GameState {
+export function newState(opts: { legacy?: number; legacySpecies?: Species | null; from?: 'uib' | null; star?: StarType; heirloom?: Heirloom } = {}): GameState {
   const seed = randomSeed();
   const rng = new Rng(seed ^ 0x51ed);
   return {
@@ -15,8 +16,10 @@ export function newState(opts: { legacy?: number; legacySpecies?: Species | null
     phase: 'formation',
     age: 0,
     time: 0,
-    L: 1,
+    L: STAR_TYPES[opts.star ?? 'yellow'].lum,
     dial: 1,
+    star: opts.star ?? 'yellow',
+    heirloom: opts.heirloom,
     energy: 60,
     bodies: [],
     disk: null,

@@ -1,7 +1,8 @@
 import { int, num, pick, tr } from '../i18n';
 import { habZone, massOf, snowLine, type GameState, type People, type World } from '../core/state';
 import type { WorldStats } from '../sim/worlds';
-import { STAGE_NAMES, STAGE_TIME } from '../sim/system';
+import { STAGE_NAMES, STAGE_TIME, sparkNeed } from '../sim/system';
+import { HEIRLOOMS, starOf } from '../content/stars';
 import { capName, invaderNames } from '../content/names';
 import { h, stone, clear } from './dom';
 import { RES_ICON, isSettled, roleOf, type Role } from '../sim/civ';
@@ -434,7 +435,7 @@ export class Inspector {
         ${under}
       </section>`;
     } else if (w.spark > 0.5) {
-      html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round((w.spark / 30) * 100)}%"></i></div></section>`;
+      html += `<section><h3>${tr('VIDA', 'LIFE')}</h3><div class="small">${tr('Algo se agita en sus aguas…', 'Something stirs in its waters…')}</div><div class="vessel thin moss" style="margin-top:6px"><i style="--v:${Math.round(Math.min(1, w.spark / sparkNeed(s)) * 100)}%"></i></div></section>`;
     }
     const people = peopleById(s, peopleOf(w));
     if (people) {
@@ -545,11 +546,14 @@ export class Inspector {
     this.html = '';
     this.el.style.display = '';
     this.title.textContent = s.name;
-    this.kind.textContent = s.phase === 'formation' ? tr('Estrella recién nacida', 'Newborn star') : tr('Estrella de tipo solar', 'Sun-like star');
+    const type = starOf(s);
+    this.kind.textContent = s.phase === 'formation' ? tr(`${type.name.es} recién nacida`, `Newborn ${type.name.en.toLowerCase()}`) : pick(type.name);
     const L = s.L * s.dial;
     const [a, b] = habZone(L);
     this.body.innerHTML = `
       <section><h3>${tr('LA ESTRELLA', 'THE STAR')}</h3>
+        <div class="stat"${tipAttr(`<b>${type.name.es}</b><br>${type.desc.es}`, `<b>${type.name.en}</b><br>${type.desc.en}`)}><span>${tr('Tipo', 'Type')}</span><span class="gold">${pick(type.name)}</span></div>
+        ${s.heirloom ? `<div class="stat"${tipAttr(`<b>${HEIRLOOMS[s.heirloom].name.es}</b><br>${HEIRLOOMS[s.heirloom].desc.es}`, `<b>${HEIRLOOMS[s.heirloom].name.en}</b><br>${HEIRLOOMS[s.heirloom].desc.en}`)}><span>${tr('Legado', 'Heirloom')}</span><span class="fa">${HEIRLOOMS[s.heirloom].icon} ${pick(HEIRLOOMS[s.heirloom].name)}</span></div>` : ''}
         <div class="stat"><span>${tr('Edad del sistema', 'System age')}</span><span>${fmtAge(s.age)}</span></div>
         <div class="stat"><span>${tr('Luminosidad', 'Luminosity')}</span><span>${int(L * 100)} % ${tr('del Sol', 'of the Sun')}</span></div>
         <div class="stat"><span>${tr('Zona habitable', 'Habitable zone')}</span><span>${num(a, 2)}–${num(b, 2)} UA</span></div>
@@ -762,8 +766,8 @@ export class Ledger {
       const home = Math.max(0, total - away);
       const busy = !home || pt.phase === 'away' ? tr('lejos', 'away') : pt.phase === 'approach' || pt.phase === 'assault' ? (pt.goal === 'war' ? tr('pacificando', 'pacifying') : tr('purgando', 'purging')) : tr('en órbita', 'in orbit');
       const tip = tr(
-        `<b>Space Patrols</b> · «${pt.barge.es}»<br>Guerreros acorazados de todos los pueblos. Purgan los mundos ocupados, no toleran guerras y saltan a otras estrellas cuando se les llama.<br>⛨ ${total} ${total === 1 ? 'compañía' : 'compañías'} (una barcaza cada una): ${home} en casa, ${away} en otras estrellas.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purgas · ☮ ${pt.wars} guerras terminadas`,
-        `<b>Space Patrols</b> · “${pt.barge.en}”<br>Armoured warriors of every people. They purge occupied worlds, tolerate no wars and jump to other stars when called.<br>⛨ ${total} ${total === 1 ? 'company' : 'companies'} (one barge each): ${home} at home, ${away} at other stars.<br>☠ ${pt.kills} xenos · ⛨ ${pt.purges} purges · ☮ ${pt.wars} wars ended`,
+        `<b>Space Patrols</b> · «${pt.barge.es}»<br>Guerreros acorazados de todos los pueblos. Purgan los mundos ocupados, no toleran guerras y saltan a otras estrellas cuando se les llama.<br>⛨ ${total} ${total === 1 ? 'compañía' : 'compañías'} (una barcaza cada una): ${home} en casa, ${away} en otras estrellas.<br>☠ ${pt.kills} invasores · ⛨ ${pt.purges} purgas · ☮ ${pt.wars} guerras terminadas`,
+        `<b>Space Patrols</b> · “${pt.barge.en}”<br>Armoured warriors of every people. They purge occupied worlds, tolerate no wars and jump to other stars when called.<br>⛨ ${total} ${total === 1 ? 'company' : 'companies'} (one barge each): ${home} at home, ${away} at other stars.<br>☠ ${pt.kills} invaders · ⛨ ${pt.purges} purges · ☮ ${pt.wars} wars ended`,
       );
       ph += `<div class="people-row patrol" data-tip="${attr(tip)}"><i style="background:#6f9bff;color:#ffd27a"></i><span>Space Patrols</span><em>${busy} · ${home}/${total} ⛨</em></div>`;
     }

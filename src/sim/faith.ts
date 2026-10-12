@@ -22,6 +22,8 @@ export type FaithFx = { kind: 'bless'; world: number } | { kind: 'relic'; world:
 
 /** Faith a new people starts with (below the first tier: the star has to earn it). */
 export const FAITH_START = 0.12;
+/** …or with the "memory of faith" brought from a previous system. */
+export const HEIRLOOM_FAITH = 0.25;
 /** Faith drifts back to this when nothing happens (higher for the Order's faithful). */
 const FLOOR = 0.1;
 const FLOOR_ORDER = 0.35;
@@ -158,7 +160,8 @@ export class FaithSim {
     const s = this.h.s;
     const alive = this.h.peoples.alive();
     if (!alive.length) return;
-    const f = (s.faith ??= { tier: 0, believers: 0, devout: 0, sites: [], digs: [], relics: 0 });
+    // A relic brought from the previous system already counts.
+    const f = (s.faith ??= { tier: 0, believers: 0, devout: 0, sites: [], digs: [], relics: s.heirloom === 'relic' ? 1 : 0 });
     // Faith drifts slowly back to a quiet floor (higher among the Order's faithful).
     for (const p of alive) {
       const v = faithOf(p);

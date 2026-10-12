@@ -22,6 +22,20 @@ export function costChips(cost: Partial<Resources>, have: Resources | null) {
     .join('');
 }
 
+/** The tabs of the Projects window. */
+export type ProjTab = 'works' | 'def' | 'beyond' | 'faith';
+const TABS: ProjTab[] = ['works', 'def', 'beyond', 'faith'];
+const TAB_KEY = 'dwa.projTab';
+/** The last tab opened (it survives closing the window, and reloading the page). */
+let lastTab: ProjTab = (() => {
+  try {
+    const v = localStorage.getItem(TAB_KEY) as ProjTab | null;
+    return v && TABS.includes(v) ? v : 'works';
+  } catch {
+    return 'works';
+  }
+})();
+
 interface CardRefs {
   def: ProjectDef;
   el: HTMLElement;
@@ -49,6 +63,9 @@ export class ProjectsPanel {
   private defHtml = '';
   private faithBox = h('div', { class: 'faith-box' });
   private faithHtml = '';
+  private tabBar = h('div', { class: 'proj-tabs', role: 'tablist' });
+  private tabs = {} as Record<ProjTab, { btn: HTMLButtonElement; dot: HTMLElement; pane: HTMLElement }>;
+  private tab: ProjTab = lastTab;
 
   constructor(
     private civ: CivSim,
@@ -73,9 +90,27 @@ export class ProjectsPanel {
     private patrols?: PatrolSim,
     private wings?: WingsSim,
     private faith?: FaithSim,
+    tab?: ProjTab,
   ) {
     this.el = h('div', { class: 'projects' });
+    if (tab) this.tab = tab;
     this.build();
+  }
+
+  /** Shows one tab (and remembers it for the next time). */
+  show(tab: ProjTab) {
+    this.tab = lastTab = tab;
+    try {
+      localStorage.setItem(TAB_KEY, tab);
+    } catch {
+      /* private mode: remembered for this session only */
+    }
+    for (const id of TABS) {
+      const on = id === tab;
+      this.tabs[id].btn.classList.toggle('on', on);
+      this.tabs[id].btn.setAttribute('aria-selected', String(on));
+      this.tabs[id].pane.style.display = on ? '' : 'none';
+    }
   }
 
   bindClose(fn: () => void) {
@@ -84,16 +119,31 @@ export class ProjectsPanel {
 
   private build() {
     clear(this.el);
-    this.el.append(this.res);
+    this.el.append(this.res, this.tabBar);
+    const names: Record<ProjTab, string> = {
+      works: tr('Obras', 'Works'),
+      def: tr('Defensa', 'Defence'),
+      beyond: tr('Más allá', 'Beyond'),
+      faith: tr('La fe', 'Faith'),
+    };
+    for (const id of TABS) {
+      const dot = h('span', { class: 'tab-dot' }, '●');
+      const btn = h('button', { class: 'proj-tab', role: 'tab', onclick: () => this.show(id) }, names[id], dot) as HTMLButtonElement;
+      const pane = h('div', { class: `proj-pane pane-${id}`, role: 'tabpanel' });
+      this.tabBar.append(btn);
+      this.el.append(pane);
+      this.tabs[id] = { btn, dot, pane };
+    }
+    const P = this.tabs;
     // The threat and the defences that answer it.
-    this.el.append(h('h3', { class: 'proj-era' }, tr('Amenaza y defensas', 'Threat and defences')), this.defences);
+    P.def.pane.append(h('h3', { class: 'proj-era' }, tr('Amenaza y defensas', 'Threat and defences')), this.defences);
     this.defences.addEventListener('click', (e) => {
       const b = (e.target as Element).closest('button[data-def]') as HTMLButtonElement | null;
       if (b && !b.disabled) this.on.upgrade(b.dataset.def as DefenceId);
     });
     for (const era of [1, 2, 3] as const) {
       const grid = h('div', { class: 'proj-grid' });
-      this.el.append(h('h3', { class: 'proj-era' }, pick(ERA_NAMES[era])), grid);
+      P.works.pane.append(h('h3', { class: 'proj-era' }, pick(ERA_NAMES[era])), grid);
       for (const def of PROJECTS.filter((p) => p.era === era)) {
         const cost = h('div', { class: 'costs' });
         const note = h('div', { class: 'note small' });
@@ -142,7 +192,7 @@ export class ProjectsPanel {
       );
       this.research = { btn, note, cost, title, bar, warn };
     }
-    this.el.append(h('h3', { class: 'proj-era' }, tr('Misiones', 'Missions')), grid);
+    P.works.pane.append(h('h3', { class: 'proj-era' }, tr('Misiones', 'Missions')), grid);
     const mk = (kind: 'expedition' | 'armada', icon: string, name: string, desc: string, label: string, fire: () => void) => {
       const cost = h('div', { class: 'costs' });
       const note = h('div', { class: 'note small' });
@@ -171,7 +221,7 @@ export class ProjectsPanel {
     );
     // Beyond the system: the Space Patrols and the colonies around other stars.
     // Faith: the Order of the Star, its reading of the heavens, the Precursors' relics and the forge.
-    this.el.append(h('h3', { class: 'proj-era' }, tr('La fe', 'Faith')), this.faithBox);
+    P.faith.pane.append(h('h3', { class: 'proj-era' }, tr('La fe', 'Faith')), this.faithBox);
     this.faithBox.addEventListener('click', (e) => {
       const b = (e.target as Element).closest('button[data-faith]') as HTMLButtonElement | null;
       if (!b || b.disabled) return;
@@ -179,7 +229,7 @@ export class ProjectsPanel {
       else if (b.dataset.faith === 'dig') this.on.dig(Number(b.dataset.id));
       else if (b.dataset.faith === 'forge') this.on.forge();
     });
-    this.el.append(h('h3', { class: 'proj-era' }, tr('Más allá del sistema', 'Beyond the system')), this.beyond);
+    P.beyond.pane.append(h('h3', { class: 'proj-era' }, tr('Más allá del sistema', 'Beyond the system')), this.beyond);
     this.beyond.addEventListener('click', (e) => {
       const b = (e.target as Element).closest('button[data-act]') as HTMLButtonElement | null;
       if (!b || b.disabled) return;
@@ -192,7 +242,39 @@ export class ProjectsPanel {
       else if (b.dataset.act === 'wings-buy') this.on.buyWings();
       else this.on.send(id, b.dataset.act === 'conquer');
     });
+    this.show(this.tab);
     this.refresh();
+  }
+
+  /** Which tabs exist yet, and which carry something urgent (●). */
+  private tabsState() {
+    const s = this.civ.state;
+    const civ = s.civ;
+    const F = this.faith;
+    const f = s.faith;
+    const stars = this.patrols?.stars ?? [];
+    const L = threatOf(s);
+    const open: Record<ProjTab, boolean> = {
+      works: true,
+      def: true,
+      // From the warp drive on, or once there are Patrols or distant colonies.
+      beyond: !!civ?.done.warp || !!s.patrol || stars.length > 0,
+      // As soon as any people has existed.
+      faith: (s.peoples?.length ?? 0) > 0,
+    };
+    const urgent: Record<ProjTab, boolean> = {
+      works: false,
+      // A defence that exists, lags behind the threat and can be raised right now.
+      def: DEFENCES.some((id) => {
+        const n = defLevel(s, id);
+        return n > 0 && n < L && !this.civ.defenceLock(id);
+      }),
+      // A distant colony in trouble that nobody is helping.
+      beyond: stars.some((st) => !!st.trouble && !st.strike && !st.wing),
+      // A dig or the forge that can start right now.
+      faith: !!F && !!f && (f.sites.some((x) => !F.digLock(x.world)) || !F.forgeLock()),
+    };
+    return { open, urgent };
   }
 
   /** "⚠ +1,5 de poder de amenaza (sube la amenaza a nivel 4)". */
@@ -445,7 +527,7 @@ export class ProjectsPanel {
       html += `<div class="proj-head"><span class="proj-ico pt">⛨</span><b>Space Patrols · «${tr(p.barge.es, p.barge.en)}»</b></div>
         <div class="small"><span class="muted">${tr('Estado', 'Status')}:</span> ${home ? status : tr('todas las compañías luchan en otras estrellas', 'every company is fighting at other stars')}</div>
         <div class="small barges" data-tip="${tr('Cada compañía es una barcaza de batalla. Recluta más en Defensas.', 'Each company is a battle barge. Raise more in Defences.')}"><span class="barge-pips">${barges}</span> ${tr(`${total} ${total === 1 ? 'compañía' : 'compañías'} · ${home} en casa`, `${total} ${total === 1 ? 'company' : 'companies'} · ${home} at home`)}${det ? ` · <span class="pt">${det}</span>` : ''}</div>
-        <div class="patrol-stats small"><span>☠ ${int(p.kills)} <em>${tr('xenos abatidos', 'xenos slain')}</em></span><span>⛨ ${int(p.purges)} <em>${p.purges === 1 ? tr('mundo purgado', 'world purged') : tr('mundos purgados', 'worlds purged')}</em></span><span>☮ ${int(p.wars)} <em>${p.wars === 1 ? tr('guerra terminada', 'war ended') : tr('guerras terminadas', 'wars ended')}</em></span><span>✶ ${int(p.strikes)} <em>${p.strikes === 1 ? tr('salto a otra estrella', 'jump to another star') : tr('saltos a otras estrellas', 'jumps to other stars')}</em></span></div>`;
+        <div class="patrol-stats small"><span>☠ ${int(p.kills)} <em>${tr('invasores abatidos', 'invaders slain')}</em></span><span>⛨ ${int(p.purges)} <em>${p.purges === 1 ? tr('mundo purgado', 'world purged') : tr('mundos purgados', 'worlds purged')}</em></span><span>☮ ${int(p.wars)} <em>${p.wars === 1 ? tr('guerra terminada', 'war ended') : tr('guerras terminadas', 'wars ended')}</em></span><span>✶ ${int(p.strikes)} <em>${p.strikes === 1 ? tr('salto a otra estrella', 'jump to another star') : tr('saltos a otras estrellas', 'jumps to other stars')}</em></span></div>`;
     }
     html += '</div>';
     html += this.wingsCard();
@@ -521,6 +603,14 @@ export class ProjectsPanel {
   refresh() {
     const civ = this.civ.civ;
     if (!civ) return;
+    const { open, urgent } = this.tabsState();
+    for (const id of TABS) {
+      const t = this.tabs[id];
+      t.btn.style.display = open[id] ? '' : 'none';
+      t.dot.style.display = urgent[id] ? '' : 'none';
+    }
+    // A tab that is not there yet (an old memory, or a tab asked for too soon) falls back to the works.
+    if (!open[this.tab]) this.show('works');
     const r = this.civ.rates;
     this.res.innerHTML = RES_KEYS.map(
       (k) => `<span class="res-pill ${k}"><b>${RES_ICON[k]} ${int(civ.res[k])}</b><small>${resName(k)} · +${r[k].toFixed(1).replace('.', tr(',', '.'))}/s</small></span>`,
